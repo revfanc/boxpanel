@@ -125,6 +125,20 @@ T3.1 补充验收与边界：
 - `/users/{id}/links`、`/rules`、`/rules/preview`、`/settings`。
 - **验收**：每种格式 × 每种预设的 golden test；UA 识别表驱动测试；sing-box 客户端配置在有 sing-box 时 `check` 通过。
 
+T3.2 补充验收与边界：
+- [x] VLESS/Reality、Hysteria2 URI，IPv6、URL 转义、混淆及端口跳跃；所有节点采用 public_host。
+- [x] 三预设、双规则源、广告/自定义域名/DNS/FakeIP/IPv6/镜像；mihomo 始终 MetaCubeX mrs。
+- [x] 3 格式 × 3 预设 × 3 组合共 27 份 golden；UA/format 优先级、稳定输出、空节点测试。
+- [x] 9 份 sing-box golden 逐一通过 .tools/bin/sing-box 1.14.4 check，无网络下载或配置替换。
+- [x] 按 1.14 核对 tun、新 DNS、rule-set/HTTP client、route actions、selector/urltest；mihomo 按官方文档使用 yaml.v3 编码。
+- [x] 规则 URL 实际 HEAD：14 个不同最终 URL 全部 200；原 SagerNet GFW 404 已按 CONFIG.md 记录并单项回退 MetaCubeX。
+- [x] 公开订阅响应头、浏览器本地二维码/导入页面；30 次/IP/分钟、常量时间 token 比较、404 伪装及测试。
+- [x] links/rules/preview/settings API，认证/CSRF/HEAD、脱敏、token 重置；settings BT 变更通过 Apply 并测试失败回滚。
+- [x] 监听预绑定、失败释放、延迟切换及本地真实 TCP 验证；不改前端依赖、不执行 git 提交/推送/分支切换。
+- [x] `make lint`、`make test`、`make build` 全部通过（macOS arm64、Go 1.27.3、CGO_ENABLED=0）；Go 缓存放在可写的 /tmp 下。
+
+字段核对、源可用性缺口、依赖理由、设置契约补齐见 CONFIG.md/API.md；不推进 M4 或后续任务。
+
 ## M4 前端面板
 
 ### T4.1 基础设施

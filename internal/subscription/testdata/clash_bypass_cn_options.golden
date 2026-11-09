@@ -1,0 +1,109 @@
+allow-lan: false
+dns:
+  enable: true
+  enhanced-mode: fake-ip
+  ipv6: true
+  nameserver:
+    - https://1.1.1.1/dns-query
+  nameserver-policy:
+    +.local.example:
+      - https://dns.example:8443/custom-query
+    +.proxy.example:
+      - https://1.1.1.1/dns-query
+    rule-set:geosite-cn:
+      - https://dns.example:8443/custom-query
+  proxy-server-nameserver:
+    - https://dns.example:8443/custom-query
+ipv6: true
+log-level: warning
+mixed-port: 7890
+mode: rule
+proxies:
+  - client-fingerprint: chrome
+    flow: xtls-rprx-vision
+    name: 香港 Reality
+    network: tcp
+    packet-encoding: xudp
+    port: 443
+    reality-opts:
+      public-key: eNXgbb5tlL6g2fud8-bam8Tz5tLHPhwxkOsxcjDnqFs
+      short-id: 0123456789abcdef
+    server: 2001:db8::8
+    servername: www.example.com
+    tls: true
+    type: vless
+    udp: true
+    uuid: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
+  - alpn:
+      - h3
+    down: 100
+    fingerprint: 6f75dac014e40140bd72c4e9838e1c57df00be3b431fc4dc54a84908783a0b91
+    name: 香港 Hysteria2
+    obfs: salamander
+    obfs-password: test-obfs:#特殊
+    password: test-only-p@ss:/?#密
+    port: 8443
+    ports: 20000-30000
+    server: 2001:db8::8
+    skip-cert-verify: false
+    sni: www.bing.com
+    type: hysteria2
+    up: 50
+proxy-groups:
+  - name: 节点选择
+    proxies:
+      - 自动选择
+      - 香港 Reality
+      - 香港 Hysteria2
+      - DIRECT
+    type: select
+  - interval: 300
+    name: 自动选择
+    proxies:
+      - 香港 Reality
+      - 香港 Hysteria2
+    type: url-test
+    url: https://www.gstatic.com/generate_204
+rule-providers:
+  geoip-cn:
+    behavior: ipcidr
+    format: mrs
+    interval: 43200
+    proxy: 节点选择
+    type: http
+    url: https://mirror.example/https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geoip/cn.mrs
+  geosite-ads:
+    behavior: domain
+    format: mrs
+    interval: 43200
+    proxy: 节点选择
+    type: http
+    url: https://mirror.example/https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/category-ads-all.mrs
+  geosite-cn:
+    behavior: domain
+    format: mrs
+    interval: 43200
+    proxy: 节点选择
+    type: http
+    url: https://mirror.example/https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/cn.mrs
+rules:
+  - RULE-SET,geosite-ads,REJECT
+  - IP-CIDR,0.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,100.64.0.0/10,DIRECT,no-resolve
+  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,169.254.0.0/16,DIRECT,no-resolve
+  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
+  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+  - IP-CIDR,224.0.0.0/4,DIRECT,no-resolve
+  - IP-CIDR,240.0.0.0/4,DIRECT,no-resolve
+  - IP-CIDR6,::/128,DIRECT,no-resolve
+  - IP-CIDR6,::1/128,DIRECT,no-resolve
+  - IP-CIDR6,fc00::/7,DIRECT,no-resolve
+  - IP-CIDR6,fe80::/10,DIRECT,no-resolve
+  - IP-CIDR6,ff00::/8,DIRECT,no-resolve
+  - DOMAIN-SUFFIX,local.example,DIRECT
+  - DOMAIN-SUFFIX,proxy.example,节点选择
+  - RULE-SET,geosite-cn,DIRECT
+  - RULE-SET,geoip-cn,DIRECT
+  - MATCH,节点选择

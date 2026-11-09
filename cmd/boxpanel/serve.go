@@ -16,15 +16,17 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
-	"time"
 
+	"crypto/sha256"
 	"github.com/revfanc/boxpanel/internal/app"
 	"github.com/revfanc/boxpanel/internal/auth"
 	"github.com/revfanc/boxpanel/internal/httpapi"
 	"github.com/revfanc/boxpanel/internal/singbox"
 	"github.com/revfanc/boxpanel/internal/spa"
+	"github.com/revfanc/boxpanel/internal/subscription"
 	"github.com/revfanc/boxpanel/internal/sysinfo"
 	"github.com/revfanc/boxpanel/web"
+	"time"
 )
 
 type serveOptions struct {
@@ -158,14 +160,26 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	if opts.dev {
 		logger.Warn("仅开发用：入站和用户修改只写 DB，不生成、校验或生效 sing-box 配置。")
 	}
-	api := httpapi.New(service, httpapi.Options{WebPath: cfg.WebPath, Dev: opts.dev, Logger: logger, System: system, Singbox: manager, DB: conn, Applier: manager, PanelPort: cfg.WebPort})
-	handler, err := spa.New(web.Assets, spa.Options{WebPath: cfg.WebPath, Version: version, API: api})
-	if err != nil {
-		return fmt.Errorf("prepare HTTP server: %w", err)
+	store := &subscription.Store{DB: conn, Certificate: func(id int64, sni string) ([]byte, error) {
+		hash := sha256.Sum256([]byte(sni))
+		return os.ReadFile(filepath.Join(filepath.Dir(opts.core.config), "certs", fmt.Sprintf("hy2-%d-%x.crt", id, hash[:8])))
+	}}
+	limiter := &subscription.Limiter{}
+	panel := &livePanel{ctx: ctx, host: opts.listenHost, port: cfg.WebPort, dev: opts.dev, logger: logger, grace: 2 * time.Second}
+	panel.build = func(settings httpapi.PanelSettings) (http.Handler, error) {
+		api := httpapi.New(service, httpapi.Options{WebPath: settings.WebPath, Dev: opts.dev, Logger: logger, System: system, Singbox: manager, DB: conn, Applier: manager, PanelPort: settings.WebPort, Subscriptions: store, PreparePanel: panel.prepare})
+		spaHandler, err := spa.New(web.Assets, spa.Options{WebPath: settings.WebPath, Version: version, API: api})
+		if err != nil {
+			return nil, fmt.Errorf("prepare HTTP server: %w", err)
+		}
+		return &subscription.Handler{Store: store, Next: spaHandler, Limiter: limiter, PanelPort: settings.WebPort}, nil
 	}
-	var certificate tls.Certificate
+	handler, err := panel.build(httpapi.PanelSettings{WebPath: cfg.WebPath, WebPort: cfg.WebPort})
+	if err != nil {
+		return err
+	}
 	if !opts.dev {
-		certificate, err = tls.LoadX509KeyPair(opts.paths.CertFile, opts.paths.KeyFile)
+		panel.certificate, err = tls.LoadX509KeyPair(opts.paths.CertFile, opts.paths.KeyFile)
 		if err != nil {
 			return fmt.Errorf("load panel TLS certificate (check --cert-file and --key-file): %w", err)
 		}
@@ -175,44 +189,6 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	if err != nil {
 		return fmt.Errorf("listen on %s (stop the conflicting process or choose another --port): %w", address, err)
 	}
-	defer listener.Close()
-	server := &http.Server{
-		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
-		MaxHeaderBytes:    16 * 1024,
-		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}},
-		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
-	}
-	stopShutdown := make(chan struct{})
-	shutdownDone := make(chan struct{})
-	defer close(stopShutdown)
-	go func() {
-		defer close(shutdownDone)
-		select {
-		case <-ctx.Done():
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := server.Shutdown(shutdownCtx); err != nil {
-				logger.Error("关闭面板超时，请确认进程已退出后再重启。", "error", err)
-				_ = server.Close()
-			}
-		case <-stopShutdown:
-		}
-	}()
 	logger.Info("panel listening", "url", cfg.URL(), "listen", address)
-	if opts.dev {
-		err = server.Serve(listener)
-	} else {
-		err = server.ServeTLS(listener, "", "")
-	}
-	if err != nil {
-		if !errors.Is(err, http.ErrServerClosed) {
-			return fmt.Errorf("serve HTTP (restart the panel and retry): %w", err)
-		}
-		<-shutdownDone
-	}
-	return nil
+	return panel.run(listener, handler)
 }

@@ -14,11 +14,13 @@ import (
 	"net/netip"
 	"runtime"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/revfanc/boxpanel/internal/auth"
 	"github.com/revfanc/boxpanel/internal/host"
 	"github.com/revfanc/boxpanel/internal/reality"
+	"github.com/revfanc/boxpanel/internal/subscription"
 	"github.com/revfanc/boxpanel/internal/sysinfo"
 )
 
@@ -35,12 +37,17 @@ type Options struct {
 	RealityProbe   reality.Probe
 	ListeningPorts func(context.Context) (map[sysinfo.Socket]bool, error)
 	PanelPort      int // effective listener port, including CLI overrides
+	Subscriptions  *subscription.Store
+	// PreparePanel reserves the next listener before persistence. The returned
+	// commit schedules activation after two seconds; cancel releases it on error.
+	PreparePanel func(context.Context, PanelSettings) (commit func(), cancel func(), err error)
 }
 
 type api struct {
 	auth       *auth.Service
 	opts       Options
 	cookiePath string
+	settingsMu sync.Mutex
 }
 
 type adminKey struct{}
@@ -108,6 +115,7 @@ func New(service *auth.Service, opts Options) http.Handler {
 	register("GET", "/api/v1/singbox/logs", a.singboxLogs, true)
 	register("GET", "/api/v1/singbox/config", a.singboxConfig, true)
 	a.registerResources(register)
+	a.registerSubscriptions(register)
 	mux.HandleFunc("/", notFound)
 	return middleware(csrf(mux), opts.Logger, routes)
 }

@@ -3,7 +3,7 @@
 > ⚠️ 以下 JSON 是**结构示意**。字段名以 `internal/singbox/version.go` 锁定版本的
 > [官方文档](https://sing-box.sagernet.org/configuration/) 为准，实现时逐项核对，并用 `sing-box check` 验证。
 > 服务端目标版本：sing-box **1.14.4**（新 DNS server 格式、rule action，不使用已移除的 geoip/geosite 字段与 block/dns 特殊出站）。
-> T2.2 已逐字段核对 §1/§2，并用锁定二进制校验所有服务端 golden；客户端订阅仍按 §4 的独立版本约定，在 T3.2 实现。
+> T2.2 已逐字段核对 §1/§2，并用锁定二进制校验所有服务端 golden；T3.2 客户端也按 **1.14** 字段生成并用同一锁定二进制逐份校验。
 
 ## 1. 入站 options（存于 `inbounds.options`）
 
@@ -257,9 +257,11 @@ Content-Disposition: attachment; filename*=UTF-8''<面板名>
       { "type": "https", "tag": "dns-remote", "server": "1.1.1.1", "detour": "proxy" },
       { "type": "https", "tag": "dns-local", "server": "223.5.5.5" }
     ],
-    "rules": [ { "rule_set": ["geosite-cn"], "server": "dns-local" } ],
-    "final": "dns-remote",
-    "strategy": "prefer_ipv4"
+    "rules": [
+      { "query_type": ["AAAA"], "action": "predefined", "rcode": "NOERROR" },
+      { "rule_set": ["geosite-cn"], "action": "route", "server": "dns-local" }
+    ],
+    "final": "dns-remote"
   },
   "inbounds": [
     { "type": "tun", "tag": "tun-in",
@@ -282,7 +284,7 @@ Content-Disposition: attachment; filename*=UTF-8''<面板名>
     ],
     "rule_set": [
       { "type": "remote", "tag": "geosite-cn", "format": "binary",
-        "url": "<见 §3>", "download_detour": "proxy", "update_interval": "1d" }
+        "url": "<见 §3>", "http_client": { "detour": "proxy" }, "update_interval": "1d" }
     ],
     "final": "proxy",
     "auto_detect_interface": true,
@@ -296,7 +298,7 @@ Content-Disposition: attachment; filename*=UTF-8''<面板名>
 - 节点 outbound：
   - vless_reality：`type: vless`, `flow: xtls-rprx-vision`, `tls.reality.{enabled, public_key, short_id}`, `tls.utls.{enabled, fingerprint}`, `tls.server_name`
   - hysteria2：`tls.server_name`；自签证书时在 `tls.certificate` 内嵌 PEM（优于 `insecure`）；端口跳跃用 `server_ports: ["20000:30000"]`；有 obfs 时 `obfs.{type: salamander, password}`
-- 客户端版本：MVP 只生成 1.12+ 格式，不做旧格式兼容；订阅页与引导页提示「sing-box 客户端需 1.12 或更新」。
+- 客户端版本：MVP 只生成 **1.14+** 格式，不做旧格式兼容；订阅页提示「sing-box 客户端需 1.14 或更新」，后续引导页沿用此文案。
 
 ### 4.4 mihomo（Clash Meta）YAML
 
@@ -333,7 +335,8 @@ proxies:
     ports: 20000-30000             # 端口跳跃时
     password: <pwd>
     sni: <sni>
-    skip-cert-verify: true         # 自签时；同时给 fingerprint: <sha256>（若版本支持）
+    skip-cert-verify: false        # 指纹固定验证自签证书
+    fingerprint: <sha256>         # 必填，叶证书 DER 的 SHA-256 hex
 proxy-groups:
   - { name: 节点选择, type: select, proxies: [自动选择, <节点…>, DIRECT] }
   - { name: 自动选择, type: url-test, proxies: [<节点…>], url: https://www.gstatic.com/generate_204, interval: 300 }
@@ -355,6 +358,68 @@ hysteria2://<urlencoded pwd>@<host>:<port>/?sni=<sni>&insecure=1&pinSHA256=<hex>
 ```
 
 规则不随 URI 下发（URI 格式不支持），订阅页需提示「此类客户端请在客户端内选择『绕过大陆』等规则」。
+
+### T3.2 客户端字段核对与生成边界
+
+2026-11-09 对照以下官方文档核对；在线文档中的 1.15+ 字段不采用。
+所有客户端 golden 直接交给锁定的 **1.14.4** `sing-box check`，不改写远程规则为本地规则；
+check 只校验格式，不启动 TUN、不连接节点、不下载 rule-set。
+
+| 字段 | 文档与具体选择 |
+|---|---|
+| TUN `type/tag/address/auto_route/strict_route` | [TUN](https://sing-box.sagernet.org/configuration/inbound/tun/)；只用统一 `address`，不用旧 inet4/inet6 字段或已弃用 stack；IPv6 关闭时不分配 IPv6 TUN 地址 |
+| mixed `type/tag/listen/listen_port` | [Mixed](https://sing-box.sagernet.org/configuration/inbound/mixed/)；只监听 127.0.0.1:2080 |
+| DNS `servers.type/tag/server/server_port/path/detour/domain_resolver` | [HTTPS server](https://sing-box.sagernet.org/configuration/dns/server/https/)；将 HTTPS URL 拆成新 server 对象；DNS 域名用独立的 local `dns-bootstrap` 解析，避免递归依赖 |
+| DNS `rules.action/server/query_type/rcode`、`final` | [DNS actions](https://sing-box.sagernet.org/configuration/dns/rule_action/)；显式 route/reject；IPv6 关闭时 AAAA 回空 NOERROR，不输出已弃用 strategy；gfw_only 默认 local，其余默认 remote |
+| FakeIP `type/tag/inet4_range/inet6_range` | [FakeIP server](https://sing-box.sagernet.org/configuration/dns/server/fakeip/)；198.18.0.0/15，可选 2001:2::/48；仅 A/AAAA 的代理查询使用 FakeIP，其他类型正常解析；缓存开启 store_fakeip |
+| route `action/outbound/protocol/ip_is_private/domain_suffix/rule_set` | [Route rule](https://sing-box.sagernet.org/configuration/route/rule/)、[actions](https://sing-box.sagernet.org/configuration/route/rule_action/)；sniff → DNS hijack → 广告 reject → 私网 → custom_direct → custom_proxy → 预设；显式 route action，不使用 block/dns 特殊出站 |
+| route `final/auto_detect_interface/default_domain_resolver` | [Route](https://sing-box.sagernet.org/configuration/route/)；节点域名通过 dns-local，接口自动检测避免 TUN 回环 |
+| rule-set `type/tag/format/url/http_client/update_interval` | [Rule-set](https://sing-box.sagernet.org/configuration/rule-set/)、[HTTP client](https://sing-box.sagernet.org/configuration/shared/http-client/)；remote/binary，`http_client:{detour:"proxy"}` 取代 1.14 已弃用 download_detour，仅引用预设需要的规则 |
+| selector / urltest `type/tag/outbounds/default/url/interval` | [Selector](https://sing-box.sagernet.org/configuration/outbound/selector/)、[URLTest](https://sing-box.sagernet.org/configuration/outbound/urltest/)；proxy 默认 auto，测试 URL 为 gstatic generate_204，间隔 3m |
+| VLESS `server/server_port/uuid/flow/tls` | [VLESS](https://sing-box.sagernet.org/configuration/outbound/vless/)、[TLS](https://sing-box.sagernet.org/configuration/shared/tls/)；Vision、Reality 公钥和首个 short ID、uTLS 指纹；绝不包含服务器私钥 |
+| Hysteria2 `server/password/up_mbps/down_mbps/obfs/tls/server_ports` | [Hysteria2](https://sing-box.sagernet.org/configuration/outbound/hysteria2/)；TLS 内嵌已生效证书 PEM、SNI、h3，不设置 insecure；端口跳跃时仅输出 server_ports，省略冲突的 server_port |
+| mihomo VLESS / Reality | [VLESS](https://wiki.metacubex.one/config/proxies/vless/)、[TLS](https://wiki.metacubex.one/config/proxies/tls/)；network=tcp、udp=true、packet-encoding=xudp、Vision、servername、client-fingerprint、reality-opts.public-key/short-id |
+| mihomo Hysteria2 | [Hysteria2](https://wiki.metacubex.one/config/proxies/hysteria2/)；ports 用 `start-end`，up/down 仅正数，obfs=salamander 与 obfs-password；skip-cert-verify=false + fingerprint，按官方 TLS 文档固定叶证书指纹，无需系统信任自签根 |
+| mihomo rule-providers | [规则集合](https://wiki.metacubex.one/config/rule-providers/)；type=http、format=mrs、behavior=domain/ipcidr、interval 为整秒、proxy=节点选择；无 classical mrs；始终使用 MetaCubeX |
+
+补齐的输入与输出约定：
+
+- `rules` 更新是整体替换；三种预设、两种源之外的值拒绝。DNS 仅接受无凭证的 HTTPS URL，
+  支持域名、IPv4/IPv6、端口与路径；更新间隔 1h–30d。mirror 为空或以 `/` 结尾的 HTTPS 前缀，
+  默认拼接 `{mirror}{原 URL}`；`rules.Mirror` 函数可注入其他重写策略。
+- 自定义域名每组至多 128 项，只接受 ASCII DNS 后缀，不接受 URL、通配符、IP、逗号。
+  direct 优先于 proxy，proxy 优先于预设国内规则；广告优先于其他业务规则。
+  mihomo 的 gfw_only 使用本地默认 DNS，并为 GFW rule-set 指定远程 nameserver-policy。
+  sing-box 在 bypass_cn 的域名决策之后、geoip-cn 之前显式 `resolve` 到 dns-remote，
+  再检查私网和国内 IP，让 mixed/FakeIP 的域名目标也可命中 IP 规则；其他预设无需此解析。
+  FakeIP 只处理 A/AAAA，代理域名的其他查询类型仍显式路由到远程 DNS。
+- 节点按入站 ID 排序，remark 为空用 tag；同名或与 proxy/auto/direct/策略组冲突时追加 ID，
+  去掉控制字符，避免生成重复节点标签。IPv6 URI 使用方括号；凭证、query、备注由 net/url 编码。
+- 每次订阅读取一致 DB 快照，只导出启用入站及当前用户凭证；公开订阅对禁用/超额/过期用户返回 404。
+  无节点仍输出可解析配置，未匹配直连规则的流量 reject；base64 是空列表。
+- Hysteria2 读取 T2.3 的不可变公开证书文件，校验 SNI、有效期与 DB 中叶证书指纹；缺失/不一致时
+  返回不可用，不生成无指纹的 insecure 订阅。开发模式没有 Apply 证书，须在 Linux 成功生效后导出。
+- 新增 Go 依赖 `gopkg.in/yaml.v3 v3.0.1`（结构化 YAML 编码）与
+  `github.com/skip2/go-qrcode` 的 2020-06-17 固定版本（本地 PNG 二维码，无外部 QR 服务）；均为纯 Go。
+  不改 web/package.json 或 pnpm-lock.yaml，不实现 M4 页面。独立订阅 HTML 的文案仍集中在
+  `web/src/i18n/zh-CN.ts` 的标记 JSON 对象，通过 Go embed 共享，不加载外部脚本或资源。
+
+### T3.2 规则源实测（2026-11-09）
+
+源 URL 定义于 `internal/rules/sources.go`；实现时逐 URL 实际发送 HTTPS **HEAD**，测试不联网。
+下表文件均相对 §3 对应 raw.githubusercontent.com 仓库/分支，最终常量共 14 个不同 URL。
+
+| 规则 | MetaCubeX `sing/geo` `.srs` | MetaCubeX `meta/geo` `.mrs` | SagerNet `rule-set` `.srs` |
+|---|---|---|---|
+| 国内域名 | geosite/cn：200 | geosite/cn：200 | sing-geosite / geosite-cn：200 |
+| 国内 IP | geoip/cn：200 | geoip/cn：200 | sing-geoip / geoip-cn：200 |
+| GFW | geosite/gfw：200 | geosite/gfw：200 | geosite-gfw：**404**，最终常量回退至左列 MetaCubeX URL（200） |
+| 非中国 | geosite/geolocation-!cn：200 | geosite/geolocation-!cn：200 | sing-geosite / geosite-geolocation-!cn：200 |
+| 广告 | geosite/category-ads-all：200 | geosite/category-ads-all：200 | sing-geosite / geosite-category-ads-all：200 |
+
+这是原规格的可用性缺口：SagerNet 没有 GFW 产物，只对这一列表回退 MetaCubeX；
+不能用 geolocation-!cn 替代，否则会改变 gfw_only 的语义。选择 sagernet 时其余规则保持该源。
+非中国规则保留源常量以对应规格，但当前三个预设无需加载它。
 
 ## 5. Reality 伪装目标检测（`internal/reality`）
 

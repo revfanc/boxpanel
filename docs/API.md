@@ -312,6 +312,55 @@ JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未�
 | GET | `/settings` | `{public_host, web_port, web_path, sub_path, panel_tls_mode, block_bittorrent, panel_name}` |
 | PUT | `/settings` | 修改；改 `web_port`/`web_path` 时响应里返回新面板地址，后端 2 秒后重启监听 |
 
+### T3.2 订阅、规则与设置约定
+
+- 上述 links/rules/preview/settings 均已实现；需登录，PUT 保持 CSRF 与严格 JSON 校验，
+  GET 支持 HEAD，响应 no-store，错误沿用统一 JSON 契约。setup、备份和 M4 UI 不在此任务。
+- `/users/{id}/links` 是有意提供可导入凭证的专用接口：仅管理员可取完整 token/用户凭证 URI，
+  不返回服务端私钥；普通用户 CRUD 继续脱敏。URL 只使用保存的 public_host、sub_path、TLS 模式
+  和实际监听端口（包括 CLI 初始覆盖），不信任 Host、X-Forwarded-*。端口切换后需重新获取订阅链接。
+- `/rules` PUT 为整体替换，200 返回保存后的规则；不重启 sing-box 服务。字段范围见 CONFIG.md。
+  `/rules/preview` 默认 singbox，只接受单个 `format=singbox|clash`，选 ID 最小的用户，
+  无用户为 404；200 返回 `{format,config}`，singbox 的 config 为 JSON 对象，clash 为 YAML 字符串。
+  UUID、密码、混淆密码全部替换为 `[REDACTED]`，token 不包含在配置中；含转义的凭证同样脱敏。
+- Hysteria2 缺失已生效证书/指纹时，links/preview 返回 `409 subscription_unavailable`，
+  提示先在 Linux 生效配置；开发模式不生成临时证书、不用 insecure 兜底。
+- `/settings` PUT 为部分更新，省略字段保持。成功 200 返回原 GET 字段加
+  `{panel_url,restart_after}`，restart_after 为 0 或 2（秒）。
+  public_host 接受 ASCII 域名或裸 IPv4/IPv6，不接受 URL/端口；panel_name 为 1–128 字节、无换行。
+  web_path 为空或 1–64 位小写字母数字，sub_path 为 1–64 位小写字母数字，二者不能相同；
+  sub_path 保留 api/assets/index。端口 1–65535，不得与任何入站或 Clash 控制端口冲突（409）。
+  panel_tls_mode 当前只能保持原值，ACME 留在 T7.2，不允许 API 降级 HTTPS。
+- 客户端/面板元数据仅在 SQLite 事务中保存；block_bittorrent **实际改变**时，整个 settings
+  更新必须通过 Manager.Apply，失败全部回滚（包括同时提交的地址和名称）。开发替身保持 T3.1 标记。
+  更新前后的比较防止并发覆盖；冲突为 `409 settings_changed`，要求刷新后重试。
+- 改端口/面板路径时，先构造新 handler、预绑定新 TCP 监听，再持久化；占用/切换未结束时返回 409。
+  事务失败释放预留监听；成功后延迟 2 秒启用新监听/路由，旧监听优雅关闭，同端口仅替换 handler。
+  新 handler 同步更新 cookie Path、SPA basename 与 API 前缀。跨路径需重新登录，不重启整个进程。
+  不自动更新云安全组或现有面板证书 SAN；更换 public_host 时请使用证书覆盖的主机名/地址。
+  `--dev` 固定 2053/根路径，拒绝修改这两项；其他设置可正常编辑。
+- sub_path 更新立即用于路由判断，旧路径失效；规则、名称、public_host 修改立即影响下一次订阅。
+  正在处理的请求仍使用开始时的一致快照。此次不增加流量采样或定时封禁。
+
+公开订阅 `/{sub_path}/{token}`：
+
+- GET/HEAD，无登录 cookie；SHA-256 将两边 token 归一为固定长度，再用 crypto/subtle 常量时间比较。
+  遍历所有存储 token，不使用 SQL `WHERE sub_token=?` 或找到匹配即提前退出。
+  错误 token、未知路径、非法路径、禁用/到期/超额用户都是相同的空白 404（无订阅响应头）。
+- 使用真实 TCP 对端 IP，不信任代理头；同 IP 每个 60 秒固定窗口允许 30 次，第 31 次起 429，
+  带 Retry-After。计数包括错误 token、HEAD 和该订阅命名空间内的非法请求，合法 token 也不能绕过。
+  内存限流表最多 10000 项，过期清理，满时拒绝新来源；重启清空，切换监听不重置。
+- 显式 format 参数优先于 UA；不支持的值、空值或重复参数在 token 有效后返回 400；UA 表见 CONFIG.md。
+  成功配置类型为 application/json、application/yaml 或 text/plain，通用三项响应头见 CONFIG.md。
+  无法生成时返回无敏感细节的 503 与下一步建议，不透传 DB/证书错误。
+- 浏览器 HTML 以 text/html 内联显示（不发 attachment），仍带流量/更新头；二维码在本地生成 PNG，
+  页面使用 no-store、no-referrer、CSP、HTML 转义，无外部脚本、字体、QR 服务或请求日志中的 token。
+  显示各格式链接、sing-box/Clash 导入按钮、流量与 UTC 到期时间，提示客户端版本与 URI 规则限制。
+
+自动化验证：三种格式 × 三个预设 × 默认/完整选项/空节点共 27 份 golden；9 份 sing-box golden
+逐一执行锁定内核 check。另覆盖 UA、URI 特殊字符/IPv6、规则顺序/源、有效期/流量边界、
+限流并发/窗口/代理头、404 伪装、token 重置、认证/CSRF/HEAD、预览脱敏、settings Apply 回滚及真实本地监听切换。
+
 ## 备份（后期）
 
 | 方法 | 路径 | 说明 |

@@ -313,7 +313,7 @@ func TestResourceValidationConflictsProtectionAndScope(t *testing.T) {
 		t.Fatal(w.Header())
 	}
 	f.call(t, "GET", "inbounds/suggest", "", 405)
-	for _, path := range []string{"users/1/links", "rules", "rules/preview", "settings", "setup/status", "singbox/upgrade"} {
+	for _, path := range []string{"setup/status", "singbox/upgrade"} {
 		f.call(t, "GET", path, "", 404)
 	}
 	if strings.Contains(f.logs.String(), "secret-invalid") {

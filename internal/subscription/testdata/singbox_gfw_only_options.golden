@@ -1,0 +1,248 @@
+{
+  "dns": {
+    "final": "dns-local",
+    "rules": [
+      {
+        "action": "reject",
+        "rule_set": [
+          "geosite-ads"
+        ]
+      },
+      {
+        "action": "route",
+        "domain_suffix": [
+          "local.example"
+        ],
+        "server": "dns-local"
+      },
+      {
+        "action": "route",
+        "domain_suffix": [
+          "proxy.example"
+        ],
+        "query_type": [
+          "A",
+          "AAAA"
+        ],
+        "server": "dns-fakeip"
+      },
+      {
+        "action": "route",
+        "domain_suffix": [
+          "proxy.example"
+        ],
+        "server": "dns-remote"
+      },
+      {
+        "action": "route",
+        "query_type": [
+          "A",
+          "AAAA"
+        ],
+        "rule_set": [
+          "geosite-gfw"
+        ],
+        "server": "dns-fakeip"
+      },
+      {
+        "action": "route",
+        "rule_set": [
+          "geosite-gfw"
+        ],
+        "server": "dns-remote"
+      }
+    ],
+    "servers": [
+      {
+        "detour": "proxy",
+        "path": "/dns-query",
+        "server": "1.1.1.1",
+        "tag": "dns-remote",
+        "type": "https"
+      },
+      {
+        "domain_resolver": "dns-bootstrap",
+        "path": "/custom-query",
+        "server": "dns.example",
+        "server_port": 8443,
+        "tag": "dns-local",
+        "type": "https"
+      },
+      {
+        "tag": "dns-bootstrap",
+        "type": "local"
+      },
+      {
+        "inet4_range": "198.18.0.0/15",
+        "inet6_range": "2001:2::/48",
+        "tag": "dns-fakeip",
+        "type": "fakeip"
+      }
+    ]
+  },
+  "experimental": {
+    "cache_file": {
+      "enabled": true,
+      "store_fakeip": true
+    }
+  },
+  "inbounds": [
+    {
+      "address": [
+        "172.19.0.1/30",
+        "fdfe:dead:beef::1/126"
+      ],
+      "auto_route": true,
+      "strict_route": true,
+      "tag": "tun-in",
+      "type": "tun"
+    },
+    {
+      "listen": "127.0.0.1",
+      "listen_port": 2080,
+      "tag": "mixed-in",
+      "type": "mixed"
+    }
+  ],
+  "log": {
+    "level": "warn"
+  },
+  "outbounds": [
+    {
+      "default": "auto",
+      "outbounds": [
+        "auto",
+        "香港 Reality",
+        "香港 Hysteria2"
+      ],
+      "tag": "proxy",
+      "type": "selector"
+    },
+    {
+      "interval": "3m",
+      "outbounds": [
+        "香港 Reality",
+        "香港 Hysteria2"
+      ],
+      "tag": "auto",
+      "type": "urltest",
+      "url": "https://www.gstatic.com/generate_204"
+    },
+    {
+      "flow": "xtls-rprx-vision",
+      "server": "2001:db8::8",
+      "server_port": 443,
+      "tag": "香港 Reality",
+      "tls": {
+        "enabled": true,
+        "reality": {
+          "enabled": true,
+          "public_key": "eNXgbb5tlL6g2fud8-bam8Tz5tLHPhwxkOsxcjDnqFs",
+          "short_id": "0123456789abcdef"
+        },
+        "server_name": "www.example.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "type": "vless",
+      "uuid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    },
+    {
+      "down_mbps": 100,
+      "obfs": {
+        "password": "test-obfs:#特殊",
+        "type": "salamander"
+      },
+      "password": "test-only-p@ss:/?#密",
+      "server": "2001:db8::8",
+      "server_ports": [
+        "20000:30000"
+      ],
+      "tag": "香港 Hysteria2",
+      "tls": {
+        "alpn": [
+          "h3"
+        ],
+        "certificate": "-----BEGIN CERTIFICATE-----\nMIIBQDCB5qADAgECAgkAg9GWMv00yJAwCgYIKoZIzj0EAwIwFzEVMBMGA1UEAwwM\nd3d3LmJpbmcuY29tMB4XDTI2MTEwOTEzMTI0OVoXDTM2MTEwNjEzMTI0OVowFzEV\nMBMGA1UEAwwMd3d3LmJpbmcuY29tMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE\n/cfq7XMnfkn/INI594qPhzGFaQdZvCVGRx6/5BQVxP7rnIHUoplWSd2d7FL1dbPW\nWFcYsXfvfV6ngDGcTlMgnaMbMBkwFwYDVR0RBBAwDoIMd3d3LmJpbmcuY29tMAoG\nCCqGSM49BAMCA0kAMEYCIQD704RpFv0viVImID7qQtc4/L+FlgZaY7+8QijZydJL\nwgIhAKhP1sYCoSaE6SqcwShTashCgKklQJYLj46RUlxeozrM\n-----END CERTIFICATE-----\n",
+        "enabled": true,
+        "server_name": "www.bing.com"
+      },
+      "type": "hysteria2",
+      "up_mbps": 50
+    },
+    {
+      "tag": "direct",
+      "type": "direct"
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "default_domain_resolver": "dns-local",
+    "final": "direct",
+    "rule_set": [
+      {
+        "format": "binary",
+        "http_client": {
+          "detour": "proxy"
+        },
+        "tag": "geosite-ads",
+        "type": "remote",
+        "update_interval": "12h",
+        "url": "https://mirror.example/https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs"
+      },
+      {
+        "format": "binary",
+        "http_client": {
+          "detour": "proxy"
+        },
+        "tag": "geosite-gfw",
+        "type": "remote",
+        "update_interval": "12h",
+        "url": "https://mirror.example/https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/gfw.srs"
+      }
+    ],
+    "rules": [
+      {
+        "action": "sniff"
+      },
+      {
+        "action": "hijack-dns",
+        "protocol": "dns"
+      },
+      {
+        "action": "reject",
+        "rule_set": [
+          "geosite-ads"
+        ]
+      },
+      {
+        "action": "route",
+        "ip_is_private": true,
+        "outbound": "direct"
+      },
+      {
+        "action": "route",
+        "domain_suffix": [
+          "local.example"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "action": "route",
+        "domain_suffix": [
+          "proxy.example"
+        ],
+        "outbound": "proxy"
+      },
+      {
+        "action": "route",
+        "outbound": "proxy",
+        "rule_set": [
+          "geosite-gfw"
+        ]
+      }
+    ]
+  }
+}
