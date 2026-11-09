@@ -37,6 +37,9 @@
 /etc/systemd/system/boxpanel-singbox.service
 ```
 
+以上为生产默认路径；T1.2 的数据、数据库和证书路径均可用参数/环境变量覆盖，
+本机开发及测试无需 root，详见 INSTALL.md §3。systemd 与 sing-box 的路径配置随 T2.1 实现。
+
 ## 4. 网络入口
 
 面板二进制监听一个端口（默认随机 10000–60000，HTTPS），按路径分流：
@@ -159,6 +162,15 @@ MVP 规则：**所有启用的用户加入所有启用的入站**。超额/过�
 - 单测全部使用 `t.TempDir()` 下的文件数据库，覆盖迁移幂等/顺序/回滚/并发、连接参数、
   五张业务表的字段/约束/默认值，以及 settings 的持久化、类型检查、事务提交/回滚。
 
+### T1.2 初始化默认值
+
+- 初始化拒绝含有任何业务数据的 DB（允许仅迁移过的空库）；事务的写锁保证并发初始化只有一次成功。
+- `setup_completed=false`、`setup_step="welcome"`、`panel_name="boxpanel"`、`block_bittorrent=true`。
+- `rules` 使用 CONFIG.md §3 的 `bypass_cn` / `metacubex` / `1d` 和 DNS 默认值，
+  自定义域名列表为空（文档中的 example 域名仅是示例）；广告过滤、fakeip、IPv6 默认关闭。
+- `singbox_version=""` 表示尚未安装，不在 T1.2 硬编码或下载后续任务的内核版本。
+- 不创建代理用户、入站或 sing-box 配置；仅初始化管理员、设置和面板证书。
+
 ## 7. 配置生效流程（核心，务必严格实现）
 
 ```
@@ -187,3 +199,29 @@ MVP 规则：**所有启用的用户加入所有启用的入站**。超额/过�
 - 订阅接口：token 常量时间比较；同 IP 每分钟 30 次限速；token 错误返回与「路径不存在」一致的 404。
 - 服务端出站拒绝私有 IP（防止被当跳板访问内网）。
 - 面板进程以 root 运行（需要 systemctl、防火墙权限）；不执行任何来自请求参数拼接的 shell 命令，外部命令一律 `exec.Command` 参数数组。
+
+### T1.2 认证实现约定
+
+- 使用 `golang.org/x/crypto/argon2.IDKey`，PHC 格式保存 Argon2id v19：64 MiB 内存、3 次迭代、
+  4 lanes、16 字节随机盐、32 字节输出；比较使用常量时间函数。参数见
+  [Go Argon2 官方文档](https://pkg.go.dev/golang.org/x/crypto/argon2#IDKey)。仅接受本版本写出的参数，
+  拒绝损坏哈希里的任意资源参数。新增直接依赖 `golang.org/x/crypto v0.41.0`，
+  用于用户指定的 Argon2id 实现并保留 Go 1.23 最低版本；其间接依赖 `x/sys` 升至 v0.35.0。
+- cookie 名称 `boxpanel_session`，32 字节 `crypto/rand` 随机 ID（base64url），数据库持久化，
+  固定 7 天不过期续签；到期时刻即无效。登录替换当前 cookie 对应的旧会话并清理到期会话，
+  登出删除当前会话；密码/用户名变更及 CLI 重置撤销该管理员全部会话，必须重新登录。
+- 同一连接来源 IP 连续失败 5 次，**第 5 次即返回 429** 并锁定 15 分钟；
+  正确密码也不能绕过锁定。成功登录清零；未锁定的失败记录在最后失败 15 分钟后清除。
+  不存在的用户名也运行同参数的虚拟哈希。限流保存在单进程内存，重启清空；不信任转发 IP 头。
+  哈希计算最多一个并发任务，忙时返回 `429 auth_busy` / `Retry-After: 1`；
+  限流表最多 10000 个来源，满时拒绝新来源，不驱逐仍有效的锁定。
+- 所有非 GET/HEAD/OPTIONS 管理请求（含登录）校验 CSRF。存在 Origin 时必须精确匹配
+  实际请求的协议、主机、端口，拒绝 null、无效 Origin；Sec-Fetch-Site 若存在仅接受
+  `same-origin` / `none`，同站的其他来源也拒绝。两者都缺失时允许 CLI 请求，
+  含 JSON body 的认证操作要求 `application/json`。不添加通配 CORS 或信任代理头。
+- 开发模式的 Vite 代理保留原 Host，浏览器仍走同源 `/api`；不放宽来源检查。
+  `--dev` 是唯一 HTTP 模式，cookie 的 Path 为 `/`，仅 Secure 为 false。
+- API 错误包含中文说明和下一步建议。请求日志仅记录已知 API 路由类别、状态、耗时；
+  不记录原始 URL、query、body、Cookie、密码、哈希或 panic 值。panic 丢弃未提交的响应及 cookie，
+  返回统一 JSON 500。当前仅缓冲小型认证 JSON 响应，不提供流式 API。
+- T1.2 在可写路径、非特权端口运行无需 root；生产 root 要求针对后续 systemd/防火墙操作。

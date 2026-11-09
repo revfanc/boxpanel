@@ -16,7 +16,7 @@ build-web:
 dev-web:
 	$(PNPM) --dir web dev
 
-# Build the embedded shell even on a fresh checkout; full --dev follows in T1.2.
+# Build the embedded shell even on a fresh checkout; --dev initializes ./dev.db.
 dev-server: build-web
 	$(GO) run ./cmd/boxpanel serve --dev
 

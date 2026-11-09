@@ -14,11 +14,13 @@
 |---|---|
 | 400 | 参数校验失败（`code: invalid_argument`，`detail` 给字段错误） |
 | 401 | 未登录 / 会话过期 |
+| 403 | 跨站写请求（`code: csrf_rejected`） |
 | 404 | API 路径不存在（`code: not_found`）；返回 JSON 错误，不回退到 SPA |
+| 405 | 已知 API 的请求方法不支持（`code: method_not_allowed`，带 Allow） |
 | 409 | 端口被占用、名称重复 |
 | 422 | `sing-box check` 未通过（配置未生效，DB 已回滚） |
-| 429 | 限流 |
-| 500 | sing-box 重启失败（已自动回滚） |
+| 429 | 限流（`rate_limited`）或哈希计算繁忙（`auth_busy`），带 Retry-After 秒数 |
+| 500 | 内部错误（`internal_error`）；后续包括 sing-box 重启失败（已自动回滚） |
 
 时间统一为 unix 秒；流量统一为字节。
 
@@ -27,10 +29,22 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | `/auth/login` | `{username, password}` → 设置 cookie，返回 `{username}` |
-| POST | `/auth/logout` | 清除会话 |
+| POST | `/auth/logout` | 删除当前会话，过期同路径 cookie，204 无 body |
 | GET | `/auth/me` | `{username}` |
-| PUT | `/auth/password` | `{old_password, new_password}`（≥10 位） |
-| PUT | `/auth/username` | `{username}` |
+| PUT | `/auth/password` | `{old_password, new_password}`（新密码 ≥10 个字符、≤1024 字节），成功 204 |
+| PUT | `/auth/username` | `{username}`（`[a-zA-Z0-9_-]{1,32}`），成功 204 |
+
+T1.2 边界：
+
+- 登录成功返回 200，仅含 `{username}`；失败统一 `401 invalid_credentials`，不区分账号不存在和密码错误。
+  同 IP 第 5 次失败返回 429 并锁定 15 分钟；锁定中正确凭证也无效。
+- 密码/用户名修改成功会撤销该管理员全部会话并清空当前 cookie，调用方须重新登录。
+  原密码错误返回 `401 invalid_credentials`；重名返回 `409 username_exists`。
+- cookie、会话有效期、开发模式与 CSRF 细节见 SPEC.md §8。
+  登录也要求通过来源检查；curl 等没有 Origin / Sec-Fetch-Site 的客户端可正常调用。
+- JSON 请求上限 8 KiB，拒绝未知字段、多余 JSON 值、无效字段与错误 Content-Type，返回 400。
+  `me` 支持 HEAD（同 GET 状态/响应头，无 body）。所有认证响应 `Cache-Control: no-store`。
+- T1.2 只注册上表认证接口；未知 API 返回 JSON 404，不实现后续系统/用户/节点等资源。
 
 ## 引导 / 系统
 

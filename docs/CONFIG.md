@@ -270,5 +270,12 @@ hysteria2://<urlencoded pwd>@<host>:<port>/?sni=<sni>&insecure=1&pinSHA256=<hex>
 ## 6. 节点地址 `public_host`
 
 - 默认：安装时探测公网 IPv4（多个探测源取多数，超时 3 秒）。
+- T1.2 初始化使用可注入的探测函数与 HTTP client/source 列表；三个源并发共享 3 秒总超时，
+  默认使用 [ipify](https://www.ipify.org/) 的 `api64.ipify.org`、
+  [ifconfig.me](https://ifconfig.me/) 的 `/ip`、[icanhazip](https://icanhazip.com/)。
+  仅采纳 HTTP 200、最多 64 字节且合法的非私网/非回环 IP；优先 IPv4，
+  无 IPv4 时采用 IPv6，要求所选地址族的有效响应有严格多数（仅一个成功响应也可用）。
+  超时/全失败/意见冲突则提示重试或 `init --public-ip IP`，不写入业务初始数据。
+  显式 IP 可用于离线初始化，单测仅使用注入的响应，不访问外网。
 - 用户可改为域名。所有订阅/URI 中的 server 都用它。
 - IPv6-only 机器：URI 中 IPv6 需加方括号。

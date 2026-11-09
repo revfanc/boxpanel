@@ -12,7 +12,10 @@ var version = "dev"
 const usage = `Usage: boxpanel <command>
 
 Commands:
-  serve    Serve the panel over HTTP (see 'boxpanel serve --help')
+  init     Initialize the panel and print initial credentials once
+  info     Print the panel URL and administrator username
+  reset-admin  Reset administrator credentials and revoke sessions
+  serve    Serve the panel over HTTPS (see 'boxpanel serve --help')
   version  Print the boxpanel version
   help     Show this help
 `
@@ -28,6 +31,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if args[0] == "serve" {
 		return runServe(args[1:], stdout, stderr)
+	}
+	if args[0] == "init" || args[0] == "info" || args[0] == "reset-admin" {
+		return runConfigCommand(args[0], args[1:], stdout, stderr)
 	}
 	if len(args) != 1 {
 		fmt.Fprintln(stderr, "boxpanel: unexpected arguments; run 'boxpanel help' for usage")

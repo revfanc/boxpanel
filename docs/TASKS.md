@@ -27,7 +27,7 @@ sing-box 校验和安装脚本检查在对应任务加入，见 INSTALL.md §5�
 
 范围补充：临时 CLI 参数与默认值见 INSTALL.md §3；`--dev` 在本任务仅实现
 HTTP、`127.0.0.1:2053`、空 `web_path`，使 `make dev-server` 可运行。
-DB、认证、HTTPS、systemctl mock 等完整开发模式仍属于 T1.2。
+DB、认证、HTTPS 等完整开发模式属于 T1.2；systemctl 接口与 dev mock 随 T2.1 的封装加入。
 
 ## M1 后端基础
 
@@ -42,6 +42,11 @@ DB、认证、HTTPS、systemctl mock 等完整开发模式仍属于 T1.2。
 - API：`/auth/*`；中间件：认证、请求日志、panic 恢复、统一错误格式。
 - `serve --dev` 模式。
 - **验收**：认证与限流单测；`init` 重复执行被拒绝。
+
+范围补充：路径覆盖、无 root 开发、初始化默认值、会话撤销、CSRF 和超时探测约定见
+INSTALL.md §3、SPEC.md §6/§8、API.md 认证部分、CONFIG.md §6。
+本任务只做初始化所需的最小 IP 探测，不加入 T1.3 自检/API、防火墙、T2.1 systemd、sing-box 管理，
+也不实现 M4 的登录页面。`init` 不生成 systemd 单元；`serve --dev` 不执行任何系统管理命令。
 
 ### T1.3 系统自检
 - `internal/sysinfo`：OS/架构/虚拟化、公网 IP 探测、端口占用、BBR 检测与开启、`/system/check` 的 `items` 生成；`/system/status`。
