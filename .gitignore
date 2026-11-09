@@ -1,0 +1,17 @@
+# Go
+/bin/
+*.test
+*.out
+/dev.db*
+
+# Web
+node_modules/
+web/dist/*
+!web/dist/.gitkeep
+*.tsbuildinfo
+
+# Misc
+.DS_Store
+.env
+.env.*
+*.log
