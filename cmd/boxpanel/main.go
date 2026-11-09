@@ -18,6 +18,7 @@ Commands:
   serve    Serve the panel over HTTPS (see 'boxpanel serve --help')
   apply    Regenerate, validate and apply sing-box configuration
   singbox  Install or inspect the managed sing-box binary
+  system   Manage installer firewall rules and enable BBR
   version  Print the boxpanel version
   help     Show this help
 `
@@ -39,6 +40,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if args[0] == "singbox" {
 		return runSingbox(args[1:], stdout, stderr)
+	}
+	if args[0] == "system" {
+		return runSystem(args[1:], stdout, stderr)
 	}
 	if args[0] == "init" || args[0] == "info" || args[0] == "reset-admin" {
 		return runConfigCommand(args[0], args[1:], stdout, stderr)

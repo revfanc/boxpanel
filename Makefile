@@ -28,8 +28,11 @@ lint:
 		printf 'Run gofmt on:\n%s\n' "$$unformatted"; exit 1; \
 	fi
 	$(PNPM) --dir web lint
+	@if command -v shellcheck >/dev/null 2>&1; then shellcheck scripts/*.sh; \
+	else printf '%s\n' 'shellcheck unavailable locally; CI requires shellcheck scripts/*.sh'; fi
 
 test:
+	bash scripts/install_test.sh
 	@if [ -x "$(CURDIR)/.tools/bin/sing-box" ]; then \
 		PATH="$(CURDIR)/.tools/bin:$$PATH" $(GO) test ./...; \
 	else $(GO) test ./...; fi

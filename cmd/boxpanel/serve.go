@@ -14,12 +14,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"syscall"
 
 	"crypto/sha256"
 	"github.com/revfanc/boxpanel/internal/app"
 	"github.com/revfanc/boxpanel/internal/auth"
+	"github.com/revfanc/boxpanel/internal/firewall"
 	"github.com/revfanc/boxpanel/internal/httpapi"
 	"github.com/revfanc/boxpanel/internal/singbox"
 	"github.com/revfanc/boxpanel/internal/spa"
@@ -188,6 +190,12 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		return fmt.Errorf("listen on %s (stop the conflicting process or choose another --port): %w", address, err)
+	}
+	if !opts.dev && runtime.GOOS == "linux" {
+		if err := app.OpenPanelFirewall(ctx, conn, cfg.WebPort, false, firewall.New(firewall.Options{})); err != nil {
+			listener.Close()
+			return fmt.Errorf("restore panel firewall; run boxpanel system firewall-open and retry")
+		}
 	}
 	logger.Info("panel listening", "url", cfg.URL(), "listen", address)
 	return panel.run(listener, handler)

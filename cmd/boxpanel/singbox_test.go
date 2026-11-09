@@ -149,6 +149,36 @@ func TestSingboxInstallFailuresAndRecovery(t *testing.T) {
 	}
 }
 
+func TestRestoreMissingRecordedCoreWithRetainedConfig(t *testing.T) {
+	opts, deps, installer, _ := cliFixture(t)
+	ctx := context.Background()
+	if err := singboxCommand(ctx, opts, deps, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(opts.core.config, []byte("retained config"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(opts.core.binary); err != nil {
+		t.Fatal(err)
+	}
+	other := opts
+	other.version = "1.0.0"
+	if singboxCommand(ctx, other, deps, io.Discard) == nil {
+		t.Fatal("restored different version with existing config")
+	}
+	other.preserveVersion = true
+	if err := singboxCommand(ctx, other, deps, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if installer.calls != 2 {
+		t.Fatal(installer.calls)
+	}
+	data, err := os.ReadFile(opts.core.config)
+	if err != nil || string(data) != "retained config" {
+		t.Fatal("changed retained config", err)
+	}
+}
+
 func TestSingboxCLIArgumentsAndMock(t *testing.T) {
 	clearEnvironment(t)
 	for _, args := range [][]string{{"singbox", "--help"}, {"singbox", "install", "--help"}, {"singbox", "status", "--help"}, {"singbox", "install", "--dev"}, {"singbox", "status", "--dev"}} {
@@ -157,7 +187,7 @@ func TestSingboxCLIArgumentsAndMock(t *testing.T) {
 			t.Fatal(args, code, stderr.String())
 		}
 	}
-	for _, args := range [][]string{{"singbox", "restart"}, {"singbox", "install", "--version", "1.15.0-rc.1"}, {"singbox", "install", "--version", "../1.2.3"}, {"singbox", "status", "extra"}, {"singbox", "status", "--version", "1.2.3"}} {
+	for _, args := range [][]string{{"singbox", "restart"}, {"singbox", "install", "--preserve-version", "--version", singbox.PinnedVersion}, {"singbox", "install", "--version", "1.15.0-rc.1"}, {"singbox", "install", "--version", "../1.2.3"}, {"singbox", "status", "extra"}, {"singbox", "status", "--version", "1.2.3"}} {
 		var out, stderr bytes.Buffer
 		if code := run(args, &out, &stderr); code != 2 || !strings.Contains(stderr.String(), "--help") {
 			t.Fatal(args, code, stderr.String())

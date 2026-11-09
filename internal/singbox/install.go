@@ -135,6 +135,9 @@ func (i Installer) Install(ctx context.Context, destination, version string) err
 		}
 		expected = append(expected, digest)
 	}
+	if len(expected) == 0 {
+		return fmt.Errorf("official release has no SHA-256 checksum; choose a release with a checksum file or asset digest")
+	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
 		return fmt.Errorf("create binary directory: %w", err)
 	}

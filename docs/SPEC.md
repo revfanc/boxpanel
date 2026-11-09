@@ -336,3 +336,12 @@ Hysteria2=true 读取，首次保存时写入，不修改已发布迁移。setup
 域名需通过本机公网 A/AAAA 校验才写 public_host。这里仅更新客户端元数据；节点/用户创建仍
 复用既有 API/Manager.Apply。端口自测只连接系统探测的本机公网 IP，不信任请求或 public_host。
 详细 API、超时/注入及开发边界见 API.md 的 T5.1 约定；不实现 M6/M7。
+
+## 12. T6.1/T6.2 安装与发布
+
+`scripts/install.sh` 只协调系统依赖、经 SHA-256 校验的 Release 安装/替换和 systemd 生命周期。
+初始化、内核安装、配置生效、防火墙、BBR、就绪探测都调用 Go CLI；不在 shell 解析 DB 或生成配置。
+新增可选 settings 键 `panel_firewall_ports`（整数数组）记录安装器开放过的面板 TCP 端口，
+无新迁移；成功安装实例的生产启动重放当前端口，卸载合并当前/未完成生效计划后清理规则。
+保留数据的卸载不清除配置恢复记录，重装只允许恢复 DB 记录的同版本内核，不推进 T7.6。
+生命周期、失败重试、非交互确认、路径/下载约束及 CI/release 产物契约详见 INSTALL.md §2/§3/§5。

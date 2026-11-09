@@ -258,9 +258,35 @@ FRONTEND.md/API.md。无新增依赖、未修改配置生成或 Apply 实现。
 - INSTALL.md §2 全部行为；`shellcheck` 通过。
 - **验收**：在 Debian 12、Ubuntu 24.04 的干净 VPS/容器（systemd）上安装 → 打开面板 → 走完引导 → 客户端导入可连通；`update`、`uninstall` 可用。
 
+T6.1 本次实现与核对（按用户要求与 T6.2 一并交付）：
+- [x] install/update/uninstall、支持系统/架构/root/systemd 检查、依赖安装、非交互参数和明确的卸载确认。
+- [x] 固定 tag 下载、checksums.txt SHA-256、单普通文件 tar/版本检查、原子替换及更新失败恢复旧二进制。
+- [x] 重复执行、安装中断续接、卸载默认保留/显式清除、保留数据后恢复同版本内核。
+- [x] shell 仅编排 CLI；新增 system firewall-open/firewall-cleanup/bbr/ready 与 singbox install --preserve-version，复用既有 Apply/防火墙/BBR，实现与失败分支有 Go 测试。
+- [x] 生产启动重放已登记面板端口；卸载清理当前及 pending 中的规则，不绕过校验写配置，不提前做内核升级。
+- [x] macOS Bash 离线测试覆盖安装/升级/卸载、重试、坏下载/摘要/包、平台/参数、就绪失败和 BBR/互斥锁；已接入 make test。
+- [x] 本机官方 ShellCheck 0.11.0（下载经官方资产 SHA-256 校验）检查全部 scripts/*.sh 无警告；Linux CI 强制检查。
+- [ ] Debian 12 / Ubuntu 24.04 上真实 systemd 安装、浏览器引导和外部客户端连通验收：本机是 macOS，无 systemd/Docker，需审查者在 VPS 或对应 CI 环境执行。
+
 ### T6.2 发布流水线
 - `release.yml`（INSTALL.md §5）。
 - **验收**：推 `v0.1.0-rc.1` tag 产出 Release，install.sh 可用其安装。
+
+- [x] v* tag 触发；构建前端与 CGO_ENABLED=0 的 linux/amd64、linux/arm64，注入 tag，生成两个 tar.gz 与 checksums.txt。
+- [x] draft → 上传完整资产 → 发布；rc 标记 prerelease；权限限定、同 tag 串行、失败 draft 可续接。
+- [x] Action 使用发布超过 7 天的稳定版本并锁定完整 SHA；原 pnpm/action-setup v6.1.1 未满 7 天，改用 v6.1.0，来源/日期见 INSTALL.md。
+- [x] 本机执行发布打包脚本（v0.1.0-rc.1），两架构静态 ELF、tar 清单及摘要核对通过；ci.yml/release.yml 通过 actionlint。
+- [x] CI/release 增加 Ubuntu 24.04 容器 dry-run、离线脚本测试和真实 Linux CLI init/info；本机未执行容器步骤，不将其当作 systemd 实机验收。
+- [ ] 实际推 tag 创建 Release 并从 GitHub 安装：按要求未执行 commit/push/切分支，需审查者发布后验收。
+
+T6.1/T6.2 通用验证：
+- [x] make lint、make build 通过；新增 Go 测试及其余 Go 包通过，前端 typecheck/lint/vitest 通过（16 文件、94 测试）。
+- [x] （审查者沙箱外复跑通过）make test 全部通过：已执行，既有 internal/e2e TestLoopback 被当前 macOS 沙箱的
+  `watch DNS configuration: register DNS configuration notification: status 9` 阻断；未跳过/修改该测试或替换内核，需普通终端/CI 复跑。
+- [x] 未修改 web/package.json、锁文件或 pnpm 冷静期；无新增项目依赖，未实现 M7 或执行 git 写操作。
+
+规格补齐：非交互卸载 --yes/--purge、dry-run 边界、重试/保留数据重装、面板端口持久重放、
+下载强制 SHA-256、update 的正常启动生效与二进制回退边界，均见 INSTALL.md；新增设置键见 SPEC.md §12。
 
 ## M7 后续增强（MVP 之后，按需排期）
 

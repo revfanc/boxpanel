@@ -48,6 +48,7 @@ func (p singboxPaths) resolve(paths *pathFlags, dev bool) singboxPaths {
 type singboxOptions struct {
 	command, version, unitDir, panelBinary string
 	dev                                    bool
+	preserveVersion                        bool
 	paths                                  app.Paths
 	core                                   singboxPaths
 }
@@ -69,6 +70,7 @@ func parseSingboxOptions(args []string, output io.Writer) (singboxOptions, error
 	flags.BoolVar(&opts.dev, "dev", false, "mock sing-box management without downloads, file writes or systemctl")
 	if opts.command == "install" {
 		flags.StringVar(&opts.version, "version", singbox.PinnedVersion, "stable version published more than seven days ago")
+		flags.BoolVar(&opts.preserveVersion, "preserve-version", false, "restore the database-recorded core version when present (installer/reinstall)")
 		flags.StringVar(&opts.unitDir, "unit-dir", os.Getenv("BOXPANEL_UNIT_DIR"), "systemd unit directory (BOXPANEL_UNIT_DIR; default /etc/systemd/system)")
 		flags.StringVar(&opts.panelBinary, "panel-binary", os.Getenv("BOXPANEL_BINARY"), "panel executable for systemd (BOXPANEL_BINARY; default /usr/local/bin/boxpanel)")
 	}
@@ -77,6 +79,15 @@ func parseSingboxOptions(args []string, output io.Writer) (singboxOptions, error
 	}
 	if flags.NArg() != 0 {
 		return opts, fmt.Errorf("unexpected singbox arguments")
+	}
+	versionSet := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "version" {
+			versionSet = true
+		}
+	})
+	if opts.preserveVersion && versionSet {
+		return opts, fmt.Errorf("--preserve-version cannot be combined with --version")
 	}
 	var err error
 	if opts.command == "install" {
@@ -193,6 +204,18 @@ func singboxCommand(ctx context.Context, opts singboxOptions, deps singboxDepend
 	if _, err := app.LoadConfig(ctx, conn); err != nil {
 		return err
 	}
+	if opts.preserveVersion {
+		recorded, err := db.GetSetting(ctx, conn, db.SingboxVersion)
+		if err != nil {
+			return err
+		}
+		if recorded != "" {
+			opts.version, err = singbox.NormalizeVersion(recorded)
+			if err != nil {
+				return fmt.Errorf("invalid recorded core version; restore the database before reinstalling")
+			}
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(opts.core.binary), 0755); err != nil {
 		return fmt.Errorf("create binary directory: %w", err)
 	}
@@ -222,7 +245,12 @@ func singboxCommand(ctx context.Context, opts singboxOptions, deps singboxDepend
 			if err != nil {
 				return fmt.Errorf("inspect existing sing-box config: %w", err)
 			}
-			return fmt.Errorf("existing sing-box configuration requires a validated upgrade; T2.1 only supports installation/version selection before configuration")
+			// Reinstalling retained data may restore the exact recorded version.
+			// Replacing an existing binary or changing versions still needs T7.6.
+			recorded, err := db.GetSetting(ctx, conn, db.SingboxVersion)
+			if err != nil || status.Installed || recorded != opts.version {
+				return fmt.Errorf("existing configuration only permits restoring the missing recorded sing-box version; use --version with that version, or use a validated upgrade when available")
+			}
 		}
 		if err := deps.installer.Install(ctx, opts.core.binary, opts.version); err != nil {
 			return err

@@ -145,14 +145,12 @@ func installFixture(t *testing.T) (Installer, *release, map[string][]byte, *int)
 }
 
 func TestInstallVerifiedBinary(t *testing.T) {
-	for _, method := range []string{"asset digest", "checksum file", "structural fallback"} {
+	for _, method := range []string{"asset digest", "checksum file"} {
 		t.Run(method, func(t *testing.T) {
 			i, rel, responses, calls := installFixture(t)
 			if method == "checksum file" {
 				responses[releaseBase+"v"+PinnedVersion+"/checksums.txt"] = []byte(strings.TrimPrefix(rel.Assets[0].Digest, "sha256:") + "  " + rel.Assets[0].Name + "\n")
 				rel.Assets = append(rel.Assets, asset{Name: "checksums.txt"})
-			}
-			if method == "structural fallback" {
 				rel.Assets[0].Digest = ""
 			}
 			destination := filepath.Join(t.TempDir(), "bin", "sing-box")
@@ -172,7 +170,7 @@ func TestInstallVerifiedBinary(t *testing.T) {
 }
 
 func TestInstallFailurePreservesOldBinary(t *testing.T) {
-	for _, scenario := range []string{"digest", "missing archive", "prerelease", "draft", "fresh", "seven days", "missing date", "tag", "checksum missing", "checksum mismatch", "corrupt tar", "version", "command", "cancelled", "http"} {
+	for _, scenario := range []string{"digest", "no checksum", "missing archive", "prerelease", "draft", "fresh", "seven days", "missing date", "tag", "checksum missing", "checksum mismatch", "corrupt tar", "version", "command", "cancelled", "http"} {
 		t.Run(scenario, func(t *testing.T) {
 			i, rel, responses, calls := installFixture(t)
 			ctx, cancel := context.WithCancel(context.Background())
@@ -180,6 +178,8 @@ func TestInstallFailurePreservesOldBinary(t *testing.T) {
 			switch scenario {
 			case "digest":
 				rel.Assets[0].Digest = "sha256:" + strings.Repeat("0", 64)
+			case "no checksum":
+				rel.Assets[0].Digest = ""
 			case "missing archive":
 				rel.Assets = nil
 			case "prerelease":
@@ -202,9 +202,10 @@ func TestInstallFailurePreservesOldBinary(t *testing.T) {
 				rel.Assets = append(rel.Assets, asset{Name: "checksums.txt"})
 				responses[releaseBase+"v"+PinnedVersion+"/checksums.txt"] = []byte(strings.Repeat("0", 64) + "  " + filename)
 			case "corrupt tar":
-				rel.Assets[0].Digest = ""
 				url, _ := DownloadURL(PinnedVersion, "darwin", "arm64")
 				responses[url] = []byte("not a tar")
+				digest := sha256.Sum256(responses[url])
+				rel.Assets[0].Digest = fmt.Sprintf("sha256:%x", digest)
 			case "version":
 				i.Runner = testRunner(func(context.Context, string, ...string) ([]byte, error) { return []byte("sing-box version 0.0.0"), nil })
 			case "command":

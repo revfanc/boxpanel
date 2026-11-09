@@ -8,7 +8,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/main/script
 
 > 仓库地址在脚本顶部定义为变量 `REPO="${BOXPANEL_REPO:-revfanc/boxpanel}"`，可通过环境变量覆盖（便于 fork 测试）。
 
-安装结束打印（密码仅此一次；之后 `boxpanel info` 只显示地址和用户名，忘记密码用 `reset-admin`）：
+首次初始化时立即打印并保存以下凭证（密码仅此一次；后续步骤失败也不会丢失这次输出）；
+安装结束再次用 `boxpanel info` 显示地址和用户名，忘记密码用 `reset-admin`：
 
 ```
 ✅ boxpanel 安装完成
@@ -21,24 +22,74 @@ bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/main/script
 
 ## 2. `scripts/install.sh` 行为
 
-子命令：`install`（默认）、`update`、`uninstall`、`--non-interactive`、`--version <tag>`、`--port <n>`。
+子命令：`install`（默认）、`update`、`uninstall`；选项 `--non-interactive`、
+`--version <tag>`、`--port <n>`、`--yes`、`--purge`、`--dry-run`、`--help`。
 
 install 流程：
 
 1. 必须 root；`set -euo pipefail`；所有步骤打印 `[1/8]` 形式的进度。
 2. 检测系统：Debian 11+/Ubuntu 20.04+/CentOS Stream 9/Rocky/Alma 8+/Alpine(后期)；架构 `amd64|arm64`（其他直接报错并说明）；需要 systemd。
-3. 安装依赖：`curl tar ca-certificates`，以及 `nftables` 或 `iptables`（端口跳跃用）。
+3. 安装依赖：`curl tar ca-certificates coreutils`、`iproute2`（RHEL 系为 `iproute`）、`kmod`；
+   没有 nft 且没有完整 iptables/ip6tables 时安装 `nftables`（端口跳跃用），不自动启用防火墙。
 4. 从 GitHub Release 下载 `boxpanel-linux-{arch}.tar.gz` 与 `checksums.txt`，**sha256 校验**后安装到 `/usr/local/bin/boxpanel`。
 5. 调用 `boxpanel init --port <随机或指定>`：初始化 DB、生成 web_path/sub_path/管理员账号/自签证书、探测公网 IP。
-6. 调用 `boxpanel singbox install`：下载锁定版本的 sing-box（`SagerNet/sing-box` release 中 `sing-box-{ver}-linux-{arch}.tar.gz`；若官方提供校验文件则校验，否则至少校验 tar 结构与 `sing-box version` 输出）。
-7. 写入并启用 systemd 单元（模板生成在 T2.1 实现，见 §4），开放面板端口防火墙。
+6. 调用 `boxpanel singbox install --preserve-version`：首次下载锁定版本，重装时保留 DB 已记录版本，必须通过官方校验文件或资产 API 的 SHA-256；
+   缺少摘要时失败，不再允许仅结构/版本检查的兜底。单元仍由 Go 模板生成。
+7. 调用 `boxpanel apply` 完成首次配置校验/生效，再调用 `boxpanel system firewall-open`，
+   enable 两个单元并 restart 面板；同时确认服务 active 与本机 HTTPS 就绪。
 8. 询问是否开启 BBR（非交互模式默认开启），输出 §1 的信息。
 
-update：下载新版 boxpanel → 校验 → 替换 → `systemctl restart boxpanel`（不动 DB 与 sing-box）。
+update：下载新版 boxpanel → 校验 → 同目录原子替换 → `systemctl restart boxpanel` → 检查本机 HTTPS。
+脚本不初始化/重置 DB、不安装/升级 sing-box；`serve` 仍按既有约定迁移 DB 并执行 Startup/Apply，
+因此“不动 DB 与 sing-box”不表示阻止正常启动时的重新生效。失败尝试恢复旧二进制并重启，
+不回退数据库迁移、不声称整机事务回滚；旧版也无法启动时提示检查数据库兼容性和 journal。
 
 uninstall：二次确认 → 停服务、删单元 → 清防火墙规则与端口跳跃规则 → 询问是否保留 `/etc/boxpanel`（默认保留，提示路径）。
 
 脚本要求：幂等（重复执行 install 等于检测到已安装后提示改用 update）；`shellcheck` 无警告；不依赖 bash 4 以外的特性。
+
+### T6.1 参数、重试与验证边界
+
+- 脚本兼容 macOS 自带 Bash 3.2 进行离线测试，真正安装仅支持 Linux/systemd + root。
+  支持 Debian 11+、Ubuntu 20.04+、CentOS Stream 9+、Rocky/AlmaLinux 8+，仅 amd64/arm64。
+  非 root、非 systemd、旧系统和其他架构在下载/修改前拒绝；Alpine 仍留待后续。
+- 非 TTY 输入自动采用非交互模式。非交互安装默认尝试 BBR；不可用时保留可用面板并提示在自检中重试。
+  非交互卸载必须显式 `--yes`，默认保留数据；只有 `--purge` 明确授权删除数据。交互卸载会确认停止连接，
+  再询问是否永久删除数据（默认否）。不卸载系统依赖、不关闭 BBR，以免影响其他服务。
+- `--version` 接受 `vX.Y.Z` 及 `vX.Y.Z-rc.N` 等预发布 tag。省略时只解析一次 GitHub latest 的最终 tag，
+  随后两个资产都从同一个固定 tag 下载，避免发布切换造成版本混用；没有稳定 Release 时请显式指定 rc tag。
+  下载仅 HTTPS，重定向也必须 HTTPS，有连接/总超时与有限重试；校验文件至多 1 MiB，包至多 128 MiB。
+  `checksums.txt` 必须恰有一条匹配文件名的 64 位 SHA-256（支持普通和 `*filename` 格式）。
+  哈希通过后检查 tar 只含根目录普通文件 `boxpanel`，拒绝链接、目录、重复/额外条目，再执行 `version`
+  核对 tag；通过前不替换旧二进制。checksum/Release 元数据经 HTTPS 获取，不递归校验校验清单自身。
+- 安装器固定使用 §3/§4 的生产默认路径，并向每个 CLI 调用显式导出一致的路径环境变量，
+  不接受继承环境中不一致的路径覆盖；复杂自定义部署请直接使用 CLI。
+  `BOXPANEL_REPO` 可覆盖 fork，`BOXPANEL_PUBLIC_IP` 可传给 init，shell 不解析 DB、不生成凭证/证书/配置/防火墙规则。
+- `/run/boxpanel-installer.lock` 互斥 install/update/uninstall；正常退出或信号清理锁与下载/staging 临时文件。
+  SIGKILL/断电遗留锁需确认没有安装进程后手动删除。`/etc/boxpanel/.installing` 记录安装未完成；
+  重跑 install 续接，已初始化的 DB 跳过 init；init 自身仍拒绝覆盖已有业务数据。
+  重复成功 install 只显示 info 并提示 update，相同二进制 update 不重启，重复 uninstall 不报不存在错误。
+- 卸载停止/禁用两个服务后调用 Go CLI 清理规则；清理失败则保留单元、二进制和数据供重试。
+  缺少 CLI 而仍有受管文件时拒绝盲删，提示先恢复安装；仅处理两个受管单元和受管二进制。
+  保留数据后重新安装复用账号/证书。若已有配置但内核二进制缺失，只允许恢复 DB 记录的同版本内核；
+  不以重装名义升级已有配置。`singbox install --preserve-version` 自动选择原版本；该选项不能与 `--version` 同用。
+- 新 CLI `system ready` 用安装证书验证本机 127.0.0.1 HTTPS 的认证接口（预期 401），不走公网地址/代理。
+  检查有效期、证书 SAN 与信任链，不使用 insecure；单次至多 2 秒。脚本在最多 30 轮中检查
+  systemd active 和 HTTPS，并在一秒后复核，避免把进程启动中视为已就绪。
+- `--dry-run` 只校验参数/发行版/架构并打印操作计划，不要求 root/systemd，不联网、不调用业务 CLI、
+  不安装依赖、不写文件。它不能证明真实 systemd、防火墙或客户端连通性。
+  `scripts/install_test.sh` 通过临时目录和 uname/id/curl/systemctl/CLI 替身覆盖成功、重复、失败续接、
+  更新回退、卸载确认/保留/清除、下载失败、坏/重复/缺失摘要、版本不符、链接/多条目包与平台拒绝；
+  真正运行 tar/SHA-256，不需要 bats、root、网络或 systemd。`make test` 自动执行。
+
+```bash
+bash scripts/install.sh install --non-interactive --version v0.1.0-rc.1 --port 23456
+bash scripts/install.sh update --non-interactive --version v0.1.0-rc.2
+bash scripts/install.sh uninstall --non-interactive --yes          # 保留数据
+bash scripts/install.sh uninstall --non-interactive --yes --purge  # 明确删除数据
+bash scripts/install_test.sh                                      # macOS/Linux 离线测试
+shellcheck scripts/*.sh
+```
 
 ## 3. CLI（`boxpanel` 二进制）
 
@@ -54,6 +105,18 @@ uninstall：二次确认 → 停服务、删单元 → 清防火墙规则与端�
 | `boxpanel singbox status` | 版本、运行状态 |
 | `boxpanel apply` | 重新生成并生效 sing-box 配置 |
 | `boxpanel version` | |
+| `boxpanel system firewall-open` | 读取 DB 面板端口并用既有防火墙适配器放行，记录可重放/清理的端口 |
+| `boxpanel system firewall-cleanup` | 两个服务已停止时清理受管端口和跳跃规则；保留 DB/配置/恢复记录 |
+| `boxpanel system bbr` | 复用 sysinfo.EnableBBR，不在 shell 写 sysctl |
+| `boxpanel system ready` | 验证本机 HTTPS 认证接口已就绪，用于安装/更新存活检查 |
+
+T6.1 的 `system` 子命令支持已有数据/证书/内核路径参数，仅在 Linux 下工作，无开发 mock 成功。
+`firewall-open` 在触碰防火墙前提交 `settings.panel_firewall_ports`（整数数组、去重），
+保证部分失败仍能卸载清理；不改 schema。只有已登记的安装实例才在生产 serve 启动时重放当前面板端口。
+保留历史端口便于清理，API 热切换端口仍遵守 T3.2 的手动放行约定；重启后登记并放行当前端口。
+`firewall-cleanup` 复用 Apply 的进程锁/flock、DB 快照及 Firewall.Sync，合并 applied_firewall、
+未完成 `.pending` 的前后计划和 panel_firewall_ports，目标为空；运行中服务、损坏恢复记录或
+检测失败时拒绝清理。不重启来恢复 pending，不写 sing-box JSON，不删除恢复材料；重装后 Apply 可恢复。
 
 ### T1.2 初始化、路径与启动约定
 
@@ -179,7 +242,7 @@ WantedBy=multi-user.target
   提供 SHA-256。安装器核对该摘要，并检查 tar 结构与解包后二进制的 `sing-box version`。
   其他显式指定版本如提供校验文件则必须校验（支持 `SHA256  filename` / `SHA256 *filename`
   格式）；校验文件存在但缺项、损坏或格式不支持时失败，不降级跳过。
-  未提供校验文件/摘要时仍强制执行结构与版本检查，符合 §2 的最低要求。
+  T6.1 收紧：未提供校验文件/摘要时拒绝下载安装；结构与版本检查不能替代 SHA-256。
 - 仅从官方固定仓库的 HTTPS Release API 和资产 URL 下载，校验实际 tag、发布时间和稳定状态；
   `--version` 接受 `1.14.4` 或 `v1.14.4`，拒绝 alpha/beta/rc、路径片段和发布未满 7 天的下载。
   Linux 生产支持 amd64/arm64，开发工具另支持 darwin/amd64、darwin/arm64；
@@ -196,6 +259,8 @@ WantedBy=multi-user.target
   DB 的 `singbox_version` 仅在这些步骤成功后更新，status 始终从二进制和 systemd 读取实际状态。
 - T2.1 不执行现有配置的升级验证与回滚；需要替换二进制时，运行中的服务或已有配置会使安装被拒绝。
   因此 `--version` 的版本切换仅适用于尚未配置的实例；已有配置的升级流程属于 T7.6。
+  T6.1 增加卸载保留数据后的恢复例外：服务已停止且内核缺失时，可重新下载 DB 记录的相同版本；
+  不改变配置，不允许此路径更换版本，之后仍须经 apply 校验/重启。
   不写入任何 sing-box JSON，不修改防火墙，不接入 `/singbox/*` 管理 API。
 - systemctl 通过 `host.Runner` 的参数数组执行，每条命令最多 5 秒、输出最多 1 MiB；
   控制接口只接受 `boxpanel.service` 和 `boxpanel-singbox.service`。
@@ -277,7 +342,30 @@ macOS 受限沙箱可能禁止锁定内核注册系统 DNS 配置通知，报
 - 步骤：pnpm 构建前端 → `CGO_ENABLED=0` 交叉编译 `linux/amd64`、`linux/arm64`（`-trimpath -ldflags "-s -w -X main.version=<tag>"`）→ 打包 `boxpanel-linux-{arch}.tar.gz` → 生成 `checksums.txt` → 创建 GitHub Release 并上传。
 - `ci.yml`：PR 与 main 推送时跑 `make lint test build`、`shellcheck scripts/install.sh`；安装 sing-box 锁定版本以便 golden test 跑 `sing-box check`。
 
-当前 T2.1 阶段：CI 在 Linux 与 macOS 上使用 Go 1.27、Node 24 和
-`web/package.json` 固定的 pnpm，执行 `make tools lint test build` 及 `bin/boxpanel version`。
-`make tools` 在单测之外安装锁定的宿主版本，T2.2 及后续的 golden test 可直接发现该工具；
-`shellcheck` 随 T6.1 的 `scripts/install.sh` 接入，不提前实现安装脚本。
+T6.2 实现：CI 在 Linux 与 macOS 上使用 Go 1.27、Node 24 和 `web/package.json` 固定的 pnpm，
+执行 `make tools lint test build` 及 `bin/boxpanel version`；Linux 强制运行 ShellCheck。
+`make lint` 在本地工具存在时检查所有 `scripts/*.sh`，缺失时明确提示由 CI 强制检查。
+CI 另用 `ubuntu:24.04` 容器执行 install dry-run、完整离线脚本测试以及真实 Linux 二进制 init/info。
+容器步骤不启动 systemd，不代替干净 VPS 的端到端验收。
+
+release.yml 在 Ubuntu 24.04 上先 lint/test/构建前端，再调用 `scripts/build-release.sh`；
+`RELEASE_TAG` 先校验后用于 ldflags，保持 CGO_ENABLED=0。两个压缩包均恰含一个普通文件 `boxpanel`，
+单独生成 `checksums.txt`；上传前校验摘要、tar 清单和 amd64 的版本输出，并执行 Ubuntu 容器 dry-run。
+采用 `gh release create --verify-tag --draft` → 上传三个资产 → 发布，避免 latest 指向未上传完整的 Release；
+失败可续接 draft，已发布 Release 不覆盖资产。带 `-` 的 tag 标为 prerelease 且不成为 latest。
+同一 tag 串行执行，只有发布 job 有 contents:write，不需要额外 PAT。没有新增前端/Go 项目依赖。
+CLI 参数依据 [gh release create](https://cli.github.com/manual/gh_release_create) /
+[edit](https://cli.github.com/manual/gh_release_edit)。
+
+2026-11-09 经官方 Release API 核对，以下均为非 draft/prerelease、发布超过 7 天的稳定版本，
+CI/release 都锁定其完整 commit SHA（详见工作流注释）：
+
+| Action | 版本 | published_at（UTC） |
+|---|---|---|
+| [actions/checkout](https://github.com/actions/checkout/releases/tag/v7.0.1) | v7.0.1 | 2026-07-20T15:10:05Z |
+| [actions/setup-go](https://github.com/actions/setup-go/releases/tag/v7.0.0) | v7.0.0 | 2026-07-16T02:50:50Z |
+| [actions/setup-node](https://github.com/actions/setup-node/releases/tag/v7.1.0) | v7.1.0 | 2026-10-08T02:52:34Z |
+| [pnpm/action-setup](https://github.com/pnpm/action-setup/releases/tag/v6.1.0) | v6.1.0 | 2026-09-05T07:31:28Z |
+
+原 CI 的 pnpm/action-setup v6.1.1 发布于 2026-11-03，尚未满 7 天，因此使用 v6.1.0；
+`web/package.json`、锁文件与 pnpm 冷静期策略均不修改。
