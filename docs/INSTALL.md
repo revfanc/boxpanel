@@ -87,6 +87,9 @@ uninstall：二次确认 → 停服务、删单元 → 清防火墙规则与端�
   `--db-path` 仍有最高优先级。`init/info/reset-admin --dev` 使用同一套开发路径规则。
   开发初始化不探测外网、不生成证书；自动初始化只在空库发生，重启不再输出凭证。
   开发模式仍保留完整认证、限流和 CSRF，只取消 cookie 的 Secure 属性。
+  T3.1 起入站/用户 API 使用明确标注的开发替身：仍调用 Manager.Apply，但仅提交 DB，
+  不生成/check/生效配置或创建证书；成功写响应带 `X-Boxpanel-Apply: dev-db-only`。
+  restart 与 CLI apply 仍不支持开发环境，详细约定见 API.md。
 - `info` 不打印密码；`reset-admin` 原子更新账号密码并撤销该管理员的全部会话。
   `info/reset-admin` 及普通 `serve` 不会创建不存在的 DB。
 - T1.2 不生成 systemd 单元、不调用 systemctl、防火墙或 sing-box；systemd 与 sing-box

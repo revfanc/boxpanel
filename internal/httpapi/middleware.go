@@ -77,8 +77,8 @@ func middleware(next http.Handler, logger *slog.Logger, routes map[string]string
 				_, _ = w.Write(buffer.body.Bytes())
 			}
 			route := "unmatched"
-			if _, ok := routes[r.URL.Path]; ok {
-				route = r.URL.Path
+			if _, ok := routes[r.Pattern]; ok {
+				route = r.Pattern
 			}
 			// Raw URL/query/headers/body/panic values are intentionally omitted.
 			logger.Info("api request", "route", route, "status", buffer.status, "duration", time.Since(start))

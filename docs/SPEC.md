@@ -222,7 +222,9 @@ MVP 规则：**所有启用的用户加入所有启用的入站**。超额/过�
 - 面板 Linux 生产启动时执行重新生成/check/生效并重放端口跳跃。失败拒绝启动并给修复建议。
   全新实例尚未安装二进制、无当前配置/恢复记录且无启用入站时，允许启动面板进入后续安装引导。
   非 Linux / `--dev` 启动跳过生效；管理 API 返回 409，CLI apply 失败并提示 Linux/systemd，
-  不伪装为已成功生效、不写配置或执行系统命令。
+  不伪装为已成功生效、不写配置或执行系统命令。T3.1 为 `serve --dev` 资源编辑增加显式
+  `DevDBOnly` 开发替身：仅非 nil mutation 可通过同一 Apply 入口提交 DB，始终不生效，
+  响应以 `X-Boxpanel-Apply: dev-db-only` 标明；restart/CLI 不使用此替身，详见 API.md。
 - `applied_firewall` 存储最近成功的 `{ports:[{port,proto}],hops:[{start,end,port}]}` JSON；
   `apply_generation` 是 32 字节 crypto/rand 的 base64url 值，仅用于中断恢复。
   Clash API 运行参数和 Hysteria2 证书约定见 CONFIG.md §2 的 T2.3 补充。

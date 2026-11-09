@@ -104,6 +104,20 @@ T2.3 补充验收（实现范围不扩展到 T3）：
 - API.md 中入站、用户、`/inbounds/suggest`、`/reality/*` 全部接口；端口冲突 409；名称校验。
 - **验收**：handler 单测（httptest）；每个写操作都触发生效流程（fake）。
 
+T3.1 补充验收与边界：
+- [x] 入站/用户 CRUD、启停、用户凭证/token 重置；名称、端口、协议参数校验及 409 冲突。
+- [x] 每个持久化写接口调用 Manager.Apply；mutation 只使用传入事务，成功后才返回对象。
+- [x] httptest 使用真实 Manager + fake 命令/防火墙验证全部写操作；check 失败逐接口回滚，重启失败恢复 DB/文件。
+- [x] 单连接 SQLite 下创建/修改入站和用户、重置凭证有超时约束测试，证明不会等待自身连接而死锁。
+- [x] Reality 候选常量、可注入 DNS/TLS/时钟和 handler Probe；离线测试过滤、排序、证书/TLS/ALPN、私网地址限制。
+- [x] 非 Linux 正常模式保持 409；serve --dev 显式启用仅 DB 开发替身，响应头与日志标注，不伪装真实生效。
+- [x] 认证/CSRF、400/404/405/409/422/500、HEAD、敏感字段及日志脱敏覆盖。
+- [x] make lint、make test、make build 通过；make test 使用已有 .tools/bin/sing-box 执行真实配置 check。
+
+规格补齐见 API.md 的 T3.1 约定：PUT 为部分更新，成功/删除状态码明确；suggest 不传私钥，
+创建时生成并只返回公钥；开发例外同步 SPEC.md/INSTALL.md。不新增依赖、不改前端包清单或锁文件。
+`/users/{id}/links`、订阅、rules/settings 和 setup 均留给后续任务。
+
 ### T3.2 分享链接与订阅
 - `internal/share`：vless/hysteria2 URI（CONFIG.md §4.5）。
 - `internal/rules`：规则源与预设（§3）。

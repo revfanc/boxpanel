@@ -36,8 +36,11 @@ type FirewallSync interface {
 }
 
 type ApplyOptions struct {
-	OS             string
-	Dev            bool
+	OS  string
+	Dev bool
+	// DevDBOnly is an explicit development substitute for T3 resource writes.
+	// It requires Dev, accepts non-nil mutations only, and never applies config.
+	DevDBOnly      bool
 	Binary, Config string
 	Runner         host.Runner
 	Controller     Controller
@@ -57,6 +60,7 @@ type Manager struct {
 	now            func() time.Time
 	healthTimeout  time.Duration
 	unsupported    bool
+	devDBOnly      bool
 	mu             sync.Mutex
 }
 
@@ -80,6 +84,9 @@ func (e *ApplyError) Error() string {
 func (e *ApplyError) Unwrap() error { return e.cause }
 
 func NewManager(conn *sql.DB, opts ApplyOptions) (*Manager, error) {
+	if opts.DevDBOnly && !opts.Dev {
+		return nil, fmt.Errorf("database-only apply is development-only; enable --dev")
+	}
 	if opts.OS == "" {
 		opts.OS = runtime.GOOS
 	}
@@ -111,7 +118,7 @@ func NewManager(conn *sql.DB, opts ApplyOptions) (*Manager, error) {
 	if opts.HealthTimeout <= 0 || opts.HealthTimeout > 5*time.Second {
 		opts.HealthTimeout = 5 * time.Second
 	}
-	return &Manager{db: conn, binary: opts.Binary, config: config, runner: opts.Runner, controller: opts.Controller, firewall: opts.Firewall, files: opts.Files, now: opts.Now, healthTimeout: opts.HealthTimeout, unsupported: opts.Dev || opts.OS != "linux"}, nil
+	return &Manager{db: conn, binary: opts.Binary, config: config, runner: opts.Runner, controller: opts.Controller, firewall: opts.Firewall, files: opts.Files, now: opts.Now, healthTimeout: opts.HealthTimeout, unsupported: opts.Dev || opts.OS != "linux", devDBOnly: opts.DevDBOnly}, nil
 }
 
 // Mutation must use only tx for DB access. Do not commit, rollback, or perform
@@ -152,6 +159,9 @@ type pendingApply struct {
 }
 
 func (m *Manager) Apply(ctx context.Context, mutate Mutation) (result error) {
+	if m.devDBOnly && mutate != nil {
+		return m.applyDevelopmentDBOnly(ctx, mutate)
+	}
 	if m.unsupported {
 		return ErrUnsupported
 	}

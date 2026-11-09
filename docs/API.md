@@ -179,7 +179,9 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 { "protocol": "vless_reality", "port": 443, "remark": "香港-Reality", "options": { "server_name": "..." } }
 ```
 
-所有写操作走「生成 → check → 生效」流程，成功返回最新对象，失败按错误表返回。
+所有持久化写操作通过 `singbox.Manager.Apply(ctx, mutation)` 走「生成 → check → 生效」流程。
+创建返回 201，修改/启停返回 200 最新脱敏对象，删除成功返回 204；失败按错误表返回。
+`/inbounds/suggest` 只提供推荐参数，不写 DB、不触发生效。
 
 ## 用户
 
@@ -210,6 +212,90 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
   "nodes": [ { "inbound_id": 1, "remark": "香港-Reality", "uri": "vless://..." } ]
 }
 ```
+
+### T3.1 入站、用户与 Reality 的具体约定
+
+本任务实现上述入站、用户 CRUD/启停/重置以及 Reality 接口。
+`/users/{id}/links` 按 TASKS.md 留在 **T3.2**，此时仍返回 404；不实现订阅、规则、设置或引导接口。
+所有接口需认证，POST/PUT/DELETE 校验 CSRF；GET 支持 HEAD，响应均为 `Cache-Control: no-store`。
+JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未知字段、错误类型和多余 JSON。
+删除、reset-token、reset-credentials 使用空请求体；toggle 必须给出布尔 `enabled`。
+已知路径的方法错误返回 JSON 405 和完整 Allow，非法 ID 为 400，正整数 ID 不存在为 404。
+
+**入站**：
+
+- 列表是按 ID 升序的 JSON 数组（空列表为 `[]`）；详情与写入成功响应均为
+  `{id,tag,protocol,port,enabled,remark,options,created_at,updated_at}`。
+  options 使用 CONFIG.md §1 的协议字段，永不返回 `private_key` 或 `obfs_password`；
+  Reality 保留 `public_key`。其他未知存储字段也不透传。时间为 Unix 秒。
+- POST 必须提供 `protocol`（仅 vless_reality / hysteria2）；可选 `port/tag/enabled/remark/options`。
+  默认 enabled=true、remark=""；端口优先 443/TCP、8443/UDP，已占用时在 10000–60000
+  中选择空闲端口；tag 默认 `vless-reality-<port>` / `hysteria2-<port>`。
+  tag 限 1–64 位 `[a-zA-Z0-9_-]` 且唯一，remark 最多 1024 字节。
+- Reality 未给 server_name 时使用本机 TLS 检测后的首个推荐目标；没有合格目标返回
+  `409 reality_target_unavailable`，提示检查网络或手动填写目标，不把未检测域名当作可用推荐。
+  handshake_server 默认跟随创建时的 server_name、handshake_port=443、fingerprint=chrome；
+  自动生成 X25519 密钥对和一个 16 位 short ID。short_ids 接受 1–16 个偶数长度的 8–16 位 hex。
+  显式 private_key 未配 public_key 时自动推导，二者都给出时检查对应关系。
+- Hysteria2 默认 sni=www.bing.com、cert_mode=self_signed、带宽均 0、混淆关闭，
+  port_hopping={enabled:false,start:20000,end:30000}。带宽非负，混淆密码最多 1024 字节。
+  实际证书仅由生产 Apply 生成。ACME、其他协议不接受。
+- PUT 采用**部分更新**：省略的顶层及 options 字段保持原值（包括私钥和混淆密码），
+  port_hopping 也逐字段合并；数组整体替换。不允许切换 protocol，需新建入站。
+  更新 port 不自动更改 tag；显式空混淆密码表示关闭混淆。禁用记录同样校验参数。
+- 端口须为 1–65535；事务内检查所有入站的唯一端口（含禁用记录）、面板 DB/实际监听端口、
+  Clash TCP 控制端口及启用 Hysteria2 的跳跃冲突，返回 `409 port_in_use`；tag 重复为 `409 tag_exists`。
+  Linux 生产在进入 Apply 前用可注入的 `ss -H -lntu` 快照检查对应协议的系统监听，
+  保持原端口的已启用入站视为自身监听。检查失败返回 500 并提示安装 iproute2/检查权限。
+  快照不预留端口；之后被抢占仍由 Apply 重启/存活检查发现并回滚。
+- suggest 接收 `{protocol}`，返回可直接作为 POST body 的 `{protocol,port,options}`。
+  原文“密钥…”与凭证不出 API 的规则冲突：最小修正为 suggest **不返回私钥，也不返回
+  无法复用的临时公钥**；创建时在服务端生成新密钥并返回公钥。suggest 不落库、不预留端口。
+
+**用户**：
+
+- POST 的 name 必填；PUT 可部分更新 name/remark/traffic_limit/expire_at，其余字段不能直接修改。
+  name 为 `[a-zA-Z0-9_-]{1,32}`、区分大小写且唯一，重名为 `409 name_exists`；
+  remark 最多 1024 字节；流量上限、到期时间为非负 int64，0 分别表示不限/永不过期。
+- 默认启用、流量计数为零；UUID v4、24 字节 base64url 密码与 token 均用 crypto/rand 生成。
+  列表按 ID 升序，返回数组；对象为
+  `{id,name,uuid,enabled,traffic_limit,traffic_up,traffic_down,expire_at,remark,created_at,status}`。
+  uuid 只显示首尾各四位，中间 `****`；不返回 password/sub_token。
+- status 按优先级为 disabled / expired / exhausted / active；到期和超额边界同 CONFIG.md，
+  加总流量避免 int64 溢出。这里只计算展示状态和随 Apply 生成配置，不实现 T7.1 的采样/定时禁用。
+- 创建 201；更新、启停、重置均 200 返回最新脱敏对象；删除 204。
+  reset-token 只更新 token，reset-credentials 只更新 UUID/密码，均触发 Apply。
+  新 token 不由此接口返回，T3.2 的 links 接口负责提供新的订阅地址。
+
+**事务与开发环境**：
+
+- 所有以上持久化写操作（包括删除、启停及两种重置）只进入 `Manager.Apply(ctx, mutation)`。
+  mutation 的所有查询、唯一性检查、写入和响应对象读取只使用传入的 `*sql.Tx`，
+  不使用单连接池 `*sql.DB`，不自行提交或执行系统副作用。Apply 成功返回后才发送响应。
+  生成/check 失败 422、重启/防火墙/恢复失败沿用 T2.3 契约；失败不提交资源变更。
+- **仅开发用的例外**：`serve --dev` 显式装配 `ApplyOptions{Dev:true,DevDBOnly:true}`，
+  仍从同一个 Manager.Apply 入口提交非 nil mutation，但只写 DB，**不生成/check/写配置、
+  不生成证书、不重启服务、不修改防火墙**。保持认证、CSRF、事务和参数/DB 冲突校验，
+  不探测宿主监听端口。成功的资源写响应头为 `X-Boxpanel-Apply: dev-db-only`，启动日志也明确提示。
+  使用独立开发 DB，不应把此响应解释为节点可连接；TLS 推荐/检测仍执行真实、可注入的探测。
+- Linux 生产成功写响应头为 `X-Boxpanel-Apply: applied`。
+  非 Linux 且未开 --dev 的资源写入仍为 `409 system_unsupported`。
+  未显式启用 DevDBOnly 的普通 Manager 在非 Linux / --dev 下仍拒绝 Apply。
+  `/singbox/restart|logs|config`、CLI apply、启动行为保持 T2.3 约定，开发替身不提供模拟生效成功。
+
+**Reality 探测**：
+
+- 候选域名集中在 `internal/reality/probe.go` 的常量 `CandidateDomains`，不在 T3.1 增加设置覆盖接口。
+  recommend 并发检测候选，共享最多 3 秒窗口，只返回证书有效、TLS 1.3、ALPN=h2 的结果，
+  按握手耗时升序取前三，同耗时保持候选顺序；全失败时 `200 {targets:[]}`。
+- check 的 server 必填，仅接受 ASCII 公网域名/公网 IP（不接受 URL、host:port、私网/回环地址）；
+  port 默认 443，范围 1–65535。参数错误 400；网络、证书、协议不合格为 200 且 `ok=false`，
+  附 `hint` 告知检查网络/证书或更换目标；不返回原始网络错误。latency_ms 为成功 TLS 握手耗时，
+  不含 DNS 时间，失败为 0。
+- 默认探测验证系统信任链、证书主机名和有效期，检查 TLS/ALPN；DNS 答案含内部地址则拒绝，
+  连接固定到已验证 IP 并保留原主机名 SNI，防止再次解析绕过限制；每次最多 3 秒。
+  HTTP handler 可注入整个 Probe，探测器还可注入 DNS、TLS 交换和时钟，单测不访问网络。
+  TLS 行为依据 [Go crypto/tls 文档](https://pkg.go.dev/crypto/tls#Dialer)。
 
 ## 规则
 

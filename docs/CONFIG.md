@@ -358,10 +358,12 @@ hysteria2://<urlencoded pwd>@<host>:<port>/?sni=<sni>&insecure=1&pinSHA256=<hex>
 
 ## 5. Reality 伪装目标检测（`internal/reality`）
 
-- 内置候选：若干大型站点域名（放常量列表，可在设置中覆盖）。
+- 内置候选：若干大型站点域名，集中在 `internal/reality/probe.go` 的 `CandidateDomains` 常量；
+  T3.1 不新增设置覆盖入口（设置接口属于 T3.2）。域名只是候选，每次须重新验证可用性。
 - 对每个候选从**服务器本机**发起 TLS 握手，判定：支持 TLS 1.3、ALPN 协商到 `h2`、证书有效、握手耗时。
 - 推荐：满足条件者按耗时升序取前 3；引导流程默认选第 1 个。
-- API 也支持检测用户自填的目标。
+- API 也支持检测用户自填的目标。T3.1 的超时、公网地址限制、可注入 DNS/TLS 与失败返回见 API.md；
+  探测在写事务之前完成，mutation 不访问网络。自动选择没有合格结果时拒绝创建并给出重试建议。
 
 ## 6. 节点地址 `public_host`
 

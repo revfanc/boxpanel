@@ -95,7 +95,7 @@ func TestSingboxRoutesProtectionContractAndErrors(t *testing.T) {
 	if strings.Contains(logs.String(), "private-command-output") {
 		t.Fatal("raw error logged")
 	}
-	for _, path := range []string{"singbox/upgrade", "singbox/versions", "inbounds", "users"} {
+	for _, path := range []string{"singbox/upgrade", "singbox/versions", "users/1/links", "rules", "settings"} {
 		requireStatus(t, request(t, h, "POST", base+path, "", cookie, nil), 404)
 	}
 }

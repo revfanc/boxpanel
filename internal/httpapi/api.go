@@ -3,6 +3,7 @@ package httpapi
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,21 +12,29 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"runtime"
 	"strconv"
 	"time"
 
 	"github.com/revfanc/boxpanel/internal/auth"
+	"github.com/revfanc/boxpanel/internal/host"
+	"github.com/revfanc/boxpanel/internal/reality"
 	"github.com/revfanc/boxpanel/internal/sysinfo"
 )
 
 const CookieName = "boxpanel_session"
 
 type Options struct {
-	WebPath string
-	Dev     bool
-	Logger  *slog.Logger
-	System  System
-	Singbox Singbox
+	WebPath        string
+	Dev            bool
+	Logger         *slog.Logger
+	System         System
+	Singbox        Singbox
+	DB             *sql.DB
+	Applier        Applier
+	RealityProbe   reality.Probe
+	ListeningPorts func(context.Context) (map[sysinfo.Socket]bool, error)
+	PanelPort      int // effective listener port, including CLI overrides
 }
 
 type api struct {
@@ -37,6 +46,17 @@ type api struct {
 type adminKey struct{}
 
 func New(service *auth.Service, opts Options) http.Handler {
+	if opts.RealityProbe == nil {
+		opts.RealityProbe = reality.NewProbe(reality.ProbeOptions{})
+	}
+	if opts.ListeningPorts == nil {
+		opts.ListeningPorts = func(ctx context.Context) (map[sysinfo.Socket]bool, error) {
+			if opts.Dev || runtime.GOOS != "linux" {
+				return map[sysinfo.Socket]bool{}, nil
+			}
+			return sysinfo.ListeningPorts(ctx, host.Native{})
+		}
+	}
 	if opts.System == nil {
 		opts.System = sysinfo.New(sysinfo.Options{Dev: opts.Dev})
 	}
@@ -49,17 +69,31 @@ func New(service *auth.Service, opts Options) http.Handler {
 	}
 	mux := http.NewServeMux()
 	routes := map[string]string{}
+	handlers := map[string]map[string]http.Handler{}
 	register := func(method, path string, handler http.HandlerFunc, protected bool) {
-		routes[path] = method
+		if handlers[path] == nil {
+			handlers[path] = map[string]http.Handler{}
+			mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+				if h := handlers[path][r.Method]; h != nil {
+					h.ServeHTTP(w, r)
+					return
+				}
+				w.Header().Set("Allow", routes[path])
+				writeError(w, 405, "method_not_allowed", "请求方法不支持", "请使用接口文档指定的请求方法。")
+			})
+		} else {
+			routes[path] += ", "
+		}
+		routes[path] += method
 		var h http.Handler = handler
 		if protected {
 			h = a.authenticate(h)
 		}
-		mux.Handle(method+" "+path, h)
-		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Allow", method)
-			writeError(w, 405, "method_not_allowed", "请求方法不支持", "请使用接口文档指定的请求方法。")
-		})
+		handlers[path][method] = h
+		if method == "GET" {
+			routes[path] += ", HEAD"
+			handlers[path]["HEAD"] = h
+		}
 	}
 	register("POST", "/api/v1/auth/login", a.login, false)
 	register("POST", "/api/v1/auth/logout", a.logout, true)
@@ -73,6 +107,7 @@ func New(service *auth.Service, opts Options) http.Handler {
 	register("POST", "/api/v1/singbox/restart", a.singboxRestart, true)
 	register("GET", "/api/v1/singbox/logs", a.singboxLogs, true)
 	register("GET", "/api/v1/singbox/config", a.singboxConfig, true)
+	a.registerResources(register)
 	mux.HandleFunc("/", notFound)
 	return middleware(csrf(mux), opts.Logger, routes)
 }
