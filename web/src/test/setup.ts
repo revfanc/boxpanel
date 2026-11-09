@@ -3,6 +3,8 @@ import { cleanup } from '@testing-library/react'
 import { afterEach, beforeEach, vi } from 'vitest'
 
 beforeEach(() => {
+  // jsdom has no layout engine; Radix uses this only to size hidden form inputs.
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   localStorage.clear()
   document.documentElement.classList.remove('dark')
   window.matchMedia = vi.fn((query: string) => ({

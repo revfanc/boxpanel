@@ -40,6 +40,8 @@ T1.2 边界：
   同 IP 第 5 次失败返回 429 并锁定 15 分钟；锁定中正确凭证也无效。
 - 密码/用户名修改成功会撤销该管理员全部会话并清空当前 cookie，调用方须重新登录。
   原密码错误返回 `401 invalid_credentials`；重名返回 `409 username_exists`。
+  T4.2 前端仅将修改密码接口的 `401 invalid_credentials` 作为本地表单错误，保留有效会话；
+  中间件的 `401 unauthorized` 仍清理会话并跳转登录，不将两种 401 混为一谈。
 - cookie、会话有效期、开发模式与 CSRF 细节见 SPEC.md §8。
   登录也要求通过来源检查；curl 等没有 Origin / Sec-Fetch-Site 的客户端可正常调用。
 - JSON 请求上限 8 KiB，拒绝未知字段、多余 JSON 值、无效字段与错误 Content-Type，返回 400。

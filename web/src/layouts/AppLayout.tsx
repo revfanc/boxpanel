@@ -10,6 +10,7 @@ import { ErrorNotice } from '@/components/Feedback'
 import { api } from '@/lib/api'
 import { replaceSession, sessionQuery, settingsQuery, systemQuery } from '@/lib/query'
 import { cn } from '@/lib/utils'
+import { unsupported } from '@/lib/resources'
 import { zhCN } from '@/i18n/zh-CN'
 
 const navigation = [
@@ -41,11 +42,12 @@ function KernelStatus() {
   const status = useQuery(systemQuery)
   const current = status.data
   const running = !status.isError && current?.supported && current.singbox.running
-  const text = status.isError ? zhCN.status.unavailable : status.isPending ? zhCN.status.loading : !current?.supported ? zhCN.status.unsupported : running ? zhCN.status.running : current.singbox.installed ? zhCN.status.stopped : zhCN.status.missing
+  const unavailable = unsupported(status.error)
+  const text = unavailable ? zhCN.status.unsupported : status.isError ? zhCN.status.unavailable : status.isPending ? zhCN.status.loading : !current?.supported ? zhCN.status.unsupported : running ? zhCN.status.running : current.singbox.installed ? zhCN.status.stopped : zhCN.status.missing
   return <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground" role="status">
     <span aria-hidden="true" className={cn('size-2 shrink-0 rounded-full', running ? 'bg-emerald-500' : status.isError ? 'bg-amber-500' : 'bg-muted-foreground/45')} />
     <span className="truncate">{zhCN.status.label} · {text}</span>
-    {status.isError && <Button variant="ghost" size="sm" className="h-6 shrink-0 px-1 text-xs" onClick={() => { void status.refetch() }} disabled={status.isFetching} title={zhCN.status.errorHint}>{zhCN.common.retry}</Button>}
+    {status.isError && !unavailable && <Button variant="ghost" size="sm" className="h-6 shrink-0 px-1 text-xs" onClick={() => { void status.refetch() }} disabled={status.isFetching} title={zhCN.status.errorHint}>{zhCN.common.retry}</Button>}
   </div>
 }
 

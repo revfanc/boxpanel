@@ -35,6 +35,11 @@ export default defineConfig([
     },
   },
   {
+    // Preserve the CLI-generated Badge variant export.
+    files: ['src/components/ui/badge.tsx'],
+    rules: { 'react-refresh/only-export-components': ['error', { allowExportNames: ['badgeVariants'] }] },
+  },
+  {
     // Preserve CLI-generated shadcn files; the hook is an intentional export.
     files: ['src/components/ui/sidebar.tsx'],
     rules: {

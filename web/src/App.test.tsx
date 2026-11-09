@@ -37,6 +37,9 @@ beforeEach(() => {
       case '/setup/status': return setupResponse()
       case '/settings': return settingsResponse()
       case '/system/status': return Response.json(status)
+      case '/users': case '/inbounds': return Response.json([])
+      case '/users/3': return Response.json({ id: 3, name: 'alice', uuid: 'aaaa****bbbb', enabled: true, traffic_limit: 0, traffic_up: 0, traffic_down: 0, expire_at: 0, remark: '', created_at: 1, status: 'active' })
+      case '/users/3/links': return failure(409, 'subscription_unavailable')
       default: throw new Error(`Unexpected request: ${url}`)
     }
   }))

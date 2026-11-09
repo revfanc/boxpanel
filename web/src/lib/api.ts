@@ -76,10 +76,6 @@ export async function api<T>(path: `/${string}`, options: RequestOptions = {}): 
     if (options.signal?.aborted || error instanceof DOMException && error.name === 'AbortError') throw error
     throw new APIError(0, { code: 'network_error', message: zhCN.errors.network, hint: zhCN.errors.networkHint })
   }
-  if (response.status === 401 && path !== '/auth/login' && generation === sessionGeneration) {
-    advanceSession()
-    unauthorizedListeners.forEach((listener) => listener())
-  }
   if (response.status === 204 && response.ok) return undefined as T
   let value: unknown
   try {
@@ -87,6 +83,12 @@ export async function api<T>(path: `/${string}`, options: RequestOptions = {}): 
     value = await response.json()
   } catch {
     if (response.ok) throw invalidResponse()
+  }
+  // A wrong current password is a form error; the session is still valid.
+  const wrongPassword = path === '/auth/password' && errorBody(value)?.code === 'invalid_credentials'
+  if (response.status === 401 && path !== '/auth/login' && !wrongPassword && generation === sessionGeneration) {
+    advanceSession()
+    unauthorizedListeners.forEach((listener) => listener())
   }
   if (!response.ok) {
     const retryHeader = response.headers.get('Retry-After')
