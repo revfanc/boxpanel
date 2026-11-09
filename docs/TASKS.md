@@ -161,6 +161,20 @@ T3.3 当前核对结果：
 ### T4.1 基础设施
 - api 封装、类型、Query、i18n、主题、AppLayout（含移动端抽屉）、路由守卫、登录页、404。
 
+T4.1 验收与边界：
+- [x] API fetch 使用随机 basename、同源 cookie、统一错误/下一步提示、空 204、请求取消及 401 会话失效处理。
+- [x] TypeScript 类型对齐真实 handler；TanStack Query 按资源缓存，登录/退出/会话失效清理业务数据。
+- [x] 登录使用 react-hook-form + zod，密码按字节校验；loading、失败重试、429 提示、安全 next 回跳。
+- [x] history 路由守卫、受保护 404、错误重试；引导接口缺口按 FRONTEND.md 的 T4.1 约定最小兼容。
+- [x] 中文文案集中；浅色/深色/跟随系统及持久化、跨标签同步。
+- [x] 桌面 Sidebar + 顶栏；移动 Sheet 抽屉、中文无障碍标签、Escape/焦点恢复/导航后关闭。
+- [x] shadcn 由 CLI 生成，未手改生成文件；新增依赖理由见 FRONTEND.md，pnpm 冷静期策略保持原值，无豁免。
+- [x] 前端 typecheck/lint/vitest 通过；`make lint`、`make build` 通过。
+- [ ] `make test` 全部通过：当前 macOS 沙箱的既有 T3.3 TestLoopback 被内核 DNS 通知注册 `status 9` 阻断；其余 Go 包通过，需沙箱外复跑，不修改/跳过该测试。
+- [ ] 生产构建浏览器实测 375px 无横向滚动及随机路径深链刷新：jsdom 不提供布局测量，留待审查者用嵌入的生产构建复核。
+
+未实现 T4.2–T4.5 业务 UI 或 T5.1 引导/后端 API；未执行 git commit/push/分支切换。
+
 ### T4.2 概览 / 日志 / 设置
 - 概览卡片（5 秒刷新）、日志页、设置页（改端口/路径后整页跳转到新地址）。
 

@@ -1,35 +1,16 @@
-import { Link, useParams } from 'react-router'
+import { Construction } from 'lucide-react'
+import { Card, CardContent } from '@/components/ui/card'
 import { zhCN } from '@/i18n/zh-CN'
 
-export function Home() {
-  return (
-    <section className="space-y-3">
-      <h2 className="text-lg font-semibold">{zhCN.pages.home}</h2>
-      <p className="text-sm text-muted-foreground">{zhCN.app.placeholder}</p>
-    </section>
-  )
-}
-
-export function Users() {
-  return (
-    <section className="space-y-3">
-      <h2 className="text-lg font-semibold">{zhCN.pages.users}</h2>
-      <p className="text-sm text-muted-foreground">{zhCN.app.placeholder}</p>
-      <Link className="text-sm underline underline-offset-4" to="/users/3">
-        {zhCN.pages.exampleUser}
-      </Link>
-    </section>
-  )
-}
-
-export function UserDetail() {
-  const { id } = useParams()
-
-  return (
-    <section className="space-y-3">
-      <h2 className="text-lg font-semibold">{zhCN.pages.userDetail}</h2>
-      <p className="text-sm">{zhCN.pages.userID}: <span>{id}</span></p>
-      <p className="text-sm text-muted-foreground">{zhCN.app.placeholder}</p>
-    </section>
-  )
+export function PlaceholderPage({ title, setup = false }: { title: string; setup?: boolean }) {
+  return <section className="space-y-6">
+    <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+    <Card className="border-dashed bg-muted/20 shadow-none">
+      <CardContent className="flex min-h-64 flex-col items-center justify-center px-5 py-10 text-center sm:min-h-80">
+        <div className="mb-5 rounded-xl border bg-background p-3"><Construction className="size-6 text-muted-foreground" aria-hidden="true" /></div>
+        <h2 className="font-medium">{zhCN.common.placeholderTitle}</h2>
+        <p className="mt-2 max-w-md text-sm leading-7 text-muted-foreground">{setup ? zhCN.common.setupHint : zhCN.common.placeholderHint}</p>
+      </CardContent>
+    </Card>
+  </section>
 }

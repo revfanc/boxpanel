@@ -1,23 +1,20 @@
-import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card'
-import { zhCN } from '@/i18n/zh-CN'
+import { Suspense, useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { Outlet, useLocation, useNavigate } from 'react-router'
+import { onUnauthorized } from '@/lib/api'
+import { loginPath } from '@/lib/navigation'
+import { replaceSession } from '@/lib/query'
+import { Loading } from '@/components/Feedback'
 
 export default function App() {
-  return (
-    <main className="flex min-h-svh items-center justify-center bg-background p-6 text-foreground">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <h1 className="text-2xl font-semibold">{zhCN.app.name}</h1>
-          <CardDescription>{zhCN.app.description}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <nav aria-label={zhCN.app.navigation} className="flex gap-4 text-sm">
-            <Link className="underline underline-offset-4" to="/">{zhCN.pages.home}</Link>
-            <Link className="underline underline-offset-4" to="/users">{zhCN.pages.users}</Link>
-          </nav>
-          <Outlet />
-        </CardContent>
-      </Card>
-    </main>
-  )
+  const client = useQueryClient()
+  const navigate = useNavigate()
+  const location = useLocation()
+  useEffect(() => onUnauthorized(() => {
+    replaceSession(client, null)
+    if (location.pathname !== '/login') {
+      void navigate(loginPath(`${location.pathname}${location.search}${location.hash}`), { replace: true })
+    }
+  }), [client, navigate, location])
+  return <Suspense fallback={<Loading />}><Outlet /></Suspense>
 }
-import { Link, Outlet } from 'react-router'

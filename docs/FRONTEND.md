@@ -110,6 +110,53 @@ createBrowserRouter(routes, { basename: BASE || "/" });
 - 表单：react-hook-form + zod，schema 与 API 字段一一对应，放 `web/src/schemas/`。
 - 类型：`web/src/types/api.ts` 手写与 `docs/API.md` 一致的类型。
 
+### T4.1 基础设施边界与实现约定
+
+- 仅登录页、公共布局、404 和数据层可用。路由表中的业务页面均为明确占位，不提供概览统计、
+  日志、设置表单、节点/用户编辑、订阅中心或引导步骤；这些依次属于 T4.2–T5.1。
+  顶栏只读取 `/settings` 的面板名与 `/system/status` 的内核状态，不加入概览的 5 秒轮询。
+  `supported=false` 明确显示当前环境不提供状态，错误显示未知与重试，不冒充内核停止。
+- `api.ts` 使用运行时 `API_BASE`、同源 cookie、no-store 与 JSON；支持空 204、AbortSignal、
+  统一错误及 Retry-After 秒数。网络/非 JSON 错误提供下一步建议，不展示原始 HTML 或网络异常。
+  受保护请求 401 触发 Router 导航与业务缓存清理；登录接口 401 留在表单中，不丢失 next。
+  同一会话的并发 401 只处理一次，旧会话迟到的 401 不干扰新登录。
+- `/auth/me` 是会话唯一依据；加载时不渲染受保护内容，非 401 失败显示可重试错误。
+  登录成功、退出成功/会话失效时取消查询，清除资源查询及 mutation 缓存，再更新会话查询；
+  保留会话查询对象，避免当前页的 observer 留在被移除的 pending 查询上。
+  查询按资源命名，读取默认 30 秒 fresh、窗口聚焦时刷新，网络/5xx 最多重试一次；写操作不自动重试。
+- `next` 保存不含 basename 的站内路径、query、hash；登录后由 Router 加前缀。
+  拒绝外部 URL、双斜杠、反斜杠、控制字符、无效转义与登录页自身，非法 next 回到 `/`。
+  表单按真实后端校验用户名及密码 **1024 字节**上限，不把修改密码的最短长度用于登录；
+  不 trim 密码、不将登录密码放入 Query/mutation 缓存或持久化存储。
+- **引导契约缺口**：当前 `internal/httpapi` 尚未注册 `/setup/status`，API.md 也将其保留到 T5.1。
+  T4.1 仅对该 GET 的 `404 + error.code=not_found` 返回“接口不可用”状态并允许进入面板，
+  不伪造 `completed=true`、不写 DB；其他错误或非法响应阻止进入并允许重试。
+  接口一旦提供 `completed=false`，守卫强制 `/setup`，setup 路由自身不循环跳转。
+  当前 setup 仅占位；跳到实际步骤、跳过与持久化全部留给 T5.1。
+- 桌面使用 CLI 生成的 shadcn Sidebar，<768px 使用单独封装的 Sheet，以提供中文标题/说明/关闭按钮，
+  不修改生成组件。抽屉支持焦点约束、Escape、关闭后恢复焦点、导航/切换桌面后关闭。
+  内容区使用 min-width:0、可换行错误详情及受视口限制的抽屉，面板名称截断以适配 375px。
+- 主题默认为跟随系统，支持浅色/深色，保存在 `boxpanel-theme`；同步系统及跨标签页变化，
+  localStorage 不可用时仍可切换。挂载前应用主题，不存储账号密码或任何会话 token。
+  所有业务文案集中在 `zh-CN.ts`，保持订阅页面已有标记 JSON 不变。
+
+依赖理由：新增 `@tanstack/react-query`（请求缓存/状态）、`react-hook-form`、`zod`、
+`@hookform/resolvers`（登录表单及校验）；开发依赖 `@testing-library/react`、
+`@testing-library/user-event`、`@testing-library/jest-dom`、`jsdom`（无服务器的 DOM/交互测试）。
+使用项目已有 shadcn 4.23.0 CLI 添加 sidebar/input/label/dropdown-menu/alert 及其所需组件，
+没有手改生成文件。ESLint 仅对生成 sidebar 的 useSidebar 导出、生成 use-mobile 的 effect 初始化
+做定点兼容，业务代码仍使用完整规则。
+安装沿用 pnpm 12.18.0 默认 minimumReleaseAge（1440 分钟），未添加任何豁免或降低既有策略；
+依赖版本及完整性由 lockfile 固定。参考 [pnpm 供应链保护](https://pnpm.io/supply-chain-security)、
+[shadcn Sidebar](https://ui.shadcn.com/docs/components/radix/sidebar)、
+[TanStack QueryClient](https://tanstack.com/query/latest/docs/framework/react/reference/QueryClient)、
+[react-hook-form](https://react-hook-form.com/docs/useform)。
+
+测试使用 Vitest + jsdom，覆盖随机 basename 深链/登录回跳、401 缓存清理、引导守卫与缺口、
+登录/退出 loading 和错误重试、404、抽屉键盘与导航、主题、API 错误与取消、密码字节边界。
+jsdom 不计算实际布局，因此 375px 无横向滚动和生产 history 刷新需审查者以嵌入构建浏览器复核；
+本任务不启动 Vite dev server。
+
 ## 6. 目录
 
 ```

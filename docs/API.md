@@ -57,6 +57,10 @@ T1.2 边界：
 | GET | `/system/status` | `{cpu, mem:{used,total}, disk, uptime, net:{rx_rate,tx_rate}, singbox:{running, version, uptime}}` |
 | GET | `/system/public-ip` | 重新探测 `{ipv4, ipv6}` |
 
+T4.1 对接核对：`/setup/status` 的 GET/PUT 当前尚未注册，仍属于 T5.1，返回统一
+`404 not_found`。前端仅对该 GET 的明确未实现响应兼容放行，不写入或假定引导已完成；
+真实 `completed=false` 仍强制 `/setup`，其他错误阻止进入并提示重试。详见 FRONTEND.md 的 T4.1 边界。
+
 `/system/check` 响应：
 
 ```json

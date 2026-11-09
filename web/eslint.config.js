@@ -34,4 +34,16 @@ export default defineConfig([
       ],
     },
   },
+  {
+    // Preserve CLI-generated shadcn files; the hook is an intentional export.
+    files: ['src/components/ui/sidebar.tsx'],
+    rules: {
+      'react-refresh/only-export-components': ['error', { allowExportNames: ['useSidebar'] }],
+    },
+  },
+  {
+    // The generated media hook initializes its client-only state after mounting.
+    files: ['src/hooks/use-mobile.ts'],
+    rules: { 'react-hooks/set-state-in-effect': 'off' },
+  },
 ])
