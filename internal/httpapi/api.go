@@ -36,6 +36,8 @@ type Options struct {
 	Applier        Applier
 	RealityProbe   reality.Probe
 	ListeningPorts func(context.Context) (map[sysinfo.Socket]bool, error)
+	LookupIP       func(context.Context, string) ([]netip.Addr, error)
+	DialContext    func(context.Context, string, string) (net.Conn, error)
 	PanelPort      int // effective listener port, including CLI overrides
 	Subscriptions  *subscription.Store
 	// PreparePanel reserves the next listener before persistence. The returned
@@ -69,6 +71,14 @@ func New(service *auth.Service, opts Options) http.Handler {
 	}
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
+	}
+	if opts.LookupIP == nil {
+		opts.LookupIP = func(ctx context.Context, name string) ([]netip.Addr, error) {
+			return net.DefaultResolver.LookupNetIP(ctx, "ip", name)
+		}
+	}
+	if opts.DialContext == nil {
+		opts.DialContext = (&net.Dialer{}).DialContext
 	}
 	a := &api{auth: service, opts: opts, cookiePath: "/"}
 	if opts.WebPath != "" {
@@ -114,6 +124,9 @@ func New(service *auth.Service, opts Options) http.Handler {
 	register("POST", "/api/v1/singbox/restart", a.singboxRestart, true)
 	register("GET", "/api/v1/singbox/logs", a.singboxLogs, true)
 	register("GET", "/api/v1/singbox/config", a.singboxConfig, true)
+	register("GET", "/api/v1/setup/status", a.setupGet, true)
+	register("PUT", "/api/v1/setup/status", a.setupPut, true)
+	register("POST", "/api/v1/system/port-probe", a.portProbe, true)
 	a.registerResources(register)
 	a.registerSubscriptions(register)
 	mux.HandleFunc("/", notFound)

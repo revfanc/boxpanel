@@ -101,7 +101,7 @@ CREATE TABLE settings (
   value TEXT NOT NULL                  -- JSON
 );
 -- 关键 key：web_port, web_path, sub_path, public_host, panel_tls_mode,
---          setup_completed, setup_step, rules(见 CONFIG.md), singbox_version
+--          setup_completed, setup_step, setup_preferences(T5.1), rules(见 CONFIG.md), singbox_version
 
 CREATE TABLE inbounds (
   id INTEGER PRIMARY KEY,
@@ -328,3 +328,11 @@ MVP 规则：**所有启用的用户加入所有启用的入站**。超额/过�
   同版本可重试补齐单元及 DB 记录，已有配置时的版本升级需要 T7.6 的 check/回滚流程。
 - 非 Linux/开发模式保持无系统副作用。下载和命令接口可注入，测试不依赖网络或 systemd。
   不新增 Go/前端依赖；配置生成、配置写入、check/apply、端口跳跃与防火墙同步留在 T2.2/T2.3。
+
+## 11. T5.1 引导元数据
+
+`setup_preferences` 是可选的 `{domain:string,hysteria2:bool}` 设置键，旧库不存在时按空域名、
+Hysteria2=true 读取，首次保存时写入，不修改已发布迁移。setup/status 原子保存进度和场景，
+域名需通过本机公网 A/AAAA 校验才写 public_host。这里仅更新客户端元数据；节点/用户创建仍
+复用既有 API/Manager.Apply。端口自测只连接系统探测的本机公网 IP，不信任请求或 public_host。
+详细 API、超时/注入及开发边界见 API.md 的 T5.1 约定；不实现 M6/M7。

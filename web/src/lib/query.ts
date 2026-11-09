@@ -1,5 +1,6 @@
 import { QueryClient, queryOptions } from '@tanstack/react-query'
 import { api, APIError, invalidResponse, advanceSession } from '@/lib/api'
+import { setupSteps } from '@/types/api'
 import type { Admin, PanelSettings, SetupStatus, SystemStatus } from '@/types/api'
 
 export const queryKeys = {
@@ -43,16 +44,11 @@ export const sessionQuery = queryOptions({
 
 export const setupQuery = queryOptions({
   queryKey: queryKeys.setup,
-  queryFn: async ({ signal }): Promise<SetupStatus | null> => {
-    try {
-      const value = await api<SetupStatus>('/setup/status', { signal })
-      if (!value || typeof value.completed !== 'boolean' || typeof value.step !== 'string') throw invalidResponse()
-      return value
-    } catch (error) {
-      // Only the explicitly unimplemented endpoint is compatible. Other failures block.
-      if (error instanceof APIError && error.status === 404 && error.code === 'not_found') return null
-      throw error
-    }
+  queryFn: async ({ signal }): Promise<SetupStatus> => {
+    const value = await api<SetupStatus>('/setup/status', { signal })
+    if (!value || typeof value.completed !== 'boolean' || !setupSteps.includes(value.step)
+      || typeof value.domain !== 'string' || typeof value.hysteria2 !== 'boolean') throw invalidResponse()
+    return value
   },
   retry: false,
 })

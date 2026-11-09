@@ -19,6 +19,7 @@ var (
 	PublicHost            = SettingKey[string]{"public_host"}
 	PanelTLSMode          = SettingKey[string]{"panel_tls_mode"}
 	SetupCompleted        = SettingKey[bool]{"setup_completed"}
+	SetupPreferences      = SettingKey[SetupChoices]{"setup_preferences"}
 	SetupStep             = SettingKey[string]{"setup_step"}
 	Rules                 = SettingKey[RulesSettings]{"rules"}
 	SingboxVersion        = SettingKey[string]{"singbox_version"}
@@ -93,4 +94,10 @@ func SetSetting[T any](ctx context.Context, conn SettingsDB, key SettingKey[T], 
 		return fmt.Errorf("write setting %q: %w", key.name, err)
 	}
 	return nil
+}
+
+// SetupChoices contains only onboarding preferences, never credentials.
+type SetupChoices struct {
+	Domain    string `json:"domain"`
+	Hysteria2 bool   `json:"hysteria2"`
 }

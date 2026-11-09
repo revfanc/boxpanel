@@ -19,6 +19,6 @@ function SetupGuard() {
   const location = useLocation()
   if (setup.isPending) return <Loading label={zhCN.common.checkingSetup} />
   if (setup.isError) return <div className="mx-auto w-full max-w-lg p-4"><ErrorNotice error={setup.error} retry={() => { void setup.refetch() }} /></div>
-  if (setup.data?.completed === false && !/^\/setup(?:\/|$)/.test(location.pathname)) return <Navigate replace to="/setup" />
+  if (setup.data?.completed === false && !/^\/setup(?:\/(?:welcome|check|scenario|node|user|firewall|finish))?\/?$/.test(location.pathname)) return <Navigate replace to="/setup" />
   return <Outlet />
 }

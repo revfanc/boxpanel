@@ -28,14 +28,17 @@ export function UserUsage({ user }: { user: User }) {
     <p className="text-muted-foreground">{t.users.expire}: {expiry(user.expire_at)}</p>
   </div>
 }
-function UserForm({ user, close, setBusy }: { user?: User; close: () => void; setBusy: (busy: boolean) => void }) {
-  const form = useForm<UserFormValues>({ resolver: zodResolver(userSchema), defaultValues: userDefaults(user) })
+export function UserForm({ user, close, setBusy, onSaved, defaultName, submitLabel }: {
+  user?: User; close?: () => void; setBusy?: (busy: boolean) => void
+  onSaved?: (user: User) => void | Promise<void>; defaultName?: string; submitLabel?: string
+}) {
+  const form = useForm<UserFormValues>({ resolver: zodResolver(userSchema), defaultValues: { ...userDefaults(user), name: user?.name ?? defaultName ?? '' } })
   const operation = useOperation()
   const client = useQueryClient()
   const errors = form.formState.errors
   return <form className="min-w-0 space-y-4" noValidate onSubmit={form.handleSubmit((values) => {
-    setBusy(true)
-    void operation.run(() => api<User>(user ? `/users/${user.id}` : '/users', { method: user ? 'PUT' : 'POST', body: userBody(values) }), async () => { await refreshResources(client); close() }).finally(() => setBusy(false))
+    setBusy?.(true)
+    void operation.run(() => api<User>(user ? `/users/${user.id}` : '/users', { method: user ? 'PUT' : 'POST', body: userBody(values) }), async (saved) => { await refreshResources(client); if (onSaved) await onSaved(saved); else close?.() }).finally(() => setBusy?.(false))
   })}>
     <fieldset disabled={operation.pending} className="min-w-0 space-y-4">
       <Field label={t.users.name} {...form.register('name')} error={errors.name?.message} />
@@ -44,7 +47,7 @@ function UserForm({ user, close, setBusy }: { user?: User; close: () => void; se
       <Field label={t.users.expire} type="datetime-local" step="1" hint={t.users.expireHint} {...form.register('expiry')} error={errors.expiry?.message} />
     </fieldset>
     {operation.error != null && <ErrorNotice error={operation.error} />}
-    <div className="flex flex-wrap justify-end gap-2"><Button type="button" variant="outline" disabled={operation.pending} onClick={close}>{t.common.cancel}</Button><Submit pending={operation.pending} label={user ? t.common.save : t.common.create} /></div>
+    <div className="flex flex-wrap justify-end gap-2">{close && <Button type="button" variant="outline" disabled={operation.pending} onClick={close}>{t.common.cancel}</Button>}<Submit pending={operation.pending} label={submitLabel ?? (user ? t.common.save : t.common.create)} /></div>
   </form>
 }
 export function UserEditor({ user }: { user?: User }) {

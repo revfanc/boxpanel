@@ -52,16 +52,60 @@ T1.2 边界：
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/setup/status` | `{completed: bool, step: string}` |
-| PUT | `/setup/status` | `{completed?, step?}` 保存进度 |
+| GET | `/setup/status` | `{completed, step, domain, hysteria2}`，见 T5.1 约定 |
+| PUT | `/setup/status` | `{completed?, step?, domain?, hysteria2?}` 保存进度及场景选择 |
 | GET | `/system/check` | 环境自检，见下 |
 | POST | `/system/bbr` | 开启 BBR（写 sysctl.d 并立即生效） |
 | GET | `/system/status` | `{cpu, mem:{used,total}, disk, uptime, net:{rx_rate,tx_rate}, singbox:{running, version, uptime}}` |
 | GET | `/system/public-ip` | 重新探测 `{ipv4, ipv6}` |
+| POST | `/system/port-probe` | `{port}` → 本机公网 TCP 自连结果，见 T5.1 约定 |
 
-T4.1 对接核对：`/setup/status` 的 GET/PUT 当前尚未注册，仍属于 T5.1，返回统一
-`404 not_found`。前端仅对该 GET 的明确未实现响应兼容放行，不写入或假定引导已完成；
-真实 `completed=false` 仍强制 `/setup`，其他错误阻止进入并提示重试。详见 FRONTEND.md 的 T4.1 边界。
+### T5.1 引导状态、域名校验与端口自测
+
+上述 setup GET/PUT 与 port-probe 已注册，全部要求登录、no-store；PUT/POST 遵守现有
+CSRF、8 KiB 严格 JSON 和统一错误契约。GET 支持 HEAD。前端不再对 setup 404 兼容放行。
+
+`GET /setup/status` / `PUT /setup/status` 成功均返回 200，例如：
+
+```json
+{"completed":false,"step":"scenario","domain":"","hysteria2":true}
+```
+
+- step 仅接受 welcome/check/scenario/node/user/firewall/finish；省略字段保持，空对象为无变化。
+  completed 可独立设置（跳过引导），不要求先创建节点/用户；允许返回任一步和重新开启引导。
+  非法步骤/类型、null、重复/未知字段、多余 JSON 为 400。GET 读取一个一致事务快照。
+- 原有 setup_completed/setup_step 继续使用；新增 settings.setup_preferences 保存
+  `{domain,hysteria2}`，只在第一次保存时写入。旧库缺此键视为 domain=""、hysteria2=true，
+  无需修改已发布迁移。该键不存凭证、订阅链接或表单草稿。
+- domain 非空时只接受 ASCII DNS 名（不接受 IP/URL/端口），trim/转为小写。
+  **每次显式提交非空 domain 都重新校验**：先探测本机公网 IPv4/IPv6，再进行可注入的 DNS
+  A/AAAA 查询，共享 3 秒窗口（不支持的平台不会额外查询 DNS）。至少一个答案，且每个答案都必须是本机探测出的公网 IP；
+  IPv4-only 或 IPv6-only 均可。其他地址、私网、fake-ip、无答案/查询失败/超时返回
+  `409 domain_not_pointing_here`，提示修正记录、关闭 CDN、等待 DNS 生效或选择无域名。
+  公网探测失败为统一系统错误；开发/非 Linux 默认 `409 system_unsupported`，不伪造匹配。
+- 验证成功后在同一 SQLite 事务内写 domain、public_host 及其余进度字段，任一步失败全部回滚。
+  从已保存域名改回空字符串时重新探测并恢复公网 IP（IPv4 优先），探测失败不修改设置。
+  初次无域名保留初始化的 public_host；--dev 的初始回环地址可用于界面演示。
+  域名仅影响订阅地址，不生成 ACME 证书，也不自动更新面板证书 SAN。
+- setup/public_host 是引导及客户端元数据，沿用 `/settings` 的普通事务约定，不重启内核、
+  不写配置、不返回 Apply 生效标记。节点和用户仍调用原 CRUD → Manager.Apply，保持
+  check/生效/回滚及 dev-db-only 响应；引导没有第二条写配置路径。
+
+`POST /system/port-probe {"port":443}` 成功示例：
+
+```json
+{"port":443,"results":[{"ip":"203.0.113.1","ok":true},{"ip":"2001:db8::1","ok":false}],"hint":"仅检测本机 TCP 自连，不代表外网或云安全组已放行；失败请核对监听、本机防火墙、安全组及 NAT 回环支持，再从外部客户端验证。UDP 无法自动检测。"}
+```
+
+- 仅接受必填整数 port，范围 1–65535；host/target/url/proto 等未知字段一律 400。
+  **仅从可信系统公网 IP 探测结果取目标**，再次验证公网地址；不读取可编辑的 public_host、
+  请求 Host/代理头或请求提供的 DNS 目标。直接连接已验证的 IP 字面量，不再次解析 DNS，防 SSRF。
+- 公网探测和所有 TCP 连接共享 **3 秒总超时**；IPv4/IPv6 并行，连接结束立即关闭。
+  每个地址单独返回 ok；拒绝/网络超时返回 200 + ok=false，不暴露原始网络错误。
+  无公网地址/非法探测地址为 500；开发/非 Linux 为 409 system_unsupported，不连接回环冒充成功。
+- 自连成功不能证明外网或安全组可达；NAT 不支持回环时也可能失败。UDP 不探测、不推断成功。
+  此接口不写 DB、不修改防火墙、不调用 Apply。依赖可注入：Options.System.PublicIP、
+  Options.LookupIP、Options.DialContext；新增单测使用 fake/net.Pipe，绝不访问真实网络。
 
 `/system/check` 响应：
 

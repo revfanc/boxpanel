@@ -10,11 +10,11 @@ import { advanceSession } from '@/lib/api'
 import { zhCN } from '@/i18n/zh-CN'
 
 const failure = (status: number, code: string, extra = {}) => Response.json({ error: { code, message: 'Request failed', hint: 'Try again', ...extra } }, { status })
-const missingSetup = () => failure(404, 'not_found')
+const completedSetup = () => Response.json({ completed: true, step: 'finish', domain: '', hysteria2: true })
 const admin = { username: 'admin' }
 const status = { supported: false, cpu: 0, mem: { used: 0, total: 0 }, disk: { used: 0, total: 0 }, uptime: 0, net: { rx_rate: 0, tx_rate: 0 }, singbox: { installed: false, running: false, version: '', uptime: 0 } }
 let signedIn = false
-let setupResponse: () => Response = missingSetup
+let setupResponse: () => Response = completedSetup
 let loginResponse: () => Promise<Response>
 let logoutResponse: () => Promise<Response>
 let settingsResponse: () => Response
@@ -24,7 +24,7 @@ const disposers: (() => void)[] = []
 beforeEach(() => {
   advanceSession()
   signedIn = false
-  setupResponse = missingSetup
+  setupResponse = completedSetup
   settingsResponse = () => Response.json({ panel_name: 'boxpanel' })
   sessionResponse = () => signedIn ? Response.json(admin) : failure(401, 'unauthorized')
   loginResponse = async () => { signedIn = true; return Response.json(admin) }
@@ -85,19 +85,19 @@ describe('session and history routes', () => {
   })
 
   it('redirects incomplete setup, including after login, without looping', async () => {
-    setupResponse = () => Response.json({ completed: false, step: 'node' })
+    setupResponse = () => Response.json({ completed: false, step: 'scenario', domain: '', hysteria2: true })
     const { router, user } = mount('/login?next=%2Fusers')
     await enterCredentials(user)
     await user.click(screen.getByRole('button', { name: zhCN.login.submit }))
     await screen.findByRole('heading', { name: zhCN.pages.setup })
-    expect(router.state.location.pathname).toBe('/setup')
-    await act(() => router.navigate('/setup/node'))
-    expect(router.state.location.pathname).toBe('/setup/node')
+    await waitFor(() => expect(router.state.location.pathname).toBe('/setup/scenario'))
+    await act(() => router.navigate('/setup'))
+    await waitFor(() => expect(router.state.location.pathname).toBe('/setup/scenario'))
   })
 
-  it('permits completed setup and the explicit not-found compatibility response', async () => {
+  it('permits completed setup', async () => {
     signedIn = true
-    setupResponse = () => Response.json({ completed: true, step: 'finish' })
+    setupResponse = () => Response.json({ completed: true, step: 'finish', domain: '', hysteria2: true })
     mount('/users')
     await screen.findByRole('heading', { name: zhCN.pages.users })
     expect(await screen.findByText(`${zhCN.status.label} · ${zhCN.status.unsupported}`)).toBeVisible()
@@ -109,7 +109,7 @@ describe('session and history routes', () => {
     const { user } = mount('/users')
     await screen.findByRole('alert')
     expect(screen.queryByRole('heading', { name: zhCN.pages.users })).not.toBeInTheDocument()
-    setupResponse = missingSetup
+    setupResponse = completedSetup
     await user.click(screen.getByRole('button', { name: zhCN.common.retry }))
     await screen.findByRole('heading', { name: zhCN.pages.users })
   })

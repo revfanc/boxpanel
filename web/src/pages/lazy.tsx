@@ -11,3 +11,5 @@ export const EditInboundPage = lazy(() => import('@/pages/inbounds/editor').then
 export const UsersPage = lazy(() => import('@/pages/users').then((page) => ({ default: page.UsersPage })))
 export const UserDetailPage = lazy(() => import('@/pages/users/detail').then((page) => ({ default: page.UserDetailPage })))
 export const RulesPage = lazy(() => import('@/pages/rules').then((page) => ({ default: page.RulesPage })))
+
+export const SetupPage = lazy(() => import('@/pages/setup').then((page) => ({ default: page.SetupPage })))

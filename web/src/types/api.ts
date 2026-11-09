@@ -10,8 +10,10 @@ export interface Admin { username: string }
 export interface LoginInput { username: string; password: string }
 export interface PasswordInput { old_password: string; new_password: string }
 
-// The setup endpoint is reserved for T5.1; null in the query means unavailable.
-export interface SetupStatus { completed: boolean; step: string }
+export const setupSteps = ['welcome', 'check', 'scenario', 'node', 'user', 'firewall', 'finish'] as const
+export type SetupStep = typeof setupSteps[number]
+export interface SetupStatus { completed: boolean; step: SetupStep; domain: string; hysteria2: boolean }
+export interface PortProbe { port: number; results: { ip: string; ok: boolean }[]; hint: string }
 
 export interface SingboxStatus {
   installed: boolean

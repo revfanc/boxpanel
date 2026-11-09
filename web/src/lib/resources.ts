@@ -1,7 +1,7 @@
 import { queryOptions, type QueryClient } from '@tanstack/react-query'
 import { api, APIError } from '@/lib/api'
 import { queryKeys } from '@/lib/query'
-import type { Inbound, User, RulesSettings } from '@/types/api'
+import type { Inbound, User, RulesSettings, SystemCheck } from '@/types/api'
 
 export const inboundsQuery = queryOptions({ queryKey: queryKeys.inbounds, queryFn: ({ signal }) => api<Inbound[]>('/inbounds', { signal }) })
 export const usersQuery = queryOptions({ queryKey: queryKeys.users, queryFn: ({ signal }) => api<User[]>('/users', { signal }) })
@@ -18,3 +18,5 @@ export async function refreshResources(client: QueryClient) {
   await client.cancelQueries(filter)
   await client.invalidateQueries(filter)
 }
+
+export const checkQuery = queryOptions({ queryKey: ['system', 'check'], queryFn: ({ signal }) => api<SystemCheck>('/system/check', { signal }), retry: false })

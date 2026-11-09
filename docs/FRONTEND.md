@@ -94,7 +94,7 @@ createBrowserRouter(routes, { basename: BASE || "/" });
 2. **check**：调用 `/system/check`，渲染检查清单（✅/⚠️/❌）。BBR 未开时给「一键开启」按钮。存在 error 级项时禁止下一步并给出修复说明。
 3. **scenario**：两张大卡片——
    - 「我没有域名（推荐）」→ VLESS + Reality
-   - 「我有域名」→ 输入域名，校验 A 记录指向本机后，MVP 仍用 Reality，并把域名设为 `public_host`（ACME 证书后期再接）
+   - 「我有域名」→ 输入域名，校验全部 A/AAAA 记录指向本机公网 IP 后，MVP 仍用 Reality，并把域名设为 `public_host`（ACME 证书后期再接）
    - 额外复选：「同时创建 Hysteria2（网络不稳定时更快，需 UDP）」默认勾选
 4. **node**：调用 `/inbounds/suggest` 预填端口、伪装目标（显示检测出的推荐列表与延迟），用户可直接下一步；点「创建」时调用 `POST /inbounds`。
 5. **user**：输入使用者名字（默认 `me`），可选流量上限/到期时间（默认不限）。
@@ -102,6 +102,45 @@ createBrowserRouter(routes, { basename: BASE || "/" });
 7. **finish**：大二维码（自动格式订阅）+ 复制按钮 + 按平台的 Tabs（Windows / macOS / Android / iOS / Linux），每个 Tab：推荐客户端名、下载链接、「一键导入」按钮（若支持）、三步导入说明。最后标记 `completed=true`，按钮：进入面板。
 
 客户端推荐清单放 `web/src/data/clients.ts`（名称、平台、下载地址、支持的订阅格式、导入深链模板），方便后续维护。
+
+### T5.1 实现与边界
+
+- 引导使用独立 SetupLayout、history 路由及原有 basename/认证守卫。未完成时强制进入后端记录
+  的步骤；`/setup`、旧书签、非法步骤均回到当前步骤。取消 T4.1 的 404 放行兼容。
+  每次下一步/上一步先 PUT 持久化，成功才导航；失败保留当前页并提供 hint/detail。
+  welcome 的上一步不可用；右上角跳过只设置 completed=true 后进入面板，保留步骤以便重进。
+  finish 点击“进入面板”时才标记完成，不因读取订阅失败阻止退出引导。
+- scenario 的域名和 Hysteria2 选择通过 setup/status 保存；有域名时提交与 DNS 校验/设置
+  public_host 在服务端完成，失败不推进。无域名默认 Reality，Hysteria2 默认勾选。
+  A/AAAA 校验及公网探测在开发环境不能伪造成功，请选择无域名演示或在 Linux 上校验。
+- node 复用 T4 的 SuggestedForm/InboundForm、schema、推荐与手动检测逻辑，逐个创建 Reality、
+  可选 Hysteria2；推荐候选和延迟自动展示。Fake-IP 导致检测失败时仍显示可编辑表单，允许手填。
+  user 复用 T4 UserForm、校验及流量/时间换算，默认 me、0 上限、永不过期。
+  在实际资源写入中屏蔽返回/跳过；进度写入中屏蔽全部步骤操作。
+- 节点步骤读取已有启用节点，只补缺少的协议；用户步骤复用 ID 最小的 active 用户。
+  返回/刷新、第一节点成功第二节点失败、资源成功但进度保存失败都不会再次创建已存在资源。
+  已保存节点显示端口摘要；取消 Hysteria2 勾选不会删除已有节点，需进入节点页管理。
+  未提交的字段只在组件内，不跨刷新持久化；本阶段不引入草稿同步或多标签写入协调。
+- firewall 展示所有启用节点、面板 TCP 端口及 UDP 跳跃范围；厂商折叠区提供控制台操作步骤和
+  明确的图文链接占位，不编造教程 URL。生产说明自动放行及云安全组职责；dev 则明确没有改系统。
+  按唯一 TCP 端口调用 port-probe，只报告自连结果与限制，不宣称安全组已验证；UDP 需外部客户端验证。
+- finish 使用专用 links 接口，本地生成大二维码和 CopyField，五个平台使用可键盘操作的 Tabs。
+  提供项目官方入口、来源说明、对应格式链接、一键导入及三步说明；沿用 sing-box 1.14+ 提示。
+  订阅链接仅保留内存，离开页面回收查询；错误、空节点或无可用用户不显示可导入的二维码/按钮。
+  dev 的 Hysteria2 缺少证书时显示 409 和下一步：Linux 生效后获取，或进入面板停用 Hysteria2
+  再导出 Reality；不造证书、不降级验证。Reality-only 的开发订阅可导出，但明确节点未实际运行。
+- `clients.ts` 来源核对（2026-11-09）：Windows/macOS/Linux 为
+  [Clash Verge Rev 官方 Releases](https://github.com/clash-verge-rev/clash-verge-rev/releases)，
+  [导入格式](https://www.clashverge.dev/guide/url_schemes.html)；Android 的
+  [官方客户端页](https://sing-box.sagernet.org/clients/android/) 指向
+  [SagerNet/sing-box Releases](https://github.com/SagerNet/sing-box/releases)；iOS 的
+  [官方 Apple 页](https://sing-box.sagernet.org/clients/apple/) 指向
+  [sing-box MT App Store](https://apps.apple.com/us/app/sing-box-mt/id6785326793)。
+  sing-box 深链来自 [官方通用规范](https://sing-box.sagernet.org/clients/general/)。
+  下载地址只用官方 Releases/商店，不固定未经验证的资产文件名；来源和深链模板随数据一起维护。
+- 无新增依赖：复用已安装的 radix-ui Tabs、qrcode.react 和 T4 表单/组件；未修改 shadcn 生成文件，
+  未改 pnpm 冷静期、package.json 或锁文件。补充强制进入、跳过、刷新续接、每步返回、DNS 拒绝、
+  BBR/错误阻断、手动 Reality、双入站重试、dev 订阅降级提示、平台 Tabs 和端口检查组件测试。
 
 ## 5. 数据层
 
