@@ -73,6 +73,53 @@ T1.2 边界：
 
 `items` 是前端直接渲染的检查清单，`level`: `ok | warn | error`。
 
+### T1.3 已实现的系统接口与返回约定
+
+本任务仅实现 `/system/check`、`/system/status`、`/system/public-ip`、`/system/bbr`。
+四个接口均需登录，BBR 写操作沿用 CSRF 检查；GET 支持 HEAD，响应禁止缓存。
+`POST /system/bbr` 无请求参数，成功返回 `200 {"enabled":true,"available":true}`。
+不接入 `/setup/status`、端口公网连通性探测或任何 sing-box 管理接口。
+
+- `/system/check` 总诊断窗口最多 15 秒；单项失败仍返回 200，将失败写到 `items`，
+  不把原始命令输出暴露给客户端。每项均有 `id/level/title/hint`，只有可开启 BBR 时才有
+  `action="enable_bbr"`。OS/虚拟化无法识别为 warn；不支持的 CPU 架构、公网 IP 探测失败、
+  防火墙检测失败、端口无法检查为 error；推荐端口占用为 warn（可改用其他端口）。
+- `ports` 固定为 `443/tcp`、`8443/udp`，`free` 为 `true/false/null`；null 表示未知，
+  不把检测失败当成空闲。检测失败时 firewall 为 `{type:"unknown",active:false}`，
+  正常 type 为 `none|ufw|firewalld|nftables|iptables`，active 由当前状态判断。
+- 上方 sing-box 响应是最终目标示例。T1.3 不检查或操作现有 sing-box，check/status 的
+  `singbox` 暂统一返回 `{installed:false,running:false,version:"",uptime:0}`，等待 T2.1 接入。
+- `/system/public-ip` 按 CONFIG.md §6 分别探测两个地址族，缺失/冲突的地址族为空字符串；
+  至少一个地址族成功即 200，两个都失败返回 `500 internal_error`，提示检查网络后重试。
+  重新探测不会覆盖 DB 中的 `public_host`。
+- 非 Linux 或 `--dev`：check 只包含 `platform` warn 与空探测值（ports 的 free 为 null）；
+  status 为 `supported:false` 且指标为零，不能解读为真实的系统指标。
+  public-ip 和 bbr 返回 `409 system_unsupported`。Linux 内核不提供 BBR 时返回
+  `409 bbr_unavailable`；读取/写入/应用/校验失败返回 `500 internal_error`，附修复建议。
+
+`/system/status` 的具体形状（Linux 生产模式）：
+
+```json
+{
+  "supported": true,
+  "cpu": 12.5,
+  "mem": { "used": 1073741824, "total": 2147483648 },
+  "disk": { "used": 10737418240, "total": 42949672960 },
+  "uptime": 86400,
+  "net": { "rx_rate": 1024, "tx_rate": 2048 },
+  "singbox": { "installed": false, "running": false, "version": "", "uptime": 0 }
+}
+```
+
+- cpu 为两次成功采样间的总体忙碌百分比（0–100）；`/proc/stat` 不重复累计 guest，
+  idle 包含 iowait。mem.used 为 MemTotal − MemAvailable（字节）。
+- disk 为 DB 所在文件系统的 `{used,total}`（字节）；used 按总块数减空闲块数计算。
+  uptime 为系统启动后的整秒数，不是面板进程时长。
+- net 为除 lo 外接口的字节/秒，按每个同名接口的两次计数差及实际时间间隔计算；
+  首次采样的 cpu/net 返回 0，计数回退、接口新增、非递增时钟不产生负值或下溢尖峰。
+  采样串行化，不启动后台轮询；Linux 必需指标读取失败返回 500，不伪造成功状态。
+  计数定义参考 [Linux proc 文档](https://docs.kernel.org/filesystems/proc.html)。
+
 ## sing-box
 
 | 方法 | 路径 | 说明 |

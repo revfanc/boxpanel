@@ -53,6 +53,10 @@ INSTALL.md §3、SPEC.md §6/§8、API.md 认证部分、CONFIG.md §6。
 - `internal/firewall`：检测 ufw/firewalld/nftables/iptables，`Open(port, proto)`、`Close(...)`，dev 模式为 no-op。
 - **验收**：对 `/proc`、命令输出做可注入的抽象，单测覆盖解析逻辑。
 
+范围补充：平台限制、采样单位、BBR 恢复策略、四种防火墙的操作边界见 SPEC.md §9 和
+API.md 的 T1.3 约定；双栈 IP 探测见 CONFIG.md §6。不新增依赖，不修改前端。
+sing-box 状态保留未安装占位值；启动同步、端口跳跃、setup/port-probe API 仍留在后续任务。
+
 ## M2 sing-box 管理
 
 ### T2.1 二进制与 systemd

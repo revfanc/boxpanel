@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/revfanc/boxpanel/internal/auth"
 	"github.com/revfanc/boxpanel/internal/httpapi"
 	"github.com/revfanc/boxpanel/internal/spa"
+	"github.com/revfanc/boxpanel/internal/sysinfo"
 	"github.com/revfanc/boxpanel/web"
 )
 
@@ -140,7 +142,8 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	if err != nil {
 		return fmt.Errorf("prepare authentication: %w", err)
 	}
-	api := httpapi.New(service, httpapi.Options{WebPath: cfg.WebPath, Dev: opts.dev, Logger: logger})
+	system := sysinfo.New(sysinfo.Options{Dev: opts.dev, DiskPath: filepath.Dir(opts.paths.Database)})
+	api := httpapi.New(service, httpapi.Options{WebPath: cfg.WebPath, Dev: opts.dev, Logger: logger, System: system})
 	handler, err := spa.New(web.Assets, spa.Options{WebPath: cfg.WebPath, Version: version, API: api})
 	if err != nil {
 		return fmt.Errorf("prepare HTTP server: %w", err)

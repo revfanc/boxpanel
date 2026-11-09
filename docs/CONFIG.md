@@ -277,5 +277,9 @@ hysteria2://<urlencoded pwd>@<host>:<port>/?sni=<sni>&insecure=1&pinSHA256=<hex>
   无 IPv4 时采用 IPv6，要求所选地址族的有效响应有严格多数（仅一个成功响应也可用）。
   超时/全失败/意见冲突则提示重试或 `init --public-ip IP`，不写入业务初始数据。
   显式 IP 可用于离线初始化，单测仅使用注入的响应，不访问外网。
+- T1.3 将探测实现共享到 `internal/sysinfo`，保留 init 的上述行为；系统自检/重新探测接口
+  则对同样三个源分别用 IPv4、IPv6 连接并发请求（总计六次，共享 3 秒窗口，无重定向），
+  每个地址族独立取有效响应的严格多数。未探测到或意见冲突的地址族返回空字符串，
+  两者均为空才算整体失败；不要求 IPv4-only VPS 具有 IPv6。探测不会修改 `public_host`。
 - 用户可改为域名。所有订阅/URI 中的 server 都用它。
 - IPv6-only 机器：URI 中 IPv6 需加方括号。

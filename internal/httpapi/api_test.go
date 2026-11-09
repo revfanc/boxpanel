@@ -20,7 +20,7 @@ import (
 	"testing/fstest"
 )
 
-func testAPI(t *testing.T, dev bool) (http.Handler, *sql.DB, *bytes.Buffer) {
+func testAPI(t *testing.T, dev bool, systems ...System) (http.Handler, *sql.DB, *bytes.Buffer) {
 	t.Helper()
 	conn, err := db.Open(context.Background(), filepath.Join(t.TempDir(), "api.db"))
 	if err != nil {
@@ -43,7 +43,11 @@ func testAPI(t *testing.T, dev bool) (http.Handler, *sql.DB, *bytes.Buffer) {
 	if dev {
 		base = ""
 	}
-	api := New(service, Options{WebPath: base, Dev: dev, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	var system System
+	if len(systems) > 0 {
+		system = systems[0]
+	}
+	api := New(service, Options{WebPath: base, Dev: dev, Logger: slog.New(slog.NewTextHandler(&logs, nil)), System: system})
 	assets := fstest.MapFS{"index.html": {Data: []byte("<html><head><!--BOXPANEL_INJECT--></head></html>")}}
 	handler, err := spa.New(assets, spa.Options{WebPath: base, API: api})
 	if err != nil {

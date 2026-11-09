@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/revfanc/boxpanel/internal/auth"
+	"github.com/revfanc/boxpanel/internal/sysinfo"
 )
 
 const CookieName = "boxpanel_session"
@@ -23,6 +24,7 @@ type Options struct {
 	WebPath string
 	Dev     bool
 	Logger  *slog.Logger
+	System  System
 }
 
 type api struct {
@@ -34,6 +36,9 @@ type api struct {
 type adminKey struct{}
 
 func New(service *auth.Service, opts Options) http.Handler {
+	if opts.System == nil {
+		opts.System = sysinfo.New(sysinfo.Options{Dev: opts.Dev})
+	}
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
@@ -60,6 +65,10 @@ func New(service *auth.Service, opts Options) http.Handler {
 	register("GET", "/api/v1/auth/me", a.me, true)
 	register("PUT", "/api/v1/auth/password", a.password, true)
 	register("PUT", "/api/v1/auth/username", a.username, true)
+	register("GET", "/api/v1/system/check", a.systemCheck, true)
+	register("GET", "/api/v1/system/status", a.systemStatus, true)
+	register("GET", "/api/v1/system/public-ip", a.systemPublicIP, true)
+	register("POST", "/api/v1/system/bbr", a.systemBBR, true)
 	mux.HandleFunc("/", notFound)
 	return middleware(csrf(mux), opts.Logger, routes)
 }

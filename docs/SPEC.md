@@ -225,3 +225,49 @@ MVP 规则：**所有启用的用户加入所有启用的入站**。超额/过�
   不记录原始 URL、query、body、Cookie、密码、哈希或 panic 值。panic 丢弃未提交的响应及 cookie，
   返回统一 JSON 500。当前仅缓冲小型认证 JSON 响应，不提供流式 API。
 - T1.2 在可写路径、非特权端口运行无需 root；生产 root 要求针对后续 systemd/防火墙操作。
+
+## 9. T1.3 系统自检与防火墙边界
+
+本节补齐原规格未定义的采样、平台与防火墙行为；不实现 T2 的 sing-box 安装、systemd
+服务管理、启动时规则同步或端口跳跃，也不增加 setup API、引导 UI 或防火墙 HTTP 写接口。
+不新增依赖。
+
+- `internal/host.Files` 封装文件读取、原子写入和删除，`host.Runner` 封装命令查找与执行。
+  `/proc`、`/sys`、`/etc/os-release`、BBR 文件和全部系统命令均通过这些接口；磁盘统计、
+  时钟、HTTP IP 探测及防火墙状态也可注入。原生命令用参数数组，无 shell，固定 `LC_ALL=C`，
+  单条命令最多 5 秒，输出最多 1 MiB。单测只用假命令/假系统数据与临时普通文件。
+- Linux 生产模式读取发行版 ID/版本、Go 架构名；虚拟化优先读取 `systemd-detect-virt`，
+  缺失时从 cgroup / DMI 中识别常见类型，无法确定返回 `unknown`，不猜测为物理机。
+  `ss -H -lntu` 检查推荐的 `443/tcp`、`8443/udp`；任一地址上的占用均视为该端口被占用，
+  IPv4/IPv6 一并解析。此结果只是快照，不预留端口，也不代表云安全组已放行。
+- 非 Linux 或 `--dev` 下自检只返回平台提示，状态指标为占位值；不读 Linux 系统文件、
+  不探测外网、不执行系统命令。BBR 开启与重新探测 IP 返回不支持（API.md）；
+  firewall `Status/Open/Close` 为 no-op（参数校验仍保留）。
+- BBR `enabled` 表示默认 TCP 拥塞控制为 `bbr`；`available` 表示已注册 BBR 或
+  `modinfo tcp_bbr` 确认模块可用。开启时按需 `modprobe tcp_bbr`，原子写入
+  `/etc/sysctl.d/99-boxpanel-bbr.conf`（0644），仅包含 `net.core.default_qdisc=fq` 和
+  `net.ipv4.tcp_congestion_control=bbr`，再用 `sysctl -p` 加载该文件并重读校验。
+  不运行 `sysctl --system`。失败尽力恢复两个运行时参数及原文件（原来不存在则删除），
+  即使请求取消也尝试恢复；恢复失败仍返回错误，不声称成功。已加载的模块不卸载。
+  其作用是默认队列和新 TCP 连接，不替换已有连接或网卡现存队列。
+  语义依据 [内核 TCP 参数](https://www.kernel.org/doc/html/latest/networking/ip-sysctl.html)
+  与 [默认 qdisc 文档](https://www.kernel.org/doc/html/latest/admin-guide/sysctl/net.html)。
+- firewall 暴露 `Status(ctx)`、`Open(ctx, port, proto)` / `Close(ctx, port, proto)`；
+  `port` 为 1–65535，`proto` 仅接受小写 `tcp` / `udp`。操作串行化，每次重新检测，
+  优先选择活动的 ufw → firewalld → nftables → iptables；已安装但未启用的工具不遮蔽
+  后续活动后端。检测失败（含权限不足/异常输出）直接报错，不当成「没有防火墙」。
+  没有活动后端则不写规则，也不自动启用防火墙、修改默认策略或清空规则集。
+- ufw 使用带 `boxpanel:<proto>:<port>` 注释的 allow/delete；firewalld 使用默认 zone，
+  分别查询/更新 runtime 和 permanent 的端口项，不 reload，避免丢弃其他运行时规则。
+  这两个高层管理器按端口管理，调用方须保证端口专用于面板管理的服务；不以 Close
+  强制 deny，也不删除其他形式的放行规则。自定义 firewalld zone 需管理员另行放行。
+- nftables 解析 JSON 规则集，在每条 `inet/ip/ip6` 的 input filter 基链开头插入带标记的
+  accept；重复 Open 不重复添加，Close 只按 handle 删除相同标记的规则，不建一个无法
+  覆盖后续 drop 的孤立基链。iptables/ip6tables 用带相同标记的 INPUT 规则，先 `-C`
+  检查，再 `-I/-D`，IPv4/IPv6 都处理，工具/权限不完整时报错。
+  这两种后端只改运行时规则，持久重放留在 T2.3；不覆盖系统已有持久化配置。
+  多条更新中途失败返回错误，可重试完成剩余更新，不做全局防火墙回滚。
+  多套防火墙同时活动或 ingress/forward/云安全组规则不在单一后端适配范围。
+  命令依据 [ufw 手册](https://manpages.ubuntu.com/manpages/jammy/man8/ufw.8.html)、
+  [firewalld 手册](https://firewalld.org/documentation/man-pages/firewall-cmd) 与
+  [nftables 手册](https://www.netfilter.org/projects/nftables/manpage.html)。

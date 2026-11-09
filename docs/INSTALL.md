@@ -89,7 +89,9 @@ uninstall：二次确认 → 停服务、删单元 → 清防火墙规则与端�
   开发模式仍保留完整认证、限流和 CSRF，只取消 cookie 的 Secure 属性。
 - `info` 不打印密码；`reset-admin` 原子更新账号密码并撤销该管理员的全部会话。
   `info/reset-admin` 及普通 `serve` 不会创建不存在的 DB。
-- T1.2 不生成 systemd 单元、不调用 systemctl、防火墙或 sing-box；其封装与 dev mock 随 T2.1 接入。
+- T1.2 不生成 systemd 单元、不调用 systemctl、防火墙或 sing-box；systemd 与 sing-box
+  封装及 dev mock 随 T2.1 接入。T1.3 增加系统诊断 API 和防火墙适配包，但启动时不修改防火墙；
+  节点端口同步在 T2.3、安装时面板端口放行在 T6.1 接入。
 - 各命令支持 `--help`。Ctrl+C / SIGTERM 关闭监听并等待在途请求（最多 5 秒）。
 
 本机无需 root 的 HTTPS 验证：
@@ -104,6 +106,15 @@ bin/boxpanel serve --data-dir "$DATA_DIR" --listen-host 127.0.0.1
 ```
 
 - `make dev-server` 先执行 `build-web`，确保全新检出也有可嵌入的页面，再启动 `serve --dev`。可同时运行 `make dev-web` 使用 Vite 热更新及 `/api` 代理。
+
+### T1.3 自检运行环境
+
+- macOS / `--dev` 下不会读取 Linux `/proc`、`/sys` 或执行 Linux 系统命令；系统 API 的
+  占位值与 409 返回约定见 API.md。防火墙包在这些环境为 no-op。
+- Linux 生产环境的端口检查需要 `iproute2`（`ss`）；完整虚拟化识别使用
+  `systemd-detect-virt`，可选 `kmod` 的 modinfo/modprobe 用于 BBR 模块检测/加载。
+  防火墙检查和 BBR 开启需相应 root/capability 权限；T1.3 不自动安装依赖。
+- 单测不要求这些工具；所有命令、系统文件、磁盘信息和网络探测使用注入数据。
 
 ## 4. systemd 单元
 
