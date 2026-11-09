@@ -421,6 +421,33 @@ check 只校验格式，不启动 TUN、不连接节点、不下载 rule-set。
 不能用 geolocation-!cn 替代，否则会改变 gfw_only 的语义。选择 sagernet 时其余规则保持该源。
 非中国规则保留源常量以对应规格，但当前三个预设无需加载它。
 
+### T3.3 离线端到端验证边界
+
+`internal/e2e` 使用同一份固定入站/用户模型生成服务端，并将该模型写入临时 SQLite；
+客户端通过生产 `subscription.Store.Load`（含 token、证书有效期和指纹校验）及 `Render` 生成。
+服务端直接调用生产 `confgen.Build`，不手写协议 JSON，不增加生产代码例外。
+
+- 测试生成随机 Reality 密钥、short ID、用户凭证和 Hysteria2 自签证书，所有文件仅在临时目录。
+  `127.0.0.1` 上的 HTTPS handshake 目标强制 TLS 1.3、ALPN=h2、X25519；启动后实际握手验证
+  TLS/ALPN。独立 HTTP 目标返回固定内容并计数。两者均不依赖公网证书、域名解析或外网服务。
+- 服务端双入站、Clash API 使用预留的随机端口；仅在测试中将入站监听改成 `127.0.0.1`，
+  移除唯一的 `ip_is_private` reject，其余生成字段（包括凭证、Vision、TLS、BT 规则）保持。
+- 客户端保留生成的 mixed 入站并改为随机端口，移除 TUN；route 使用空规则和被测节点 final，
+  移除 TUN 所需的自动网卡绑定。测试输入选用无远程 rule-set 的 global 预设，DNS URL 指向回环。
+  移除 urltest 出站并将 selector 固定到被测节点，避免后台访问默认 gstatic 测速地址；协议出站保持
+  原样。字段依据 [Route](https://sing-box.sagernet.org/configuration/route/) 和
+  [URLTest](https://sing-box.sagernet.org/configuration/outbound/urltest/)。缓存落在子进程临时工作目录。
+- 服务端及每份客户端配置均先执行锁定内核 `check` 再 `run`。经显式 HTTP mixed 代理分别验证
+  VLESS Reality、Hysteria2 的 HTTP 200、固定内容及目标请求计数；HTTP client 禁止直连和重定向。
+  反例仅替换客户端 Reality public_key 为另一份合法 X25519 公钥，要求请求失败且目标计数不变，
+  并确认两个内核仍存活，避免把进程崩溃误判为认证失败。
+- 端口预留至启动前，等待 TCP 连接成功及 UDP 绑定；每次请求、启动、内核进程寿命均有超时。
+  `t.Cleanup` 杀掉并 `Wait` 回收子进程，失败打印脱敏后的日志。不执行 systemd、防火墙或生产 Apply，
+  不覆盖受管配置；该临时测试进程不属于 SPEC.md §7 的生产配置生效操作。
+
+运行及 Skip 边界见 INSTALL.md 的 T3.3 说明。此测试覆盖两种协议实际连接，不代替 T2.3 的
+生效/回滚测试或 T3.2 的预设 golden，也不提前实现 M4。
+
 ## 5. Reality 伪装目标检测（`internal/reality`）
 
 - 内置候选：若干大型站点域名，集中在 `internal/reality/probe.go` 的 `CandidateDomains` 常量；

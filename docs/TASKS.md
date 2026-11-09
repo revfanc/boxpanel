@@ -139,6 +139,23 @@ T3.2 补充验收与边界：
 
 字段核对、源可用性缺口、依赖理由、设置契约补齐见 CONFIG.md/API.md；不推进 M4 或后续任务。
 
+### T3.3 端到端回环测试
+- 新建 `internal/e2e` Go 测试，使用 `.tools/bin/sing-box`；工具缺失或 `go test -short` 时 Skip，`make test` 默认执行。
+- 同一份 DB 快照/模型分别走生产 `confgen` 和 `subscription` 路径，生成服务端与 sing-box 客户端配置。
+- 完全离线：在 `127.0.0.1` 启动 TLS 1.3 + h2 的 Reality handshake 目标及返回固定内容的 HTTP 目标。
+- 服务端仅在测试中绑定回环随机端口、去掉 `ip_is_private` 拒绝规则；客户端去掉 TUN，保留随机端口 mixed，全部请求路由到被测节点，并禁用外网测速/规则下载。
+- **验收**：VLESS Reality、Hysteria2 经真实服务端/客户端和 mixed 代理取回固定内容；Reality 错误 public_key 必须失败。
+- **进程验收**：随机端口、等待就绪、启动/请求有超时、所有退出路径清理并回收子进程，失败打印脱敏日志。
+- **范围**：只增加测试与相应规格，不改生产配置行为，不涉及 systemd/防火墙、M4 或后续任务，不改 `web/package.json` / `pnpm-lock.yaml`。
+- **通用验收**：`make lint`、`make test`、`make build` 全部通过。
+
+T3.3 当前核对结果：
+- [x] 同源模型/临时 DB、生产生成器、离线 TLS 1.3 + h2 / HTTP 目标与测试专用配置调整。
+- [x] 两协议成功用例、错误 Reality 公钥反例、随机端口/超时/进程回收/失败日志均已实现；无工具及 short 的 Skip 边界明确。
+- [x] `make lint`、`make build` 通过；其余 Go 包与前端 typecheck/lint/vitest 通过。
+- [ ] 两协议真实连通及错误公钥反例通过：当前 macOS 沙箱内核启动报 DNS 通知注册 `status 9`，尚未执行代理请求，需普通终端/CI 复跑。
+- [x] `make test` 全部通过（审查者在沙箱外本机复跑：三个子测试均 PASS）。
+
 ## M4 前端面板
 
 ### T4.1 基础设施

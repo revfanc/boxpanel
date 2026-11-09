@@ -248,6 +248,29 @@ make test                     # 工具存在时自动把 .tools/bin 加到 Go �
 `serve --dev` 仍固定 127.0.0.1:2053/根路径；开发创建的 Hysteria2 无生效证书，导出返回明确的 409。
 这些接口不实现 CLI `set`、安装脚本、ACME、引导流程或内核升级。
 
+### T3.3 本机离线回环测试
+
+`make test` 默认执行 `internal/e2e`，仅当仓库 `.tools/bin/sing-box` 不存在或显式
+`go test -short` 时跳过。工具存在但不可执行、版本不符、启动失败或请求失败均为测试失败，
+不会自动下载工具或以 Skip 掩盖错误。版本仍以 `internal/singbox/version.go` 为准。
+
+```bash
+make tools                              # 首次准备工具时需要联网，测试本身完全离线
+go test -count=1 -v ./internal/e2e       # 只跑两协议回环及错误 Reality 公钥反例
+make lint
+make test
+make build
+```
+
+Linux/macOS 上均只需普通用户和回环 TCP/UDP 监听权限，不创建 TUN，不调用 systemd 或防火墙。
+配置、DB、证书、日志和缓存全部使用临时目录，测试退出自动清理；失败日志脱敏后输出。
+配置改写范围见 CONFIG.md 的 T3.3 说明。
+
+macOS 受限沙箱可能禁止锁定内核注册系统 DNS 配置通知，报
+`watch DNS configuration: register DNS configuration notification: status 9`；此时内核尚未启动代理。
+应在允许该系统通知的普通终端/CI 环境复跑上述命令，不能将此环境错误当作协议测试通过，
+也不为沙箱修改生产 DNS 或替换锁定内核。
+
 ## 5. 发布（`.github/workflows/release.yml`）
 
 - 触发：推送 `v*` tag。

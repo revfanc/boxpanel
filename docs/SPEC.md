@@ -228,9 +228,11 @@ MVP 规则：**所有启用的用户加入所有启用的入站**。超额/过�
 - `applied_firewall` 存储最近成功的 `{ports:[{port,proto}],hops:[{start,end,port}]}` JSON；
   `apply_generation` 是 32 字节 crypto/rand 的 base64url 值，仅用于中断恢复。
   Clash API 运行参数和 Hysteria2 证书约定见 CONFIG.md §2 的 T2.3 补充。
-- 单测以临时 DB/文件、fake runner/systemctl/firewall 覆盖成功、生成/check 失败、重启/存活失败、
+- T2.3 单测以临时 DB/文件、fake runner/systemctl/firewall 覆盖成功、生成/check 失败、重启/存活失败、
   文件失败、防火墙失败、恢复也失败、提交失败、请求取消、并发、启动及恢复记录；真实集成测试只调用
   `.tools/bin/sing-box check` 校验双入站，服务控制/防火墙仍为 fake，无工具时 Skip。
+  T3.3 另在 `internal/e2e` 启动临时服务端/客户端进程验证两协议的离线回环，不调用生产服务控制；
+  测试专用配置调整与执行边界见 CONFIG.md/INSTALL.md 的 T3.3 说明。
 
 ## 8. 安全基线
 
