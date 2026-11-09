@@ -2,7 +2,8 @@
 
 > ⚠️ 以下 JSON 是**结构示意**。字段名以 `internal/singbox/version.go` 锁定版本的
 > [官方文档](https://sing-box.sagernet.org/configuration/) 为准，实现时逐项核对，并用 `sing-box check` 验证。
-> 目标格式：sing-box **1.12+**（新 DNS server 格式、rule action，不使用已移除的 geoip/geosite 字段与 block/dns 特殊出站）。
+> 服务端目标版本：sing-box **1.14.4**（新 DNS server 格式、rule action，不使用已移除的 geoip/geosite 字段与 block/dns 特殊出站）。
+> T2.2 已逐字段核对 §1/§2，并用锁定二进制校验所有服务端 golden；客户端订阅仍按 §4 的独立版本约定，在 T3.2 实现。
 
 ## 1. 入站 options（存于 `inbounds.options`）
 
@@ -20,7 +21,14 @@
 }
 ```
 
-- 密钥用 Go `crypto/ecdh` X25519 生成（与 `sing-box generate reality-keypair` 等价，需单测对比格式）。
+- 密钥用 Go `crypto/ecdh` X25519 生成；私钥输出前按 X25519 规则 clamp（最低 3 位清零，
+  最高位清零、次高位置一）。私钥、公钥均为 32 字节、43 字符的**无 padding base64url**，
+  与 `sing-box generate reality-keypair` 一致；测试实际调用该命令检查格式、位掩码和公私钥对应关系。
+- `GenerateShortID` 生成 8 字节随机数，输出 16 位小写 hex；面板接受偶数长度的 8–16 位 hex。
+  [TLS 文档](https://sing-box.sagernet.org/configuration/shared/tls/#short_id) 中 “zero to eight digits”
+  表述有歧义：1.14.4 实际接受至多 **8 字节**（16 位 hex），已用二进制校验 8/16 位 short ID。
+  `short_ids` 是面板存储字段，服务端字段为 `tls.reality.short_id` 数组；`public_key` 和
+  `fingerprint` 仅供客户端使用，不输出到服务端配置。
 - 伪装目标默认从内置候选列表中自动挑选，见 §5。
 
 ### hysteria2
@@ -30,12 +38,21 @@
   "sni": "<证书 CN/SAN，默认 www.bing.com 或用户域名>",
   "cert_mode": "self_signed",          // self_signed | acme(后期)
   "obfs_password": "",                 // 空=不启用 salamander
-  "up_mbps": 0, "down_mbps": 0,        // 0=不限，交给 BBR
+  "up_mbps": 0, "down_mbps": 0,        // 0=省略该方向的上限；两者均为 0 时强制 BBR
   "port_hopping": { "enabled": false, "start": 20000, "end": 30000 }
 }
 ```
 
-- 自签证书在 `certs/hy2.{crt,key}`，记录 SHA-256 指纹，用于客户端 pin。
+- 自签证书默认在 `certs/hy2.{crt,key}`；`certs.Hysteria2(sni, now)` 只返回内存中的 PEM 证书、
+  PKCS#8 私钥和指纹，不写文件。使用 ECDSA P-256，CN/SAN 为传入的 DNS 名或 IP，
+  有效期为 `now-5分钟` 至 `now+1年`，仅用于 serverAuth，不是 CA。
+  SHA-256 指纹为**叶证书 DER** 的 64 位小写 hex，不是 PEM 文本或 SPKI 公钥的哈希。
+  后续调用方负责以 0600 保存证书/私钥并记录指纹；多入站可传各自证书路径，不新增 DB 字段。
+- 依据 [Hysteria2 入站文档](https://sing-box.sagernet.org/configuration/inbound/hysteria2/)，
+  两个带宽值均为 0 时省略 `up_mbps/down_mbps` 并设置 `ignore_client_bandwidth=true`，
+  强制客户端使用 BBR；任一值为正时输出正值并省略 `ignore_client_bandwidth`。
+  因此不能仅靠“不填带宽”表达“强制 BBR”。非空 `obfs_password` 映射到
+  `obfs:{type:"salamander",password:...}`，为空则省略整个 `obfs`。
 - 端口跳跃：面板用 nftables（无则 iptables）把 UDP `start-end` DNAT/REDIRECT 到 `port`，面板启动时重新下发，删除入站时清理。
 
 ## 2. 服务端配置（confgen）
@@ -43,6 +60,10 @@
 ```json
 {
   "log": { "level": "warn", "timestamp": true },
+  "dns": {
+    "servers": [{ "type": "local", "tag": "dns-local" }],
+    "final": "dns-local"
+  },
   "inbounds": [
     {
       "type": "vless", "tag": "vless-reality-443",
@@ -63,6 +84,7 @@
       "type": "hysteria2", "tag": "hy2-8443",
       "listen": "::", "listen_port": 8443,
       "users": [{ "name": "alice", "password": "<pwd>" }],
+      "ignore_client_bandwidth": true,
       "tls": {
         "enabled": true, "alpn": ["h3"],
         "certificate_path": "/etc/boxpanel/certs/hy2.crt",
@@ -75,9 +97,11 @@
     "rules": [
       { "action": "sniff" },
       { "protocol": "bittorrent", "action": "reject" },
+      { "action": "resolve", "server": "dns-local" },
       { "ip_is_private": true, "action": "reject" }
     ],
-    "final": "direct"
+    "final": "direct",
+    "default_domain_resolver": "dns-local"
   },
   "experimental": {
     "clash_api": { "external_controller": "127.0.0.1:<随机端口>", "secret": "<随机>" }
@@ -85,9 +109,54 @@
 }
 ```
 
-- 用户列表仅包含「启用 && 未超额 && 未过期」的用户。
+- 用户列表仅包含「启用 && 未超额 && 未过期」的用户；`traffic_limit=0` 不限流量，
+  否则 `traffic_up + traffic_down >= traffic_limit` 即剔除（计算避免 int64 溢出）；
+  `expire_at=0` 永不到期，否则 `expire_at <= now` 即剔除。负流量/负到期值报错。
+  所有合格用户加入所有启用入站；禁用入站跳过。无合格用户时保留入站及 `users:[]`，
+  不创建匿名用户；没有启用入站时输出 `inbounds:[]`。
 - 入站按 `id` 排序，用户按 `id` 排序，保证输出稳定（golden test）。
 - 「屏蔽 BT」做成设置项，默认开。
+- 私网拦截前显式 `resolve`，使域名目标解析出的私网地址也参与 `ip_is_private` 判断；
+  仅有原示意中的 IP 规则不足以覆盖域名目标。使用系统 DNS 的新 `local` server，
+  并设置 `default_domain_resolver`，也供 Reality 握手域名解析使用。
+
+### T2.2 接口与字段核对
+
+`confgen.Build(snapshot, options) ([]byte, error)` 是纯生成函数：调用方提供一致 DB 快照中的
+`Inbounds/Users/BlockBittorrent`，以及 `Options.Now`、按入站 ID 索引的 `Hysteria2TLS`
+证书绝对路径、`ClashAPIPort/ClashAPISecret`。这些运行时参数必须明确提供；生成器不读取 DB、
+时钟或证书文件，也不选择端口或生成随机值。Clash API 固定绑定 `127.0.0.1`，要求非空 secret，
+拒绝与 VLESS TCP 端口冲突。调用方在后续生效流程中一次性生成/保存控制端口和随机 secret，
+再在重新生成时复用；本任务不修改初始化设置或增加持久化键。
+
+快照切片不会被排序操作修改；相同快照、时间及运行参数产生逐字节一致的两空格缩进 JSON，
+末尾一个换行。输出包含真实凭证，只可交给后续校验/生效流程；不得直接写日志或作为预览响应。
+启用入站 options 拒绝非法 JSON、未知字段、未知协议；错误只包含记录 ID、字段说明和修复建议，
+不包含 options 原文、私钥、UUID 或密码。禁用记录及已剔除用户的凭证不参与生成。
+
+2026-11-09 对照 1.14 官方文档（在线文档还可能列出更新版本字段，本实现不使用那些字段）：
+
+| 输出字段 | 官方依据 / 处理 |
+|---|---|
+| `log.level/timestamp` | [Log](https://sing-box.sagernet.org/configuration/log/)，`warn`、`true` |
+| `type/tag/listen/listen_port` | [Listen](https://sing-box.sagernet.org/configuration/shared/listen/)，监听 `::` |
+| VLESS `users.name/uuid/flow`、`tls` | [VLESS](https://sing-box.sagernet.org/configuration/inbound/vless/)，flow 固定 `xtls-rprx-vision` |
+| TLS `enabled/server_name/reality.enabled/handshake.server/handshake.server_port/private_key/short_id` | [TLS](https://sing-box.sagernet.org/configuration/shared/tls/)，存储字段映射见 §1 |
+| Hysteria2 `users.name/password/up_mbps/down_mbps/ignore_client_bandwidth/obfs` | [Hysteria2](https://sing-box.sagernet.org/configuration/inbound/hysteria2/)，带宽与混淆见 §1 |
+| Hysteria2 TLS `enabled/alpn/certificate_path/key_path` | [TLS](https://sing-box.sagernet.org/configuration/shared/tls/)，ALPN 为 `h3`，不输出 `cert_mode/port_hopping` |
+| `dns.servers.type/tag`、`dns.final` | [Local DNS](https://sing-box.sagernet.org/configuration/dns/server/local/)、[DNS](https://sing-box.sagernet.org/configuration/dns/) |
+| `outbounds.type/tag` | [Direct](https://sing-box.sagernet.org/configuration/outbound/direct/)，普通 direct 出站 |
+| `route.rules.action/protocol/ip_is_private/server` | [Rule](https://sing-box.sagernet.org/configuration/route/rule/)、[Rule Action](https://sing-box.sagernet.org/configuration/route/rule_action/)，sniff → 可选 BT reject → resolve → private reject |
+| `route.final/default_domain_resolver` | [Route](https://sing-box.sagernet.org/configuration/route/)，`direct` / `dns-local` |
+| `experimental.clash_api.external_controller/secret` | [Clash API](https://sing-box.sagernet.org/configuration/experimental/clash-api/)，固定 loopback + 调用方提供的凭证 |
+
+golden 覆盖两种单入站、双入站、无用户、用户过滤边界、BT 关闭、带宽/混淆/端口跳跃元数据、
+无入站。`go test ./internal/confgen -update` 更新 `testdata/*.golden`；`make test` 自动发现
+`.tools/bin/sing-box`，每份 golden 只替换证书路径为临时生成的证书/私钥，然后实际运行
+锁定版本 `sing-box check -c`。PATH 无二进制时仅跳过 check 子测试，golden 比对仍运行。
+
+T2.2 不写服务端 JSON、不重启服务、不生成端口跳跃规则、不实现 Reality 目标探测或 HTTP API；
+这些分别属于 T2.3/T3.1。不新增依赖，不修改前端包清单或锁文件。
 
 ## 3. 规则设置（`settings.rules`）
 

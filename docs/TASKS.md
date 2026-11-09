@@ -77,6 +77,11 @@ CI 在测试前运行 `make tools`。所有单测用注入的下载/命令，无
 - `internal/confgen`：按 CONFIG.md §2 生成，支持 vless_reality、hysteria2；用户过滤规则；输出稳定。
 - **验收**：golden test 覆盖：单入站、双入站、无用户、用户超额/过期被剔除；有 sing-box 时 `sing-box check` 通过。
 
+范围补充：服务端字段按 1.14.4 核对，接口、证书指纹编码、过滤边界、DNS/私网拦截修正、
+Hysteria2 BBR 语义及测试命令见 CONFIG.md §1/§2。生成器只消费一致快照与显式运行参数，
+不接 DB/HTTP/CLI，不落地服务端配置；所有 golden 用临时证书执行锁定内核 check。
+Reality 测试实际调用 `sing-box generate reality-keypair` 比较格式；无工具时 Skip 外部命令检查。
+
 ### T2.3 生效流程
 - SPEC.md §7 完整实现（事务内生成+校验、原子替换、重启、存活检查、回滚、互斥锁、启动时重新生效、防火墙同步）。
 - Hysteria2 端口跳跃规则下发/清理。

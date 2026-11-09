@@ -1,0 +1,75 @@
+{
+  "log": {
+    "level": "warn",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "local",
+        "tag": "dns-local"
+      }
+    ],
+    "final": "dns-local"
+  },
+  "inbounds": [
+    {
+      "type": "hysteria2",
+      "tag": "hy2-8443",
+      "listen": "::",
+      "listen_port": 8443,
+      "users": [
+        {
+          "name": "alice",
+          "password": "test-only-alice-password"
+        },
+        {
+          "name": "bob",
+          "password": "test-only-bob-password"
+        }
+      ],
+      "ignore_client_bandwidth": true,
+      "tls": {
+        "enabled": true,
+        "alpn": [
+          "h3"
+        ],
+        "certificate_path": "/etc/boxpanel/certs/hy2.crt",
+        "key_path": "/etc/boxpanel/certs/hy2.key"
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "action": "sniff"
+      },
+      {
+        "protocol": "bittorrent",
+        "action": "reject"
+      },
+      {
+        "action": "resolve",
+        "server": "dns-local"
+      },
+      {
+        "ip_is_private": true,
+        "action": "reject"
+      }
+    ],
+    "final": "direct",
+    "default_domain_resolver": "dns-local"
+  },
+  "experimental": {
+    "clash_api": {
+      "external_controller": "127.0.0.1:19090",
+      "secret": "test-only-clash-secret"
+    }
+  }
+}
