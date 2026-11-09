@@ -130,6 +130,35 @@ CREATE TABLE users (
 
 MVP 规则：**所有启用的用户加入所有启用的入站**。超额/过期用户视为禁用，从生成的配置中剔除。
 
+### T1.1 存储约定
+
+- `internal/db.Open(ctx, path)` 接收文件路径（不接收 DSN 或内存库），父目录须已存在；
+  自动连接并迁移，失败关闭连接，成功由调用者 `Close()`。本任务不接入 CLI/HTTP 启动流程。
+- 使用纯 Go 驱动 `modernc.org/sqlite v1.38.2`，保持 `go.mod` 的 Go 1.23 最低版本；
+  这是本任务唯一直接新增依赖，其余为驱动的间接依赖，无需 CGO。
+- 打开时启用持久化的 `journal_mode=WAL` 并检查返回值；新库并发切换 WAL 时可能立即遇到
+  `SQLITE_BUSY`，仅对此错误重试，等待窗口为 5 秒且支持 context 取消。
+  每个连接通过驱动的 DSN 参数设置 `foreign_keys=on`、`busy_timeout=5000`（毫秒），
+  连接池最多保留/打开一个连接。事务使用 `BEGIN IMMEDIATE`，
+  在读取后续写操作依赖的数据前取得写锁；跨连接竞争等待至多 5 秒。
+  参数语义见 [驱动文档](https://pkg.go.dev/modernc.org/sqlite@v1.38.2#Driver.Open) 和
+  [SQLite PRAGMA 文档](https://www.sqlite.org/pragma.html)。
+- SQL 嵌入 `internal/db/migrations/`，文件名为 `0001_name.sql`，版本从 1 连续递增。
+  `schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)` 记录已应用版本
+  与 Unix 秒时间戳。一次迁移中所有待执行 SQL 及版本记录在同一事务内顺序执行；失败整批回滚，
+  保留迁移前的数据与版本。重复迁移/重新打开不重放已应用版本，不接受有缺口或超出当前二进制的版本历史。
+  已发布的迁移不修改，变更以新版本 SQL 追加。
+- `GetSetting(ctx, dbOrTx, key)` / `SetSetting(ctx, dbOrTx, key, value)` 用 `SettingKey[T]`
+  将键绑定到 Go 类型；支持 `*sql.DB` 与 `*sql.Tx`，写入为 JSON upsert。事务内必须传 `*sql.Tx`，
+  不得再次使用单连接池查询。缺失键返回可用 `errors.Is(err, sql.ErrNoRows)` 判定的错误；
+  非法 JSON、类型不匹配或顶层 `null` 返回错误及零值，不隐式补默认值。业务取值校验由后续调用方负责。
+- 类型映射：`web_port` 为 `int`；`setup_completed`、`block_bittorrent` 为 `bool`；
+  `rules` 为 `RulesSettings`（含 `DNSSettings`，字段对应 CONFIG.md §3）；
+  `web_path`、`sub_path`、`public_host`、`panel_tls_mode`、`setup_step`、`singbox_version`、
+  `panel_name` 为 `string`。迁移只创建表，不写入设置、账号或其他业务初始数据；初始化属于 T1.2。
+- 单测全部使用 `t.TempDir()` 下的文件数据库，覆盖迁移幂等/顺序/回滚/并发、连接参数、
+  五张业务表的字段/约束/默认值，以及 settings 的持久化、类型检查、事务提交/回滚。
+
 ## 7. 配置生效流程（核心，务必严格实现）
 
 ```
