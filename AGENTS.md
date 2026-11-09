@@ -46,6 +46,8 @@ make lint         # go vet + gofmt 检查 + eslint
 7. shadcn/ui 组件用 CLI 生成到 `web/src/components/ui/`，不要手改生成的组件，需要定制就包一层。
 8. Go 错误要带上下文（`fmt.Errorf("apply config: %w", err)`），HTTP 错误统一格式见 `docs/API.md`。
 9. 不引入重量级框架（gin/echo/gorm 等）；新增依赖需在 PR 描述中说明理由。
+   **禁止绕过供应链保护**：不得添加 `minimumReleaseAgeExclude`、不得降低 `minimumReleaseAge`，
+   也不得用其他方式安装刚发布、尚未过 pnpm 冷静期的版本；需要新版本时选冷静期之外的最新版。
 10. 所有面向小白的报错要给出「下一步怎么办」，而不只是错误原文。
 
 ## 提交规范
