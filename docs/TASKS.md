@@ -11,7 +11,7 @@
 ## M0 骨架
 
 ### T0.1 仓库骨架
-- Go module `github.com/OWNER/boxpanel`，`cmd/boxpanel/main.go`（子命令解析用标准库 `flag` 或轻量手写分发），`version` 命令。
+- Go module `github.com/revfanc/boxpanel`，`cmd/boxpanel/main.go`（子命令解析用标准库 `flag` 或轻量手写分发），`version` 命令。
 - `web/`：Vite + React + TS + Tailwind v4 + shadcn/ui 初始化，`components.json`，路径别名 `@/`。
 - `web/embed.go` + `web/dist/.gitkeep`；Makefile 目标见 AGENTS.md；`.github/workflows/ci.yml`。
 - **验收**：`make build` 产出 `bin/boxpanel`；`bin/boxpanel version` 输出版本。

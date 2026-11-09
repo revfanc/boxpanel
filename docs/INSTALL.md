@@ -3,10 +3,10 @@
 ## 1. 用户视角
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/OWNER/boxpanel/main/scripts/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/main/scripts/install.sh)
 ```
 
-> `OWNER` 在脚本顶部定义为变量 `REPO="${BOXPANEL_REPO:-OWNER/boxpanel}"`，仓库建好后替换。
+> 仓库地址在脚本顶部定义为变量 `REPO="${BOXPANEL_REPO:-revfanc/boxpanel}"`，可通过环境变量覆盖（便于 fork 测试）。
 
 安装结束打印（只打印这一次，之后用 `boxpanel info` 查看）：
 

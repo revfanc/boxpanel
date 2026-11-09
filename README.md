@@ -13,7 +13,7 @@
 ## 安装（发布后可用）
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/OWNER/boxpanel/main/scripts/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/main/scripts/install.sh)
 ```
 
 ## 开发
@@ -28,3 +28,7 @@ make dev-web      # 终端 2
 ## 免责声明
 
 本项目仅供学习与合法用途，请遵守你所在地区的法律法规。
+
+## 许可证
+
+[GPL-3.0](LICENSE)
