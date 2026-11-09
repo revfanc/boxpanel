@@ -102,3 +102,8 @@ WantedBy=multi-user.target
 - 触发：推送 `v*` tag。
 - 步骤：pnpm 构建前端 → `CGO_ENABLED=0` 交叉编译 `linux/amd64`、`linux/arm64`（`-trimpath -ldflags "-s -w -X main.version=<tag>"`）→ 打包 `boxpanel-linux-{arch}.tar.gz` → 生成 `checksums.txt` → 创建 GitHub Release 并上传。
 - `ci.yml`：PR 与 main 推送时跑 `make lint test build`、`shellcheck scripts/install.sh`；安装 sing-box 锁定版本以便 golden test 跑 `sing-box check`。
+
+当前 T0.1 阶段：CI 在 Linux 与 macOS 上使用 Go 1.27、Node 24 和
+`web/package.json` 固定的 pnpm，执行 `make lint test build` 及 `bin/boxpanel version`。
+sing-box 安装检查随 T2.1/T2.2 接入；`shellcheck` 随 T6.1 的 `scripts/install.sh`
+接入。骨架阶段尚无这些文件，不提前实现后续任务。

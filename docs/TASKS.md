@@ -16,6 +16,10 @@
 - `web/embed.go` + `web/dist/.gitkeep`；Makefile 目标见 AGENTS.md；`.github/workflows/ci.yml`。
 - **验收**：`make build` 产出 `bin/boxpanel`；`bin/boxpanel version` 输出版本。
 
+范围说明：此阶段保留 `make dev-server` 目标，但不实现 `serve`（T0.2）或完整
+`--dev` 模式（T1.2）；CI 暂只运行现有代码的 lint/test/build 与 version 检查，
+sing-box 校验和安装脚本检查在对应任务加入，见 INSTALL.md §5。
+
 ### T0.2 SPA 服务与 history 回退
 - 实现 `internal/spa`（FRONTEND.md §1 全部规则）与最小 `serve` 命令（临时用命令行参数指定 web_path、端口，HTTP）。
 - 前端放 3 个占位路由（`/`、`/users`、`/users/:id`），用 `createBrowserRouter` + 运行时 basename。
