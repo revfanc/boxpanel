@@ -101,7 +101,7 @@ func TestSystemAPIProtectionAndContract(t *testing.T) {
 	if strings.Contains(logs.String(), "secret") {
 		t.Fatal("logs leaked command output or query")
 	}
-	for _, path := range []string{"setup/status", "system/port-probe", "singbox/restart"} {
+	for _, path := range []string{"setup/status", "system/port-probe"} {
 		requireStatus(t, request(t, h, "POST", base+path, "", cookie, nil), 404)
 	}
 }

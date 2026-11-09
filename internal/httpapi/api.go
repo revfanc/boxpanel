@@ -25,6 +25,7 @@ type Options struct {
 	Dev     bool
 	Logger  *slog.Logger
 	System  System
+	Singbox Singbox
 }
 
 type api struct {
@@ -69,6 +70,9 @@ func New(service *auth.Service, opts Options) http.Handler {
 	register("GET", "/api/v1/system/status", a.systemStatus, true)
 	register("GET", "/api/v1/system/public-ip", a.systemPublicIP, true)
 	register("POST", "/api/v1/system/bbr", a.systemBBR, true)
+	register("POST", "/api/v1/singbox/restart", a.singboxRestart, true)
+	register("GET", "/api/v1/singbox/logs", a.singboxLogs, true)
+	register("GET", "/api/v1/singbox/config", a.singboxConfig, true)
 	mux.HandleFunc("/", notFound)
 	return middleware(csrf(mux), opts.Logger, routes)
 }

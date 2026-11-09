@@ -20,7 +20,7 @@
 | 409 | 端口被占用、名称重复 |
 | 422 | `sing-box check` 未通过（配置未生效，DB 已回滚） |
 | 429 | 限流（`rate_limited`）或哈希计算繁忙（`auth_busy`），带 Retry-After 秒数 |
-| 500 | 内部错误（`internal_error`）；后续包括 sing-box 重启失败（已自动回滚） |
+| 500 | 内部错误（`internal_error`）或 sing-box 生效失败；恢复失败有独立错误码，不声称已恢复 |
 
 时间统一为 unix 秒；流量统一为字节。
 
@@ -126,15 +126,33 @@ T1.2 边界：
 
 ## sing-box
 
-以下 `/singbox/*` 路由仍属于 T2.3/后续任务，T2.1 只接入上述系统状态和 CLI。
+T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/singbox/restart` | 重启 |
+| POST | `/singbox/restart` | 无参数，重新生成 → check → 生效；成功 204，无 body |
 | GET | `/singbox/logs?lines=200` | `{lines: string[]}`（journalctl） |
 | GET | `/singbox/config` | 当前生效配置（**脱敏**：私钥、密码、uuid 中段打码） |
 | GET | `/singbox/versions` | `{current, pinned, latest?}` |
 | POST | `/singbox/upgrade` | `{version}`：下载 → 校验 → 用新二进制 check 当前配置 → 替换 → 重启，失败回滚（后期任务） |
+
+### T2.3 返回与脱敏
+
+- 三个接口均需登录；restart 沿用 CSRF 校验；GET 支持 HEAD，全部 `Cache-Control: no-store`。
+- restart 走 SPEC.md §7 完整流程，生成/check 失败为 `422 singbox_check_failed`；
+  重启/存活失败为 `500 singbox_restart_failed`；防火墙失败为 `500 singbox_firewall_failed`；
+  替换/事务收尾失败为 `500 singbox_apply_failed`。以上失败均不提交 DB，并尝试恢复文件、服务和规则。
+  恢复本身失败统一为 `500 singbox_rollback_failed`，保留恢复记录并提示人工检查后再运行 apply。
+  COMMIT 报错且无法重新读取 DB 核对时，明确提示数据库状态无法确认，不声称已回滚。
+- `error.detail` 只含脱敏后的 check 输出或失败时 journal 最近 30 行；日志和错误原因不直接透传。
+  DB/存储等内部错误不返回原始内容。生成错误无内核输出时可为空 detail，仍有修复建议。
+- logs 的 lines 默认 200，必须为单个 1–1000 的整数，否则 400。使用固定受管 unit、
+  `journalctl --no-pager --output=cat --quiet`，不执行 shell、不支持任意 unit/命令参数。
+  返回 `{lines:[]}` 或字符串数组；脱敏后总文本最多 64 KiB，超长内容标记截断。
+- config 返回当前磁盘配置 JSON（不是未生效 DB 的预览）；不存在返回 `404 singbox_config_missing`。
+  私钥、密码（含 obfs）、Clash API secret、token 完全替换；UUID 仅保留首尾各 4 位。
+  日志/check 输出替换当前/候选/备份凭证及转义形式，并屏蔽凭证字段行、PEM 和长随机凭证串。
+- 非 Linux / `--dev` 返回 `409 system_unsupported`，不执行系统命令、不返回模拟成功。
 
 ## Reality 目标
 

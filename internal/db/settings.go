@@ -13,17 +13,22 @@ import (
 type SettingKey[T any] struct{ name string }
 
 var (
-	WebPort         = SettingKey[int]{"web_port"}
-	WebPath         = SettingKey[string]{"web_path"}
-	SubPath         = SettingKey[string]{"sub_path"}
-	PublicHost      = SettingKey[string]{"public_host"}
-	PanelTLSMode    = SettingKey[string]{"panel_tls_mode"}
-	SetupCompleted  = SettingKey[bool]{"setup_completed"}
-	SetupStep       = SettingKey[string]{"setup_step"}
-	Rules           = SettingKey[RulesSettings]{"rules"}
-	SingboxVersion  = SettingKey[string]{"singbox_version"}
-	BlockBittorrent = SettingKey[bool]{"block_bittorrent"}
-	PanelName       = SettingKey[string]{"panel_name"}
+	WebPort               = SettingKey[int]{"web_port"}
+	WebPath               = SettingKey[string]{"web_path"}
+	SubPath               = SettingKey[string]{"sub_path"}
+	PublicHost            = SettingKey[string]{"public_host"}
+	PanelTLSMode          = SettingKey[string]{"panel_tls_mode"}
+	SetupCompleted        = SettingKey[bool]{"setup_completed"}
+	SetupStep             = SettingKey[string]{"setup_step"}
+	Rules                 = SettingKey[RulesSettings]{"rules"}
+	SingboxVersion        = SettingKey[string]{"singbox_version"}
+	BlockBittorrent       = SettingKey[bool]{"block_bittorrent"}
+	PanelName             = SettingKey[string]{"panel_name"}
+	ApplyGeneration       = SettingKey[string]{"apply_generation"}
+	ClashAPIPort          = SettingKey[int]{"clash_api_port"}
+	ClashAPISecret        = SettingKey[string]{"clash_api_secret"}
+	AppliedFirewall       = SettingKey[json.RawMessage]{"applied_firewall"}
+	Hysteria2Fingerprints = SettingKey[map[string]string]{"hysteria2_fingerprints"}
 )
 
 // RulesSettings is the JSON storage shape defined in docs/CONFIG.md section 3.

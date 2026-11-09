@@ -173,22 +173,62 @@ MVP 规则：**所有启用的用户加入所有启用的入站**。超额/过�
 
 ## 7. 配置生效流程（核心，务必严格实现）
 
-```
-任何会影响 sing-box 配置的写操作（入站/用户/规则增删改）
-  → 事务提交 DB
-  → confgen.Build(db 快照) 生成 JSON
-  → 写 /etc/boxpanel/sing-box.json.tmp
-  → sing-box check -c tmp            失败：删除 tmp，API 返回 422 + check 输出
-  → 当前 sing-box.json 复制为 .bak
-  → rename(tmp, sing-box.json)       原子替换
-  → systemctl restart boxpanel-singbox
-  → 轮询 is-active 最多 5 秒          失败：.bak 还原 → 再重启 → API 返回 500 + journal 最后 30 行
-  → 同步防火墙端口（firewall 包）
+```text
+所有影响服务端配置的写操作（入站/用户/服务端设置），以及启动、CLI apply、API restart
+  → 进程内互斥锁 + sing-box.json.lock 的 flock（跨 serve/CLI 进程）
+  → BEGIN IMMEDIATE（保持写锁直到恢复完成；调用方只能使用传入的 *sql.Tx）
+  → 处理上次中断的 .pending 恢复记录
+  → 在事务内写 DB，读取一致快照，confgen.Build
+  → 写 sing-box.json.tmp（0600，同目录）
+  → sing-box check -c tmp             失败：删除 tmp、ROLLBACK，不改变当前文件/服务
+  → 当前 sing-box.json 原子复制为 .bak（0600）
+  → 写 .pending 恢复记录（0600，无凭证）
+  → rename(tmp, sing-box.json)        原子替换，文件与目录均同步落盘
+  → systemctl restart boxpanel-singbox.service
+  → 轮询 is-active，最多 5 秒
+  → 同步防火墙服务端口及 Hysteria2 端口跳跃
+  → 更新 applied_firewall / apply_generation，COMMIT
+  → 删除 .pending，释放锁
 ```
 
-- 生效过程用互斥锁串行化。
-- DB 回滚：校验失败时 DB 写入要一并回滚（先在事务内生成并校验，校验通过再提交）。
-- 面板启动时执行一次「重新生成 + 校验 + 生效」，保证 DB 与磁盘配置一致，并重新应用 Hysteria2 端口跳跃规则。
+### T2.3 事务与恢复约定
+
+原流程图的「先提交 DB」与校验失败回滚要求冲突，现明确采用**全程持有同一数据库事务**，
+直到文件、服务、防火墙成功才提交；不采用事后补偿 DB 的方案。不增加表或依赖。
+`singbox.Manager.Apply(ctx, mutation)` 是后续 T3 写操作的唯一入口，mutation 只能在传入事务中
+读写，不可自行提交/回滚或执行外部副作用。`Restart` / CLI `apply` / `Startup` 复用此入口。
+
+- 生成/check 失败返回 422；DB 所有写入（包括运行参数）均不提交。check 输出先脱敏，
+  不把任意 SQL、命令或凭证原文写入日志。临时文件在所有正常退出路径清理。
+- 替换后任一步失败（重启、5 秒内未存活、防火墙、DB 写入/提交）均恢复 `.bak` 并再次重启、
+  再次检查存活；同时恢复旧防火墙计划，最后回滚 DB。首次生效没有旧配置时删除新文件并停止服务。
+  不从不存在或上一轮遗留的 `.bak` 恢复首次配置。
+- 失败响应为 500，附失败时 journal 最近 30 行的脱敏诊断。恢复失败使用
+  `singbox_rollback_failed`，明确提示服务/防火墙可能尚未恢复；保留 `.bak` / `.pending`，
+  下次生效先重试恢复，恢复仍失败则拒绝继续修改。恢复文件失败时尽力停止新服务。
+- 请求取消不会提前释放 DB 写锁：事务生命周期独立于请求，正常工作仍检查请求 context；
+  恢复使用独立最多 30 秒的 context。外部命令沿用每条最多 5 秒、输出最多 1 MiB 的 runner。
+- `.lock` 是持久的锁文件，不删除；进程退出由内核释放 flock，不需人工清理陈旧锁。
+  同一受管配置必须对应同一 DB。持有事务期间其他 DB 操作可能等待；跨连接写竞争仍受
+  SQLite 的 5 秒 busy timeout 限制，超时需重试。
+- 事务独占一个 `sql.Conn`。COMMIT 出错（例如延迟外键约束）后，丢弃并关闭底层连接，
+  强制清理 SQLite 仍可能打开的事务；再用新连接核对 generation。确认未提交则恢复旧状态；
+  已提交则保留匹配的新状态。若 DB 不可读、结果无法确认，保留恢复记录、返回 500 并明确提示
+  「数据库状态无法确认」，修复 DB 后再自动核对，不声称已经回滚。
+- `.pending` 保存本次随机 generation、原配置是否存在、前后防火墙计划。若进程在提交前中断，
+  SQLite 回滚未提交事务；下次启动/生效先恢复 `.bak` 与旧规则，再从 DB 生成。
+  若 DB 的 `apply_generation` 已匹配 `.pending`，说明已提交，仅清理记录，不错误恢复旧配置。
+  这是崩溃后的恢复机制；SQLite、文件和系统服务之间不是硬件级分布式原子提交。
+- 面板 Linux 生产启动时执行重新生成/check/生效并重放端口跳跃。失败拒绝启动并给修复建议。
+  全新实例尚未安装二进制、无当前配置/恢复记录且无启用入站时，允许启动面板进入后续安装引导。
+  非 Linux / `--dev` 启动跳过生效；管理 API 返回 409，CLI apply 失败并提示 Linux/systemd，
+  不伪装为已成功生效、不写配置或执行系统命令。
+- `applied_firewall` 存储最近成功的 `{ports:[{port,proto}],hops:[{start,end,port}]}` JSON；
+  `apply_generation` 是 32 字节 crypto/rand 的 base64url 值，仅用于中断恢复。
+  Clash API 运行参数和 Hysteria2 证书约定见 CONFIG.md §2 的 T2.3 补充。
+- 单测以临时 DB/文件、fake runner/systemctl/firewall 覆盖成功、生成/check 失败、重启/存活失败、
+  文件失败、防火墙失败、恢复也失败、提交失败、请求取消、并发、启动及恢复记录；真实集成测试只调用
+  `.tools/bin/sing-box check` 校验双入站，服务控制/防火墙仍为 fake，无工具时 Skip。
 
 ## 8. 安全基线
 

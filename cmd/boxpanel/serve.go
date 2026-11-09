@@ -146,9 +146,16 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	if err != nil {
 		return fmt.Errorf("prepare authentication: %w", err)
 	}
+	manager, err := newApplyManager(conn, opts.paths, opts.core, singbox.ApplyOptions{Dev: opts.dev})
+	if err != nil {
+		return err
+	}
+	if err := manager.Startup(ctx); err != nil {
+		return fmt.Errorf("startup configuration apply failed; check core installation, certificates, service and firewall permissions, then run boxpanel apply")
+	}
 	inspector := singbox.Inspector{Dev: opts.dev, Binary: opts.core.binary}
 	system := sysinfo.New(sysinfo.Options{Dev: opts.dev, DiskPath: filepath.Dir(opts.paths.Database), Singbox: inspector})
-	api := httpapi.New(service, httpapi.Options{WebPath: cfg.WebPath, Dev: opts.dev, Logger: logger, System: system})
+	api := httpapi.New(service, httpapi.Options{WebPath: cfg.WebPath, Dev: opts.dev, Logger: logger, System: system, Singbox: manager})
 	handler, err := spa.New(web.Assets, spa.Options{WebPath: cfg.WebPath, Version: version, API: api})
 	if err != nil {
 		return fmt.Errorf("prepare HTTP server: %w", err)

@@ -86,7 +86,17 @@ Reality 测试实际调用 `sing-box generate reality-keypair` 比较格式；�
 - SPEC.md §7 完整实现（事务内生成+校验、原子替换、重启、存活检查、回滚、互斥锁、启动时重新生效、防火墙同步）。
 - Hysteria2 端口跳跃规则下发/清理。
 - `/singbox/restart|logs|config`（脱敏）、`boxpanel apply`。
-- **验收**：用 fake runner 覆盖：check 失败 → DB 回滚；重启失败 → 文件回滚；成功路径。
+- **验收**：用 fake runner 覆盖：check 失败 → DB 回滚；重启失败 → 文件与 DB 回滚并再次重启；成功路径。
+
+T2.3 补充验收（实现范围不扩展到 T3）：
+- [x] 同一 SQLite 事务内生成/check，保持事务直到生效完成；进程内互斥锁与跨进程 flock。
+- [x] 重启/存活失败恢复 .bak 并再次重启；首次失败停止服务；DB 不提交。
+- [x] 恢复也失败、文件/防火墙失败、请求取消、并发两次生效、启动重新生效与中断恢复单测。
+- [x] 可注入 nft/iptables runner 的 Hysteria2 端口跳跃下发、重放与清理；单测不改宿主规则。
+- [x] restart/logs/config API 的认证、CSRF、错误契约与脱敏；CLI apply；不实现 versions/upgrade 或 T3 API。
+- [x] .tools/bin/sing-box 真实 check 集成测试（双入站、临时自签证书；无二进制 Skip）。
+- 事务选择、启动安装前边界、恢复记录见 SPEC.md §7；运行参数与证书布局见 CONFIG.md §2。
+  不新增依赖，不修改前端包清单或锁文件。
 
 ## M3 节点、用户、订阅
 

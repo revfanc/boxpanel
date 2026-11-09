@@ -154,6 +154,10 @@ func (m *Manager) change(ctx context.Context, port int, proto string, open bool)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.changeLocked(ctx, port, proto, open)
+}
+
+func (m *Manager) changeLocked(ctx context.Context, port int, proto string, open bool) error {
 	status, err := m.detect(ctx)
 	if err != nil {
 		return err
@@ -169,7 +173,11 @@ func (m *Manager) change(ctx context.Context, port int, proto string, open bool)
 		if !open {
 			args = append([]string{"--force", "delete"}, args...)
 		}
-		_, err = m.runner.Run(ctx, "ufw", args...)
+		output, runErr := m.runner.Run(ctx, "ufw", args...)
+		err = runErr
+		if !open && strings.Contains(string(output), "Could not delete non-existent rule") {
+			err = nil
+		}
 	case "firewalld":
 		// Update runtime and permanent configuration separately; never reload
 		// (which would discard unrelated runtime rules). Use the default zone.

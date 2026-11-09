@@ -16,6 +16,7 @@ Commands:
   info     Print the panel URL and administrator username
   reset-admin  Reset administrator credentials and revoke sessions
   serve    Serve the panel over HTTPS (see 'boxpanel serve --help')
+  apply    Regenerate, validate and apply sing-box configuration
   singbox  Install or inspect the managed sing-box binary
   version  Print the boxpanel version
   help     Show this help
@@ -32,6 +33,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if args[0] == "serve" {
 		return runServe(args[1:], stdout, stderr)
+	}
+	if args[0] == "apply" {
+		return runApply(args[1:], stdout, stderr)
 	}
 	if args[0] == "singbox" {
 		return runSingbox(args[1:], stdout, stderr)

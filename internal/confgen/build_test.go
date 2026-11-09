@@ -2,13 +2,11 @@ package confgen
 
 import (
 	"bytes"
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -16,9 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/revfanc/boxpanel/internal/certs"
 	"github.com/revfanc/boxpanel/internal/reality"
-	"github.com/revfanc/boxpanel/internal/singbox"
 )
 
 var update = flag.Bool("update", false, "update configuration golden files")
@@ -128,48 +124,7 @@ func TestServerGolden(t *testing.T) {
 			if !bytes.Equal(actual, golden) {
 				t.Fatal("golden mismatch; review change before running go test ./internal/confgen -update")
 			}
-			t.Run("sing_box_check", func(t *testing.T) { checkGolden(t, golden) })
 		})
-	}
-}
-
-func checkGolden(t *testing.T, golden []byte) {
-	t.Helper()
-	binary, err := exec.LookPath("sing-box")
-	if err != nil {
-		t.Skip("sing-box not in PATH; run make tools and make test")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	version, err := exec.CommandContext(ctx, binary, "version").Output()
-	if err != nil || !strings.HasPrefix(string(version), "sing-box version "+singbox.PinnedVersion+"\n") {
-		t.Fatal("golden validation requires the pinned sing-box binary")
-	}
-	dir := t.TempDir()
-	material, err := certs.Hysteria2("www.bing.com", time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	certPath, keyPath := filepath.Join(dir, "hy2.crt"), filepath.Join(dir, "hy2.key")
-	for path, data := range map[string][]byte{certPath: material.Certificate, keyPath: material.PrivateKey} {
-		if err := os.WriteFile(path, data, 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// Check the actual golden bytes, replacing only deployment certificate paths.
-	for old, path := range map[string]string{"/etc/boxpanel/certs/hy2.crt": certPath, "/etc/boxpanel/certs/hy2.key": keyPath} {
-		from, _ := json.Marshal(old)
-		to, _ := json.Marshal(path)
-		golden = bytes.ReplaceAll(golden, from, to)
-	}
-	configPath := filepath.Join(dir, "sing-box.json")
-	if err := os.WriteFile(configPath, golden, 0600); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.CommandContext(ctx, binary, "check", "-c", configPath)
-	cmd.Dir = dir
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("sing-box check: %v\n%s", err, output)
 	}
 }
 

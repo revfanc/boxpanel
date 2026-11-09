@@ -158,6 +158,33 @@ golden 覆盖两种单入站、双入站、无用户、用户过滤边界、BT �
 T2.2 不写服务端 JSON、不重启服务、不生成端口跳跃规则、不实现 Reality 目标探测或 HTTP API；
 这些分别属于 T2.3/T3.1。不新增依赖，不修改前端包清单或锁文件。
 
+### T2.3 运行参数、证书与端口跳跃
+
+- 首次成功生效在同一事务内持久化 `clash_api_port`（int）和 `clash_api_secret`（string）；
+  端口用 crypto/rand 从 10000–60000 选择并探测 loopback 可绑定，排除面板端口及 VLESS 端口，
+  secret 为 32 字节 crypto/rand 的无 padding base64url。后续生效/重启复用，端口抢占由重启检查发现。
+- Hysteria2 自签证书由生效入口按入站生成，位于 `<singbox-config 所在目录>/certs/`，
+  文件名 `hy2-<入站 ID>-<SNI SHA-256 前 16 位 hex>.{crt,key}`。此处细化原单入站 `hy2.{crt,key}`
+  默认示意，以支持不同 SNI 并在修改失败时保留旧证书。目录 0700、文件 0600；不覆盖已有证书对，
+  重用前校验私钥匹配、SAN 和有效期；缺半对/损坏/过期须恢复或更新证书后重试。
+  证书在 DB 事务外是不可变材料；失败或删除入站时保留未引用文件，供回滚/人工恢复，避免误删有效凭证。
+  `hysteria2_fingerprints` 为 settings 中按 ID 字符串索引的指纹 map，仅在成功生效时提交。
+- 只为启用的入站开放服务端口：VLESS TCP、Hysteria2 UDP；删除/禁用会关闭上次成功计划中对应端口。
+  端口跳跃的入站范围须在 1–65535、有序、互不重叠，不得覆盖其他启用的 Hysteria2 服务端口。
+  本机 INPUT 在 PREROUTING 重定向后匹配目标端口，故开放目标 UDP 端口即可；云安全组仍需放行跳跃范围。
+- nft 存在时使用专用 `inet boxpanel_hopping` 表，prerouting NAT 基链、priority dstnat，
+  仅匹配本机目的地址（`fib daddr type local`）的 UDP 范围并 REDIRECT 到服务端口；
+  一次 nft 批处理原子替换本表，空计划删除本表，不修改其他 NAT 表或系统规则集。
+  nft 不存在时使用 iptables + ip6tables 的专用 `BOXPANEL_HY2` 链和带 `boxpanel:hy2`
+  注释的 PREROUTING 跳转，同样只匹配 LOCAL 目的地址；两地址族都必需。
+  iptables 更新不具备跨地址族原子性，部分失败交由 §7 恢复旧计划。
+- 启动重放、重复生效、删除/禁用均重建或清理面板专有规则。专用表/链名称保留给面板；
+  不在其他用途手动使用。只在工具缺失时降级，nft 权限/语法失败不会改用 iptables 绕过。
+  生效过程中不要切换防火墙后端；多管理器、其他规则/云安全组的限制沿用 SPEC.md §9。
+  外部命令通过可注入 host.Runner 参数数组调用；单测只用假输出，不操作宿主防火墙。
+  语义依据 [nftables 官方手册](https://www.netfilter.org/projects/nftables/manpage.html)
+  和 [iptables REDIRECT 手册](https://www.man7.org/linux/man-pages/man8/iptables-extensions.8.html#REDIRECT)。
+
 ## 3. 规则设置（`settings.rules`）
 
 ```json

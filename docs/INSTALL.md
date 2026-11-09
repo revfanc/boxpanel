@@ -224,6 +224,19 @@ make test                     # 工具存在时自动把 .tools/bin 加到 Go �
 下载器、时钟、二进制命令、systemctl 和单元写入都可注入，单测只用假响应/假命令与临时文件，
 不访问网络、不执行 systemctl。`make tools` 使用同一个安装器，但不访问 DB、配置或服务单元。
 
+### T2.3 生效与恢复
+
+`boxpanel apply` 复用数据路径参数及 `--singbox-path` / `--singbox-config`，优先级与 serve 一致。
+必须先 init 和 singbox install，生产环境在 Linux/systemd 下运行；成功只在 check、重启存活与
+防火墙同步全部完成后打印。macOS / `--dev` 返回失败说明；本机的真实 check 集成测试使用
+`.tools/bin/sing-box`，不会调用真实 systemctl 或防火墙。`serve` 启动时重用同一生效路径。
+
+配置目录必须已存在且可写，配置、`.tmp/.bak/.pending/.lock` 不得覆盖 DB、WAL/SHM、面板证书、
+受管二进制或服务单元。Hysteria2 材料相对配置目录保存，重启无需额外路径参数。
+`sing-box.json.lock` 不删除；`.pending` 由生效流程自动恢复/清理，不手工删除。
+若提示自动恢复失败，检查 `.bak`、受管服务 journal 和面板专用防火墙表/链，修复权限/端口后
+再次执行相同路径参数的 `boxpanel apply`。具体事务和恢复记录语义见 SPEC.md §7。
+
 ## 5. 发布（`.github/workflows/release.yml`）
 
 - 触发：推送 `v*` tag。
