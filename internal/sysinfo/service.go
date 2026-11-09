@@ -12,12 +12,17 @@ import (
 
 	"github.com/revfanc/boxpanel/internal/firewall"
 	"github.com/revfanc/boxpanel/internal/host"
+	"github.com/revfanc/boxpanel/internal/singbox"
 )
 
 var ErrUnsupported = errors.New("system operation requires Linux without --dev")
 
 type Firewall interface {
 	Status(context.Context) (firewall.Status, error)
+}
+
+type SingboxStatus interface {
+	Status(context.Context) (singbox.Status, error)
 }
 
 type Options struct {
@@ -30,6 +35,7 @@ type Options struct {
 	Now       func() time.Time
 	Probe     PublicIPProbe
 	Firewall  Firewall
+	Singbox   SingboxStatus
 }
 
 type Service struct {
@@ -67,6 +73,10 @@ func New(opts Options) *Service {
 	if opts.Firewall == nil {
 		opts.Firewall = firewall.New(firewall.Options{OS: opts.OS, Dev: opts.Dev, Runner: opts.Runner})
 	}
+	if opts.Singbox == nil {
+		opts.Singbox = singbox.Inspector{OS: opts.OS, Dev: opts.Dev, Runner: opts.Runner,
+			Controller: singbox.NewSystemd(singbox.SystemdOptions{OS: opts.OS, Dev: opts.Dev, Runner: opts.Runner, Files: opts.Files})}
+	}
 	return &Service{opts: opts}
 }
 
@@ -86,12 +96,7 @@ type Port struct {
 	Free  *bool  `json:"free"`
 }
 
-type Singbox struct {
-	Installed bool   `json:"installed"`
-	Running   bool   `json:"running"`
-	Version   string `json:"version"`
-	Uptime    int64  `json:"uptime"`
-}
+type Singbox = singbox.Status
 
 type Check struct {
 	OS   string `json:"os"`
@@ -191,7 +196,17 @@ func (s *Service) Check(ctx context.Context) (Check, error) {
 			}
 		}
 	}
-	add("singbox", "warn", "尚未接入 sing-box 管理", "请在支持内核管理的面板版本中安装 sing-box 后重试。")
+	result.Singbox, err = s.opts.Singbox.Status(ctx)
+	switch {
+	case err != nil:
+		add("singbox", "error", "无法读取 sing-box 状态", "请运行 boxpanel singbox status，检查受管二进制、systemd 单元和权限后重试。")
+	case !result.Singbox.Installed:
+		add("singbox", "warn", "尚未安装 sing-box", "请运行 boxpanel singbox install 安装锁定版本。")
+	case !result.Singbox.Running:
+		add("singbox", "warn", "sing-box 尚未运行", "请完成节点配置并通过配置生效流程启动服务；已配置时请检查 systemd 日志。")
+	default:
+		add("singbox", "ok", "sing-box 正在运行", "可继续配置节点与用户。")
+	}
 	return result, nil
 }
 

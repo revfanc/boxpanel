@@ -85,6 +85,10 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 	if result.Disk.Total == 0 || result.Disk.Used > result.Disk.Total {
 		return result, fmt.Errorf("invalid filesystem usage")
 	}
+	result.Singbox, err = s.opts.Singbox.Status(ctx)
+	if err != nil {
+		return result, fmt.Errorf("read sing-box status: %w", err)
+	}
 	current := sample{cpu: cpu, net: network, at: s.opts.Now()}
 	if prev := s.previous; prev != nil && current.at.After(prev.at) {
 		if cpu.total > prev.cpu.total && cpu.idle >= prev.cpu.idle {

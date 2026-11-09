@@ -1,5 +1,6 @@
 # Go
 /bin/
+/.tools/
 *.test
 *.out
 /dev.db*

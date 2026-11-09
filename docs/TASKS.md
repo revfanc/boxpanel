@@ -64,6 +64,14 @@ sing-box 状态保留未安装占位值；启动同步、端口跳跃、setup/po
 - systemd 单元生成与 `systemctl` 封装（接口化，dev 模式 mock）。
 - **验收**：下载 URL 拼接与架构映射单测。
 
+范围补充：锁定版本 1.14.4（2026-10-24T01:04:25Z，稳定版且已发布超过 7 天）；
+官方未提供独立校验文件，核对资产 API 的 SHA-256，并检查 tar 结构与版本输出。
+详细校验规则、路径覆盖、安装重试和已有配置时的版本切换限制见 INSTALL.md §4。
+新增 `make tools`，将宿主平台二进制安装到忽略的 `.tools/bin/`，`make test` 按存在情况加入 PATH；
+CI 在测试前运行 `make tools`。所有单测用注入的下载/命令，无网络/systemctl。
+接入已有 `/system/check|status` 的内核状态，不新增 `/singbox/*` API；
+不生成配置、不启动服务、不做 T2.2/T2.3 或 T6 安装脚本。
+
 ### T2.2 配置生成（服务端）
 - `internal/reality`：X25519 密钥、short_id；`internal/certs`：hy2 自签证书与指纹。
 - `internal/confgen`：按 CONFIG.md §2 生成，支持 vless_reality、hysteria2；用户过滤规则；输出稳定。

@@ -38,7 +38,7 @@
 ```
 
 以上为生产默认路径；T1.2 的数据、数据库和证书路径均可用参数/环境变量覆盖，
-本机开发及测试无需 root，详见 INSTALL.md §3。systemd 与 sing-box 的路径配置随 T2.1 实现。
+本机开发及测试无需 root，详见 INSTALL.md §3。systemd 与 sing-box 的路径覆盖见 INSTALL.md §4。
 
 ## 4. 网络入口
 
@@ -271,3 +271,14 @@ MVP 规则：**所有启用的用户加入所有启用的入站**。超额/过�
   命令依据 [ufw 手册](https://manpages.ubuntu.com/manpages/jammy/man8/ufw.8.html)、
   [firewalld 手册](https://firewalld.org/documentation/man-pages/firewall-cmd) 与
   [nftables 手册](https://www.netfilter.org/projects/nftables/manpage.html)。
+
+## 10. T2.1 二进制与 systemd 边界
+
+- 锁定 sing-box 1.14.4（2026-10-24T01:04:25Z），版本与发布时间常量集中在
+  `internal/singbox/version.go`；下载、校验、开发工具与路径覆盖约定见 INSTALL.md §4。
+- 新增 CLI `singbox install|status`、两个 systemd 单元生成函数与可注入的控制接口。
+  服务状态接入 T1.3 的系统自检与状态接口；状态不以 DB 版本记录代替实际二进制检查。
+- 安装只原子替换验证后的二进制、写入单元并 daemon-reload；不启用/启动/重启服务。
+  同版本可重试补齐单元及 DB 记录，已有配置时的版本升级需要 T7.6 的 check/回滚流程。
+- 非 Linux/开发模式保持无系统副作用。下载和命令接口可注入，测试不依赖网络或 systemd。
+  不新增 Go/前端依赖；配置生成、配置写入、check/apply、端口跳跃与防火墙同步留在 T2.2/T2.3。

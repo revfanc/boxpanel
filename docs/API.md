@@ -87,8 +87,12 @@ T1.2 边界：
 - `ports` 固定为 `443/tcp`、`8443/udp`，`free` 为 `true/false/null`；null 表示未知，
   不把检测失败当成空闲。检测失败时 firewall 为 `{type:"unknown",active:false}`，
   正常 type 为 `none|ufw|firewalld|nftables|iptables`，active 由当前状态判断。
-- 上方 sing-box 响应是最终目标示例。T1.3 不检查或操作现有 sing-box，check/status 的
-  `singbox` 暂统一返回 `{installed:false,running:false,version:"",uptime:0}`，等待 T2.1 接入。
+- T2.1 已将 check/status 的 `singbox` 接入受管二进制和 systemd 实际状态：
+  `{installed,running,version,uptime}`，version 为二进制版本，uptime 为当前服务运行整秒数。
+  二进制不存在时返回 `{installed:false,running:false,version:"",uptime:0}`；
+  二进制存在但服务未启动/单元不存在时 installed=true、running=false、uptime=0。
+  命令/权限/解析错误在 check 中产生 `singbox` error 检查项（保留已知的 installed/version），
+  status 返回 500，不冒充正常停止，也不暴露原始命令输出。非 Linux/`--dev` 仍返回占位值。
 - `/system/public-ip` 按 CONFIG.md §6 分别探测两个地址族，缺失/冲突的地址族为空字符串；
   至少一个地址族成功即 200，两个都失败返回 `500 internal_error`，提示检查网络后重试。
   重新探测不会覆盖 DB 中的 `public_host`。
@@ -121,6 +125,8 @@ T1.2 边界：
   计数定义参考 [Linux proc 文档](https://docs.kernel.org/filesystems/proc.html)。
 
 ## sing-box
+
+以下 `/singbox/*` 路由仍属于 T2.3/后续任务，T2.1 只接入上述系统状态和 CLI。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|

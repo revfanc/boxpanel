@@ -21,6 +21,7 @@ import (
 	"github.com/revfanc/boxpanel/internal/app"
 	"github.com/revfanc/boxpanel/internal/auth"
 	"github.com/revfanc/boxpanel/internal/httpapi"
+	"github.com/revfanc/boxpanel/internal/singbox"
 	"github.com/revfanc/boxpanel/internal/spa"
 	"github.com/revfanc/boxpanel/internal/sysinfo"
 	"github.com/revfanc/boxpanel/web"
@@ -34,6 +35,7 @@ type serveOptions struct {
 	dev        bool
 	paths      app.Paths
 	listenHost string
+	core       singboxPaths
 }
 
 func resolveServeConfig(ctx context.Context, conn *sql.DB, opts serveOptions) (app.Config, error) {
@@ -60,6 +62,7 @@ func parseServeOptions(args []string, output io.Writer) (serveOptions, error) {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(output)
 	paths := addPathFlags(flags)
+	core := addSingboxPaths(flags)
 	flags.StringVar(&opts.webPath, "web-path", "", "override database web_path (lowercase letters and digits; empty mounts at /)")
 	flags.IntVar(&opts.port, "port", 0, "override database web_port (1-65535)")
 	flags.StringVar(&opts.listenHost, "listen-host", os.Getenv("BOXPANEL_LISTEN_HOST"), "listen IP (BOXPANEL_LISTEN_HOST; default all interfaces; use 127.0.0.1 for local testing)")
@@ -97,6 +100,7 @@ func parseServeOptions(args []string, output io.Writer) (serveOptions, error) {
 	if err != nil {
 		return opts, err
 	}
+	opts.core = core.resolve(paths, opts.dev)
 	return opts, nil
 }
 
@@ -142,7 +146,8 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	if err != nil {
 		return fmt.Errorf("prepare authentication: %w", err)
 	}
-	system := sysinfo.New(sysinfo.Options{Dev: opts.dev, DiskPath: filepath.Dir(opts.paths.Database)})
+	inspector := singbox.Inspector{Dev: opts.dev, Binary: opts.core.binary}
+	system := sysinfo.New(sysinfo.Options{Dev: opts.dev, DiskPath: filepath.Dir(opts.paths.Database), Singbox: inspector})
 	api := httpapi.New(service, httpapi.Options{WebPath: cfg.WebPath, Dev: opts.dev, Logger: logger, System: system})
 	handler, err := spa.New(web.Assets, spa.Options{WebPath: cfg.WebPath, Version: version, API: api})
 	if err != nil {

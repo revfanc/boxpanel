@@ -4,7 +4,7 @@ VERSION ?= dev
 
 export CGO_ENABLED := 0
 
-.PHONY: build build-web dev-web dev-server lint test
+.PHONY: build build-web dev-web dev-server lint test tools
 
 build: build-web
 	mkdir -p bin
@@ -30,7 +30,12 @@ lint:
 	$(PNPM) --dir web lint
 
 test:
-	$(GO) test ./...
+	@if [ -x "$(CURDIR)/.tools/bin/sing-box" ]; then \
+		PATH="$(CURDIR)/.tools/bin:$$PATH" $(GO) test ./...; \
+	else $(GO) test ./...; fi
 	$(PNPM) --dir web typecheck
 	$(PNPM) --dir web lint
 	$(PNPM) --dir web test
+
+tools:
+	$(GO) run ./cmd/tools

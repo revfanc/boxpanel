@@ -60,6 +60,6 @@ func (a *api) systemError(w http.ResponseWriter, err error) {
 	default:
 		// Host command output is never sent to the client or request log.
 		a.opts.Logger.Error("system operation failed; check host permissions, procfs and outbound connectivity")
-		writeError(w, 500, "internal_error", "系统操作失败", "请检查 Linux 系统权限、/proc 挂载、出站网络及系统工具后重试；BBR 操作失败时请核对 sysctl 参数和 /etc/sysctl.d/99-boxpanel-bbr.conf。")
+		writeError(w, 500, "internal_error", "系统操作失败", "请检查 Linux 系统权限、/proc 挂载、出站网络及系统工具后重试；内核状态异常请运行 boxpanel singbox status；BBR 操作失败时请核对 sysctl 参数和 /etc/sysctl.d/99-boxpanel-bbr.conf。")
 	}
 }

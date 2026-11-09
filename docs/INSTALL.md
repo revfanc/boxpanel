@@ -50,7 +50,7 @@ uninstall：二次确认 → 停服务、删单元 → 清防火墙规则与端�
 | `boxpanel info` | 打印面板地址、用户名（不打印密码） |
 | `boxpanel reset-admin` | 重置管理员用户名与密码并打印 |
 | `boxpanel set port <N>` / `set path <p>` | 修改面板端口/路径并重启面板 |
-| `boxpanel singbox install [--version v]` | 安装/切换 sing-box 版本 |
+| `boxpanel singbox install [--version v]` | 安装 sing-box；未生成配置时可切换稳定版本，已有配置的升级留在 T7.6 |
 | `boxpanel singbox status` | 版本、运行状态 |
 | `boxpanel apply` | 重新生成并生效 sing-box 配置 |
 | `boxpanel version` | |
@@ -118,6 +118,13 @@ bin/boxpanel serve --data-dir "$DATA_DIR" --listen-host 127.0.0.1
 
 ## 4. systemd 单元
 
+T2.1 由 `internal/singbox.GenerateUnits` 生成以下两个单元。
+`boxpanel singbox install` 写入单元并执行 `daemon-reload`，**不 enable/start/restart**；
+启用服务属于 T6.1，配置生成与首次生效属于 T2.2/T2.3。
+实际模板会为 ExecStart 中的绝对路径加引号，转义引号、反斜杠、`%`、`$`，
+并显式传入 DB、证书和 sing-box 路径，保证重启后仍使用安装时的路径覆盖。
+下方是默认路径下的简写示例。
+
 `boxpanel.service`：
 
 ```ini
@@ -158,13 +165,72 @@ WantedBy=multi-user.target
 
 服务名带前缀，避免与用户已装的 `sing-box.service` 冲突；安装时若检测到 443 被已有 sing-box/xray/nginx 占用，引导自检中给出警告。
 
+### T2.1 安装、校验与开发工具
+
+- 锁定版本 **1.14.4**，官方 `published_at` 为 **2026-10-24T01:04:25Z**。
+  2026-11-09 查证 [最新稳定 Release](https://github.com/SagerNet/sing-box/releases/tag/v1.14.4)
+  及 [Release API](https://api.github.com/repos/SagerNet/sing-box/releases/tags/v1.14.4)：
+  非 draft/prerelease，已发布超过 7 天。更新目标版本只改 `internal/singbox/version.go`，
+  同步此处的查证记录；运行时不会自动跟随 latest。
+- 该 Release 的 171 个资产中**没有独立 checksums/SHA-256 文件**，资产 API 的 `digest`
+  提供 SHA-256。安装器核对该摘要，并检查 tar 结构与解包后二进制的 `sing-box version`。
+  其他显式指定版本如提供校验文件则必须校验（支持 `SHA256  filename` / `SHA256 *filename`
+  格式）；校验文件存在但缺项、损坏或格式不支持时失败，不降级跳过。
+  未提供校验文件/摘要时仍强制执行结构与版本检查，符合 §2 的最低要求。
+- 仅从官方固定仓库的 HTTPS Release API 和资产 URL 下载，校验实际 tag、发布时间和稳定状态；
+  `--version` 接受 `1.14.4` 或 `v1.14.4`，拒绝 alpha/beta/rc、路径片段和发布未满 7 天的下载。
+  Linux 生产支持 amd64/arm64，开发工具另支持 darwin/amd64、darwin/arm64；
+  `x86_64`、`aarch64` 分别映射为 amd64、arm64。
+- 下载总窗口 3 分钟，单 HTTP 请求至多 2 分钟；元数据 2 MiB、校验文件 1 MiB、
+  压缩包 128 MiB、展开总量 256 MiB，最多 64 个 tar 条目。
+  拒绝目录穿越、绝对路径、重复条目、链接及设备文件，必须有非空的
+  `sing-box-{version}-{os}-{arch}/sing-box` 普通文件；只提取该二进制。
+  在目标目录内 staging，校验 gzip CRC、摘要及版本后原子 rename，失败保留原二进制并清理临时文件。
+- 生产安装需要先用同一套路径执行 `boxpanel init`，确认 Linux/systemd 与写入权限。
+  相同版本重复安装会验证现有二进制，补写单元并 reload，不重复下载。
+  安装锁在二进制目录 `.boxpanel-singbox-install.lock`；中断遗留时，确认没有安装进程后可删除锁重试。
+  单元写入/reload/DB 记录失败会明确报错；此时二进制可能已经安装，重试可补齐剩余步骤。
+  DB 的 `singbox_version` 仅在这些步骤成功后更新，status 始终从二进制和 systemd 读取实际状态。
+- T2.1 不执行现有配置的升级验证与回滚；需要替换二进制时，运行中的服务或已有配置会使安装被拒绝。
+  因此 `--version` 的版本切换仅适用于尚未配置的实例；已有配置的升级流程属于 T7.6。
+  不写入任何 sing-box JSON，不修改防火墙，不接入 `/singbox/*` 管理 API。
+- systemctl 通过 `host.Runner` 的参数数组执行，每条命令最多 5 秒、输出最多 1 MiB；
+  控制接口只接受 `boxpanel.service` 和 `boxpanel-singbox.service`。
+  状态使用 `systemctl show` 的 LoadState/ActiveState/ActiveEnterTimestampMonotonic，
+  运行时长结合 `/proc/uptime` 计算；未安装/未运行与检查失败分别处理，不将权限错误伪装为停止。
+- `--dev` 的 install/status 为明确标注的 mock，不下载、不写文件/DB、不执行命令。
+  非 Linux 的 status 返回同样占位状态，非 Linux 的服务安装报错并提示使用 `make tools`。
+  `serve --dev` 和 macOS 自检仍不读取 Linux 系统数据。
+
+路径优先级：显式参数 > 环境变量 > 默认值。`singbox install|status` 复用 §3 的数据路径参数；
+`serve` 同样支持下表的前两项。所有写入路径不得互相重合或覆盖生成的服务单元。
+
+| 参数 | 环境变量 | 默认值 |
+|---|---|---|
+| `--singbox-path` | `BOXPANEL_SINGBOX_PATH` | `/usr/local/share/boxpanel/sing-box` |
+| `--singbox-config` | `BOXPANEL_SINGBOX_CONFIG` | `<data-dir>/sing-box.json`（不随独立 `--db-path` 移动） |
+| `--unit-dir`（install） | `BOXPANEL_UNIT_DIR` | `/etc/systemd/system` |
+| `--panel-binary`（install） | `BOXPANEL_BINARY` | `/usr/local/bin/boxpanel` |
+
+非默认 unit-dir 需位于 systemd 的单元搜索路径；临时目录主要用于注入控制器的测试。
+
+```bash
+make tools                    # 下载锁定的宿主 OS/架构版本到 .tools/bin/sing-box
+.tools/bin/sing-box version
+make test                     # 工具存在时自动把 .tools/bin 加到 Go 测试的 PATH
+```
+
+`.tools/` 已忽略，不进入版本库；`make test` 本身不下载工具。
+下载器、时钟、二进制命令、systemctl 和单元写入都可注入，单测只用假响应/假命令与临时文件，
+不访问网络、不执行 systemctl。`make tools` 使用同一个安装器，但不访问 DB、配置或服务单元。
+
 ## 5. 发布（`.github/workflows/release.yml`）
 
 - 触发：推送 `v*` tag。
 - 步骤：pnpm 构建前端 → `CGO_ENABLED=0` 交叉编译 `linux/amd64`、`linux/arm64`（`-trimpath -ldflags "-s -w -X main.version=<tag>"`）→ 打包 `boxpanel-linux-{arch}.tar.gz` → 生成 `checksums.txt` → 创建 GitHub Release 并上传。
 - `ci.yml`：PR 与 main 推送时跑 `make lint test build`、`shellcheck scripts/install.sh`；安装 sing-box 锁定版本以便 golden test 跑 `sing-box check`。
 
-当前 M0 阶段：CI 在 Linux 与 macOS 上使用 Go 1.27、Node 24 和
-`web/package.json` 固定的 pnpm，执行 `make lint test build` 及 `bin/boxpanel version`。
-sing-box 安装检查随 T2.1/T2.2 接入；`shellcheck` 随 T6.1 的 `scripts/install.sh`
-接入。骨架阶段尚无这些文件，不提前实现后续任务。
+当前 T2.1 阶段：CI 在 Linux 与 macOS 上使用 Go 1.27、Node 24 和
+`web/package.json` 固定的 pnpm，执行 `make tools lint test build` 及 `bin/boxpanel version`。
+`make tools` 在单测之外安装锁定的宿主版本，T2.2 及后续的 golden test 可直接发现该工具；
+`shellcheck` 随 T6.1 的 `scripts/install.sh` 接入，不提前实现安装脚本。

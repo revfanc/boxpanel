@@ -25,6 +25,10 @@ func TestServeOptions(t *testing.T) {
 		{name: "dev overrides", args: []string{"--port", "23053", "--web-path", "panel", "--listen-host", "0.0.0.0", "--dev"}, want: serveOptions{dev: true, port: 2053, portSet: true, webPathSet: true, listenHost: "127.0.0.1", paths: development}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			tt.want.core = singboxPaths{binary: "/usr/local/share/boxpanel/sing-box", config: "/etc/boxpanel/sing-box.json"}
+			if tt.want.dev {
+				tt.want.core.config = "sing-box.json"
+			}
 			got, err := parseServeOptions(tt.args, io.Discard)
 			if err != nil || got != tt.want {
 				t.Fatalf("options=%+v error=%v, want %+v", got, err, tt.want)

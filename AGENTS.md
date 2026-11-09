@@ -30,6 +30,7 @@ make dev-web      # 前端开发服务器（代理 /api 到后端）
 make dev-server   # 后端开发模式（web_path 为空，监听 127.0.0.1:2053）
 make build        # 先构建前端，再构建 Go 二进制到 bin/boxpanel
 make test         # go test ./... + 前端 typecheck/lint/vitest
+make tools        # 下载锁定的宿主 sing-box 到 .tools/bin；make test 自动加入 PATH
 make lint         # go vet + gofmt 检查 + eslint
 ```
 

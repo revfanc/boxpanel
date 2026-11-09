@@ -71,6 +71,13 @@ func (r *fakeRunner) Run(ctx context.Context, name string, args ...string) ([]by
 
 type fakeFirewall struct{ err error }
 
+type fakeSingbox struct {
+	status Singbox
+	err    error
+}
+
+func (f fakeSingbox) Status(context.Context) (Singbox, error) { return f.status, f.err }
+
 func (f fakeFirewall) Status(context.Context) (firewall.Status, error) {
 	return firewall.Status{Type: "ufw", Active: true}, f.err
 }
@@ -95,7 +102,7 @@ func fixture() (*Service, *fakeFiles, *fakeRunner) {
 			return nil, fmt.Errorf("unexpected command %s", name)
 		}
 	}
-	s := New(Options{OS: "linux", Arch: "arm64", Files: f, Runner: r, Firewall: fakeFirewall{},
+	s := New(Options{OS: "linux", Arch: "arm64", Files: f, Runner: r, Firewall: fakeFirewall{}, Singbox: fakeSingbox{},
 		DiskUsage: func(string) (Usage, error) { return Usage{Used: 10, Total: 100}, nil },
 		Probe: func(context.Context) (PublicIPs, error) {
 			return PublicIPs{IPv4: "203.0.113.1", IPv6: "2001:db8::1"}, nil
@@ -293,6 +300,33 @@ func TestUnsupportedDoesNoHostIO(t *testing.T) {
 		}
 		if !reflect.DeepEqual(r.calls, []string(nil)) {
 			t.Fatal("executed host command")
+		}
+	}
+}
+
+func TestSingboxStatusIntegration(t *testing.T) {
+	for _, tc := range []struct {
+		status Singbox
+		err    error
+		level  string
+	}{
+		{Singbox{}, nil, "warn"}, {Singbox{Installed: true, Version: "1.14.4"}, nil, "warn"},
+		{Singbox{Installed: true, Running: true, Version: "1.14.4", Uptime: 12}, nil, "ok"},
+		{Singbox{Installed: true}, errors.New("private command output"), "error"},
+	} {
+		s, _, _ := fixture()
+		s.opts.Singbox = fakeSingbox{status: tc.status, err: tc.err}
+		check, err := s.Check(context.Background())
+		if err != nil || check.Singbox != tc.status {
+			t.Fatal(check, err)
+		}
+		last := check.Items[len(check.Items)-1]
+		if last.ID != "singbox" || last.Level != tc.level || strings.Contains(last.Hint, "private command output") {
+			t.Fatal(last)
+		}
+		status, err := s.Status(context.Background())
+		if (err != nil) != (tc.err != nil) || status.Singbox != tc.status {
+			t.Fatal(status, err)
 		}
 	}
 }
