@@ -10,7 +10,7 @@ import (
 //go:embed all:dist
 var dist embed.FS
 
-// Assets is rooted at dist, ready for the SPA handler added in T0.2.
+// Assets is rooted at dist for the SPA handler.
 var Assets = frontendAssets()
 
 func frontendAssets() fs.FS {

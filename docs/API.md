@@ -14,6 +14,7 @@
 |---|---|
 | 400 | 参数校验失败（`code: invalid_argument`，`detail` 给字段错误） |
 | 401 | 未登录 / 会话过期 |
+| 404 | API 路径不存在（`code: not_found`）；返回 JSON 错误，不回退到 SPA |
 | 409 | 端口被占用、名称重复 |
 | 422 | `sing-box check` 未通过（配置未生效，DB 已回滚） |
 | 429 | 限流 |

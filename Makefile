@@ -16,8 +16,8 @@ build-web:
 dev-web:
 	$(PNPM) --dir web dev
 
-# The serve command is implemented in T0.2; full --dev behavior follows in T1.2.
-dev-server:
+# Build the embedded shell even on a fresh checkout; full --dev follows in T1.2.
+dev-server: build-web
 	$(GO) run ./cmd/boxpanel serve --dev
 
 lint:

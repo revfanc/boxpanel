@@ -19,24 +19,30 @@ bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/main/script
 ## 开发
 
 需要 Go 1.23+、Node 24+、pnpm（`web/package.json` 固定版本，当前为 12.18.0）。
-当前完成 T0.1 仓库骨架；CLI 仅支持 `version` 和帮助，前端为占位页。
+当前完成 T0.2 SPA 服务与 history 回退；前端提供概览、用户列表、用户详情三个占位页。
 
 ```bash
 pnpm --dir web install --frozen-lockfile
-make dev-web      # 查看前端占位页
+make dev-server   # HTTP 127.0.0.1:2053，web_path 为空
+make dev-web      # 在另一个终端启动 Vite，/api 代理到后端
 make lint
 make test
 make build
 bin/boxpanel version
+bin/boxpanel serve --web-path k3m9x2p7q1ab --port 2053
 ```
 
 `make build` 先构建前端，再以 `CGO_ENABLED=0` 编译到 `bin/boxpanel`。
 默认版本为 `dev`，可用 `make build VERSION=v0.1.0` 覆盖。
 `web/dist/` 的构建产物不提交；保留 `.gitkeep`，全新检出也能编译 embed 包。
 
-`make dev-server` 已预留为 `go run ./cmd/boxpanel serve --dev`，目前会报命令不支持。
-最小 `serve` 和 history 路由在 T0.2 实现，完整开发模式在 T1.2 实现。
-Vite 已预设 `/api` 代理到 `http://127.0.0.1:2053`，供后续后端使用。
+生产构建后，打开 `http://127.0.0.1:2053/k3m9x2p7q1ab/users/3` 并刷新可验证深链接；
+JS/CSS 资源应从 `/k3m9x2p7q1ab/assets/` 加载。也可通过页面链接切换三个占位路由。
+`serve` 暂时只提供本机 HTTP，默认路径为 `boxpanel`，参数见 `bin/boxpanel serve --help`。
+`make dev-server` 会先构建嵌入页面，再以 `--dev` 启动；完整开发模式（DB、认证等）在 T1.2 实现。
+
+T0.2 新增 `react-router` 依赖，用于规格要求的 `createBrowserRouter` history 路由、
+运行时 basename 和站内 `Link` 导航；版本由 `web/package.json` 与 lockfile 固定。
 
 前端使用 TypeScript 7 稳定编译器（包别名 `typescript-compiler`）执行严格类型检查；
 `typescript` 6.0.3 仅作为 ESLint 的兼容依赖，因为当前稳定版 `typescript-eslint`

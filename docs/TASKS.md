@@ -25,6 +25,10 @@ sing-box 校验和安装脚本检查在对应任务加入，见 INSTALL.md §5�
 - 前端放 3 个占位路由（`/`、`/users`、`/users/:id`），用 `createBrowserRouter` + 运行时 basename。
 - **验收**：Go 单测覆盖 FRONTEND.md §1 的 5 条规则；手动：生产构建后直接访问 `/{path}/users/3` 并刷新，页面正常、资源加载 200。
 
+范围补充：临时 CLI 参数与默认值见 INSTALL.md §3；`--dev` 在本任务仅实现
+HTTP、`127.0.0.1:2053`、空 `web_path`，使 `make dev-server` 可运行。
+DB、认证、HTTPS、systemctl mock 等完整开发模式仍属于 T1.2。
+
 ## M1 后端基础
 
 ### T1.1 DB 与迁移

@@ -26,11 +26,22 @@
 
 `<base>` 保证深链接（如 `/{web_path}/users/3`）刷新时 `./assets/*.js` 仍解析到正确位置。
 
+T0.2 补充边界约定：
+
+- `web_path` 为不带斜杠的非空 `[a-z0-9]+`，或空字符串（挂在根目录）；12 位随机值在 T1.2 初始化时生成。
+- 301 重定向保留查询参数。面板前缀必须匹配完整路径段，前缀外返回空白 404。
+- 显式访问 `index.html` 也走注入与 `no-store`，不返回原始占位模板；注入先于相对资源标签，运行时 JSON 使用 HTML 安全转义。
+- GET 与 HEAD 使用同一路由规则（HEAD 无响应体）；SPA 的其他方法返回 405。API 接收所有方法，`/api` 本身也保留给 API；T0.2 尚无业务 API，统一返回 API.md 中的 JSON 404。
+- `spa.Options.API` 可接入后续 API handler，收到的路径已剥离面板前缀，保留 `/api/...`；接入的 API 路由须自行提供 JSON 404。
+- 只直接提供文件，不展示目录列表；不存在的文件以最后一段扩展名判断，其他路径回退。SPA 请求中含 `.`、`..` 路径段或重复斜杠的非规范路径返回空白 404。
+- 嵌入的 `index.html` 缺失或注入标记不是恰好一个时，启动失败并提示 `make build`，然后重启新二进制。
+
 ### 前端
 
 ```ts
 // web/src/lib/runtime.ts
-export const BASE = (window as any).__BOXPANEL__?.base ?? "";   // 开发模式为空
+// 为 window.__BOXPANEL__ 声明可选的 { base: string; version: string } 类型。
+export const BASE = window.__BOXPANEL__?.base ?? "";   // 开发模式为空
 export const API_BASE = `${BASE}/api/v1`;
 
 // web/src/router.tsx

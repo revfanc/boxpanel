@@ -4,9 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-
-	// Include the frontend assets; HTTP serving is added in T0.2.
-	_ "github.com/revfanc/boxpanel/web"
 )
 
 // version can be set at build time with -ldflags "-X main.version=<version>".
@@ -15,6 +12,7 @@ var version = "dev"
 const usage = `Usage: boxpanel <command>
 
 Commands:
+  serve    Serve the panel over HTTP (see 'boxpanel serve --help')
   version  Print the boxpanel version
   help     Show this help
 `
@@ -27,6 +25,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stdout, usage)
 		return 0
+	}
+	if args[0] == "serve" {
+		return runServe(args[1:], stdout, stderr)
 	}
 	if len(args) != 1 {
 		fmt.Fprintln(stderr, "boxpanel: unexpected arguments; run 'boxpanel help' for usage")

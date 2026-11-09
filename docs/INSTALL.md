@@ -55,6 +55,19 @@ uninstall：二次确认 → 停服务、删单元 → 清防火墙规则与端�
 | `boxpanel apply` | 重新生成并生效 sing-box 配置 |
 | `boxpanel version` | |
 
+T0.2 临时启动参数（T1.2 接入持久化设置与 HTTPS 前）：
+
+```bash
+boxpanel serve --web-path k3m9x2p7q1ab --port 2053
+boxpanel serve --dev
+```
+
+- 仅 HTTP，绑定 `127.0.0.1`；默认 `--port 2053 --web-path boxpanel`，端口范围 1–65535。
+- `--web-path` 接受不带斜杠的 `[a-z0-9]+` 或空字符串。
+- `--dev` 固定使用 HTTP、`127.0.0.1:2053`、空 `web_path`，覆盖上述两个参数；此阶段不创建 DB、不调用 systemctl。
+- `make dev-server` 先执行 `build-web`，确保全新检出也有可嵌入的页面，再启动 `serve --dev`。可同时运行 `make dev-web` 使用 Vite 热更新及 `/api` 代理。
+- `serve --help` 显示参数；Ctrl+C / SIGTERM 关闭监听并等待在途请求（最多 5 秒）。
+
 ## 4. systemd 单元
 
 `boxpanel.service`：
@@ -103,7 +116,7 @@ WantedBy=multi-user.target
 - 步骤：pnpm 构建前端 → `CGO_ENABLED=0` 交叉编译 `linux/amd64`、`linux/arm64`（`-trimpath -ldflags "-s -w -X main.version=<tag>"`）→ 打包 `boxpanel-linux-{arch}.tar.gz` → 生成 `checksums.txt` → 创建 GitHub Release 并上传。
 - `ci.yml`：PR 与 main 推送时跑 `make lint test build`、`shellcheck scripts/install.sh`；安装 sing-box 锁定版本以便 golden test 跑 `sing-box check`。
 
-当前 T0.1 阶段：CI 在 Linux 与 macOS 上使用 Go 1.27、Node 24 和
+当前 M0 阶段：CI 在 Linux 与 macOS 上使用 Go 1.27、Node 24 和
 `web/package.json` 固定的 pnpm，执行 `make lint test build` 及 `bin/boxpanel version`。
 sing-box 安装检查随 T2.1/T2.2 接入；`shellcheck` 随 T6.1 的 `scripts/install.sh`
 接入。骨架阶段尚无这些文件，不提前实现后续任务。
