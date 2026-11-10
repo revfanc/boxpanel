@@ -270,7 +270,7 @@ Content-Disposition: attachment; filename*=UTF-8''<面板名>
     { "type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080 }
   ],
   "outbounds": [
-    { "type": "selector", "tag": "proxy", "outbounds": ["auto", "manual", "direct"], "default": "auto" },
+    { "type": "selector", "tag": "proxy", "outbounds": ["auto", "manual"], "default": "auto" },   // 单节点时为 [<节点>]
     { "type": "urltest", "tag": "auto", "outbounds": ["<节点…>"],
       "url": "https://www.gstatic.com/generate_204", "interval": "3m", "tolerance": 50 },
     { "type": "selector", "tag": "manual", "outbounds": ["<节点…>"] },
@@ -371,8 +371,8 @@ proxies:
     skip-cert-verify: false        # 指纹固定验证自签证书
     fingerprint: <sha256>         # 必填，叶证书 DER 的 SHA-256 hex
 proxy-groups:
-  - { name: 节点选择, type: select, proxies: [自动选择, 手动选择, DIRECT] }
-  - { name: 自动选择, type: url-test, proxies: [<节点…>], url: https://www.gstatic.com/generate_204, interval: 300, tolerance: 50, lazy: true }
+  - { name: 节点选择, type: select, proxies: [自动选择, 手动选择] }   # 第一层只选方式；单节点时为 [<节点>]
+  - { name: 自动选择, type: url-test, proxies: [<节点…>], url: https://www.gstatic.com/generate_204, interval: 300, tolerance: 50, lazy: true, hidden: true }  # 后台工作，支持 hidden 的界面不显示
   - { name: 手动选择, type: select, proxies: [<节点…>] }
 rule-providers:
   geosite-cn: { type: http, behavior: domain, format: yaml, url: <见 §3>, interval: 86400, proxy: 节点选择 }

@@ -61,8 +61,7 @@
       "default": "auto",
       "outbounds": [
         "auto",
-        "manual",
-        "direct"
+        "manual"
       ],
       "tag": "proxy",
       "type": "selector"

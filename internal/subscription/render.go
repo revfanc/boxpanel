@@ -93,9 +93,14 @@ func singboxConfig(s Snapshot, p rules.Plan) (object, error) {
 	}
 	// Empty subscriptions stay valid without silently giving proxy traffic a
 	// direct route. The private-IP exception still works; other traffic rejects.
-	choices := append(append([]string{}, names...), "direct")
-	if len(names) >= 2 {
-		choices = []string{"auto", "manual", "direct"}
+	// Users pick only a mode (auto/manual); nodes live under manual. No direct
+	// choice: clients offer their own direct mode, so beginners cannot misselect.
+	choices := []string{"direct"}
+	switch {
+	case len(names) >= 2:
+		choices = []string{"auto", "manual"}
+	case len(names) == 1:
+		choices = names
 	}
 	out := []object{{"type": "selector", "tag": "proxy", "outbounds": choices, "default": choices[0]}}
 	if len(names) >= 2 {
@@ -372,14 +377,15 @@ func clashConfig(s Snapshot, p rules.Plan) object {
 	if len(choices) == 0 {
 		choices = []string{"REJECT"}
 	}
-	choices = append(append([]string{}, choices...), "DIRECT")
+	// Top group offers only the mode; nodes appear under manual. The url-test
+	// group works in the background and is hidden in UIs that honor `hidden`.
 	if len(names) >= 2 {
-		choices = []string{autoName, manualName, "DIRECT"}
+		choices = []string{autoName, manualName}
 	}
 	groups := []object{{"name": selectName, "type": "select", "proxies": choices}}
 	if len(names) >= 2 {
 		groups = append(groups,
-			object{"name": autoName, "type": "url-test", "proxies": names, "url": "https://www.gstatic.com/generate_204", "interval": 300, "tolerance": 50, "lazy": true},
+			object{"name": autoName, "type": "url-test", "proxies": names, "url": "https://www.gstatic.com/generate_204", "interval": 300, "tolerance": 50, "lazy": true, "hidden": true},
 			object{"name": manualName, "type": "select", "proxies": names},
 		)
 	}

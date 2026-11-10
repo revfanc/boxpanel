@@ -49,7 +49,6 @@ proxy-groups:
   - name: 节点选择
     proxies:
       - REJECT
-      - DIRECT
     type: select
 rule-providers:
   geosite-geolocation-!cn:

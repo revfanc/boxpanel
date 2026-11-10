@@ -65,9 +65,12 @@ func TestSubscriptionGroups(t *testing.T) {
 					if len(config.Outbounds) != groupCount+len(names)+1 {
 						t.Fatalf("unexpected outbounds: %+v", config.Outbounds)
 					}
-					want := append(slices.Clone(names), "direct")
+					// First layer offers only the mode; no direct choice.
+					want := []string{"direct"}
 					if len(names) >= 2 {
-						want = []string{"auto", "manual", "direct"}
+						want = []string{"auto", "manual"}
+					} else if len(names) == 1 {
+						want = slices.Clone(names)
 					}
 					main := config.Outbounds[0]
 					if main.Type != "selector" || main.Tag != "proxy" || !slices.Equal(main.Outbounds, want) || main.Default != want[0] {
@@ -114,7 +117,7 @@ func TestSubscriptionGroups(t *testing.T) {
 							Name, Type, URL     string
 							Proxies             []string
 							Interval, Tolerance int
-							Lazy                bool
+							Lazy, Hidden        bool
 						} `yaml:"proxy-groups"`
 						Providers map[string]struct{ Proxy string } `yaml:"rule-providers"`
 						Rules     []string
@@ -125,11 +128,12 @@ func TestSubscriptionGroups(t *testing.T) {
 					if len(config.Groups) != groupCount {
 						t.Fatalf("unexpected groups: %+v", config.Groups)
 					}
-					want := append(slices.Clone(names), "DIRECT")
+					// First layer offers only the mode; no DIRECT choice.
+					want := slices.Clone(names)
 					if len(names) >= 2 {
-						want = []string{text["auto"], text["manual"], "DIRECT"}
+						want = []string{text["auto"], text["manual"]}
 					} else if len(names) == 0 {
-						want = []string{"REJECT", "DIRECT"}
+						want = []string{"REJECT"}
 					}
 					main := config.Groups[0]
 					if main.Type != "select" || main.Name != text["select"] || !slices.Equal(main.Proxies, want) {
@@ -137,7 +141,7 @@ func TestSubscriptionGroups(t *testing.T) {
 					}
 					if len(names) >= 2 {
 						auto, manual := config.Groups[1], config.Groups[2]
-						if auto.Type != "url-test" || auto.Name != text["auto"] || !slices.Equal(auto.Proxies, names) || auto.URL != "https://www.gstatic.com/generate_204" || auto.Interval != 300 || auto.Tolerance != 50 || !auto.Lazy {
+						if auto.Type != "url-test" || auto.Name != text["auto"] || !slices.Equal(auto.Proxies, names) || auto.URL != "https://www.gstatic.com/generate_204" || auto.Interval != 300 || auto.Tolerance != 50 || !auto.Lazy || !auto.Hidden {
 							t.Fatalf("wrong auto group: %+v", auto)
 						}
 						if manual.Type != "select" || manual.Name != text["manual"] || !slices.Equal(manual.Proxies, names) {

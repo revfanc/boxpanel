@@ -67,8 +67,7 @@
     {
       "default": "香港 Reality",
       "outbounds": [
-        "香港 Reality",
-        "direct"
+        "香港 Reality"
       ],
       "tag": "proxy",
       "type": "selector"

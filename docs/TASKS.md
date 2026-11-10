@@ -559,6 +559,14 @@ Let's Encrypt 自 2026-01-15 起正式签发 IP 地址证书（必须使用 `sho
   已请求允许仅将夹具 remark 显式设为原 tag，保持断言和执行流程不变。
 - [x] 仅 T6.7，无新依赖/供应链策略变动，无服务端 Apply 改动，未执行 commit/push/切换分支。
 
+### T6.8 第一层只保留「自动 / 手动」（v0.1.2，用户反馈）
+
+用户反馈 T6.7 的菜单仍显杂乱。调整：`节点选择` = `[自动选择, 手动选择]`（不再含 DIRECT，直连用客户端自带的直连模式）；
+`自动选择` url-test 加 `hidden: true`（mihomo 文档：需界面支持，Clash Verge Rev 支持），节点只在 `手动选择` 中可见；
+单节点时 `节点选择` = `[该节点]`；sing-box 同步（`proxy` = `[auto, manual]`，sing-box 无隐藏能力）。gfw_only 的 `MATCH,DIRECT` 不受影响。
+
+- [x] 审查者直接实现；golden 更新，groups_test 断言新结构与 hidden；make lint test build（含 e2e）通过。
+
 ## M7 后续增强（MVP 之后，按需排期）
 
 - T7.1 每用户流量统计（评估 v2ray_api 统计是否在官方构建中可用；否则基于 clash_api 连接统计近似）、超额/到期自动禁用（定时任务 + 生效流程）

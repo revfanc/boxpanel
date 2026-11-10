@@ -63,9 +63,9 @@ proxy-groups:
     proxies:
       - 自动选择
       - 手动选择
-      - DIRECT
     type: select
-  - interval: 300
+  - hidden: true
+    interval: 300
     lazy: true
     name: 自动选择
     proxies:

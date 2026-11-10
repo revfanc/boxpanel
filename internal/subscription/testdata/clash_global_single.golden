@@ -64,7 +64,6 @@ proxy-groups:
   - name: 节点选择
     proxies:
       - 香港 Reality
-      - DIRECT
     type: select
 rule-providers:
   geosite-geolocation-!cn:
