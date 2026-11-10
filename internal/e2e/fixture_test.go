@@ -83,8 +83,9 @@ func newFixture(t *testing.T, handshake *httptest.Server) fixture {
 	}
 	defer tx.Rollback()
 	for _, in := range snapshot.Inbounds {
-		_, err = tx.ExecContext(ctx, `INSERT INTO inbounds (id,tag,protocol,port,enabled,options,created_at,updated_at)
-			VALUES (?,?,?,?,?,?,?,?)`, in.ID, in.Tag, in.Protocol, in.Port, in.Enabled, string(in.Options), now.Unix(), now.Unix())
+		// remark = tag keeps the client outbound name equal to the tag the test looks up.
+		_, err = tx.ExecContext(ctx, `INSERT INTO inbounds (id,tag,protocol,port,enabled,options,remark,created_at,updated_at)
+			VALUES (?,?,?,?,?,?,?,?,?)`, in.ID, in.Tag, in.Protocol, in.Port, in.Enabled, string(in.Options), in.Tag, now.Unix(), now.Unix())
 		if err != nil {
 			t.Fatal(err)
 		}

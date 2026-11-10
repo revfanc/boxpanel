@@ -52,15 +52,9 @@ proxies: []
 proxy-groups:
   - name: 节点选择
     proxies:
-      - 自动选择
+      - REJECT
       - DIRECT
     type: select
-  - interval: 300
-    name: 自动选择
-    proxies:
-      - REJECT
-    type: url-test
-    url: https://www.gstatic.com/generate_204
 rule-providers:
   geoip-cn:
     behavior: ipcidr

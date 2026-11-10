@@ -43,7 +43,7 @@ func fixture(t *testing.T) Snapshot {
 
 func TestGolden(t *testing.T) {
 	for _, preset := range []string{"bypass_cn", "gfw_only", "global"} {
-		for _, variant := range []string{"default", "options", "empty"} {
+		for _, variant := range []string{"default", "options", "empty", "single", "names"} {
 			for _, format := range []Format{Singbox, Clash, Base64} {
 				name := string(format) + "_" + preset + "_" + variant
 				t.Run(name, func(t *testing.T) {
@@ -69,6 +69,15 @@ func TestGolden(t *testing.T) {
 					}
 					if variant == "empty" {
 						s.Nodes = nil
+					}
+					if variant == "single" {
+						s.Nodes = s.Nodes[:1]
+					}
+					if variant == "names" {
+						extra := s.Nodes[0]
+						extra.ID, extra.Port, extra.Name = 3, 9443, " Reality · 443 "
+						s.Nodes[0].Name, s.Nodes[1].Name = "", " \t\n "
+						s.Nodes = UniqueNames(append(s.Nodes, extra))
 					}
 					before, _ := json.Marshal(s)
 					got, err := Render(s, format)

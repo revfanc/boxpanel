@@ -506,6 +506,59 @@ Let's Encrypt 自 2026-01-15 起正式签发 IP 地址证书（必须使用 `sho
   jsdom 测试不能替代此项，仍需审查者浏览器验证。
 - [x] 仅 T6.6，无新依赖/锁文件/供应链策略变动，无内核配置/Apply 改动，未执行 commit/push/切换分支。
 
+### T6.7 代理组结构调整（v0.1.1，用户反馈）
+
+用户反馈：Clash 中「节点选择」内含「自动选择」+各节点，同时「自动选择」组也单独可见，节点和「自动」在两层重复出现，容易混淆。
+新结构：**第一层只选方式，第二层才放节点**，每样东西只出现在一层。
+
+**Clash / mihomo YAML**
+1. 节点数 ≥ 2：
+   - `节点选择`（select，规则 MATCH、rule-provider 下载、远端 DNS 等现有引用全部指向它）：`[自动选择, 手动选择, DIRECT]`，默认第一项。
+   - `自动选择`（url-test）：全部节点；`url: https://www.gstatic.com/generate_204`、`interval: 300`、**`tolerance: 50`**、`lazy: true`。
+   - `手动选择`（select）：全部节点。
+   - 节点不得直接出现在 `节点选择` 中。
+2. 节点数 = 1：只有 `节点选择`：`[该节点, DIRECT]`，不生成 `自动选择`/`手动选择`。
+3. 组名文案放 i18n（现有 select/auto 键，新增 manual 键；DIRECT 保持 mihomo 内置名，显示文案不改）。
+
+**sing-box JSON**
+4. 同样结构：selector `proxy`（显示用 tag 维持现有 i18n 规则）`outbounds: [auto, manual, direct]`，`default: auto`；
+   urltest `auto`：全部节点，`interval: 3m`、**`tolerance: 50`**；selector `manual`：全部节点。
+   单节点时 selector `proxy` = `[该节点, direct]`，不生成 auto/manual。
+   路由 final、DNS detour、rule_set download_detour 等现有对 `proxy` 的引用保持不变。字段以 sing-box 1.14 官方文档为准
+   （selector / urltest 的 tolerance、interrupt_exist_connections 等不确定字段先查文档）。
+
+**节点显示名**
+5. 订阅中节点名：优先使用面板中该入站的备注（remark，去首尾空白）；为空时用「Reality · <端口>」「Hysteria2 · <端口>」
+   （文案在 i18n）。同一订阅内名称冲突时追加「 (2)」「 (3)」去重；名称不得包含逗号、换行等破坏 YAML/URI 的字符（转义或替换）。
+   URI 格式（base64）的 `#` 片段名同步使用该显示名。
+
+**测试与文档**
+6. golden 全部更新；新增测试：≥2 节点三组结构及「节点不在第一层」、单节点无第二层、tolerance、名称去重/默认名；
+   PATH 有 sing-box 时 check 通过。CONFIG.md §4.3/§4.4 同步示例。
+
+- **验收**：
+  - [x] make lint test build 通过（审查者沙箱外复跑，含 e2e）；golden 与新增测试覆盖上述各项。
+
+**T6.7 实现与验证记录（2026-11-09）**：
+- [x] 1：Clash 多节点第一层为自动选择/手动选择/DIRECT；两个第二层均包含全部节点，
+  自动组显式输出 gstatic URL、interval=300、tolerance=50、lazy=true。
+- [x] 2：单节点只有节点选择 `[该节点, DIRECT]`，默认该节点；两种协议均有测试。
+- [x] 3：新增 manual 和两协议默认名模板到 zh-CN.ts；策略组保留名从同一 i18n 数据读取。
+- [x] 4：sing-box 多节点 proxy → auto/manual/direct，auto 间隔 3m、容差 50；
+  单节点只有 proxy → 该节点/direct。三预设的路由、DNS、规则下载引用保持。
+  官方字段依据与空节点的最小补齐方案见 CONFIG.md §4.3/§4.4 及命名约定。
+- [x] 5：Store.Load 不再回退内部 tag；备注清理、友好默认名、顺序后缀去重及保留名避让；
+  测试覆盖空白/控制字符/逗号/Unicode 换行/自然后缀，JSON/YAML/base64/links 同名且不改数据库。
+- [x] 6：重新生成原 27 份 golden，新增单节点/默认名及重名共 18 份，共 45 份；
+  15 份 sing-box JSON 实际通过锁定 1.14.4 check。CONFIG 示例、字段/边界说明与 API 测试清单同步。
+- [x] make lint、make build 通过；安装脚本及其余 Go 包通过；前端 typecheck/lint/vitest 通过（18 文件 / 115 测试）。
+- [ ] 完整 make test：已运行，既有 internal/e2e.TestLoopback 在内核启动时因 macOS 沙箱
+  DNS 通知注册 status 9 失败，需普通终端/CI 复跑；未修改启动行为或添加跳过条件。
+- 待确认：旧 e2e 夹具未写 remark，但测试固定用 reality/hysteria2 查找订阅节点；
+  新默认名会使沙箱外运行也找不到这些旧名称。因用户要求不修改该测试，目前未改 e2e；
+  已请求允许仅将夹具 remark 显式设为原 tag，保持断言和执行流程不变。
+- [x] 仅 T6.7，无新依赖/供应链策略变动，无服务端 Apply 改动，未执行 commit/push/切换分支。
+
 ## M7 后续增强（MVP 之后，按需排期）
 
 - T7.1 每用户流量统计（评估 v2ray_api 统计是否在官方构建中可用；否则基于 clash_api 连接统计近似）、超额/到期自动禁用（定时任务 + 生效流程）

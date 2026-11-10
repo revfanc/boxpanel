@@ -109,8 +109,8 @@
       "default": "auto",
       "outbounds": [
         "auto",
-        "香港 Reality",
-        "香港 Hysteria2"
+        "manual",
+        "direct"
       ],
       "tag": "proxy",
       "type": "selector"
@@ -122,8 +122,17 @@
         "香港 Hysteria2"
       ],
       "tag": "auto",
+      "tolerance": 50,
       "type": "urltest",
       "url": "https://www.gstatic.com/generate_204"
+    },
+    {
+      "outbounds": [
+        "香港 Reality",
+        "香港 Hysteria2"
+      ],
+      "tag": "manual",
+      "type": "selector"
     },
     {
       "flow": "xtls-rprx-vision",

@@ -1,0 +1,115 @@
+{
+  "dns": {
+    "final": "dns-remote",
+    "rules": [
+      {
+        "action": "predefined",
+        "query_type": [
+          "AAAA"
+        ],
+        "rcode": "NOERROR"
+      }
+    ],
+    "servers": [
+      {
+        "detour": "proxy",
+        "path": "/dns-query",
+        "server": "1.1.1.1",
+        "tag": "dns-remote",
+        "type": "https"
+      },
+      {
+        "path": "/dns-query",
+        "server": "223.5.5.5",
+        "tag": "dns-local",
+        "type": "https"
+      },
+      {
+        "tag": "dns-bootstrap",
+        "type": "local"
+      }
+    ]
+  },
+  "experimental": {
+    "cache_file": {
+      "enabled": true,
+      "store_fakeip": false
+    }
+  },
+  "inbounds": [
+    {
+      "address": [
+        "172.19.0.1/30"
+      ],
+      "auto_route": true,
+      "strict_route": true,
+      "tag": "tun-in",
+      "type": "tun"
+    },
+    {
+      "listen": "127.0.0.1",
+      "listen_port": 2080,
+      "tag": "mixed-in",
+      "type": "mixed"
+    }
+  ],
+  "log": {
+    "level": "warn"
+  },
+  "outbounds": [
+    {
+      "default": "香港 Reality",
+      "outbounds": [
+        "香港 Reality",
+        "direct"
+      ],
+      "tag": "proxy",
+      "type": "selector"
+    },
+    {
+      "flow": "xtls-rprx-vision",
+      "server": "203.0.113.8",
+      "server_port": 443,
+      "tag": "香港 Reality",
+      "tls": {
+        "enabled": true,
+        "reality": {
+          "enabled": true,
+          "public_key": "eNXgbb5tlL6g2fud8-bam8Tz5tLHPhwxkOsxcjDnqFs",
+          "short_id": "0123456789abcdef"
+        },
+        "server_name": "www.example.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "type": "vless",
+      "uuid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    },
+    {
+      "tag": "direct",
+      "type": "direct"
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "default_domain_resolver": "dns-local",
+    "final": "proxy",
+    "rule_set": [],
+    "rules": [
+      {
+        "action": "sniff"
+      },
+      {
+        "action": "hijack-dns",
+        "protocol": "dns"
+      },
+      {
+        "action": "route",
+        "ip_is_private": true,
+        "outbound": "direct"
+      }
+    ]
+  }
+}

@@ -14,11 +14,13 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/revfanc/boxpanel/internal/confgen"
 	"github.com/revfanc/boxpanel/internal/db"
 	"github.com/revfanc/boxpanel/internal/rules"
 	"github.com/revfanc/boxpanel/internal/share"
+	"github.com/revfanc/boxpanel/web"
 )
 
 var ErrUnavailable = errors.New("subscription certificate unavailable; apply the inbound first")
@@ -133,21 +135,17 @@ func (s *Store) Load(ctx context.Context, id int64, token *string) (Data, error)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return d, err
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT id,tag,remark,protocol,port,options FROM inbounds WHERE enabled=1 ORDER BY id")
+	rows, err := tx.QueryContext(ctx, "SELECT id,remark,protocol,port,options FROM inbounds WHERE enabled=1 ORDER BY id")
 	if err != nil {
 		return d, fmt.Errorf("read subscription inbounds: %w", err)
 	}
 	d.Nodes = []share.Node{}
 	for rows.Next() {
 		var n share.Node
-		var tag, remark, protocol, raw string
-		if err := rows.Scan(&n.ID, &tag, &remark, &protocol, &n.Port, &raw); err != nil {
+		var protocol, raw string
+		if err := rows.Scan(&n.ID, &n.Name, &protocol, &n.Port, &raw); err != nil {
 			rows.Close()
 			return d, fmt.Errorf("read subscription inbound: %w", err)
-		}
-		n.Name = remark
-		if n.Name == "" {
-			n.Name = tag
 		}
 		n.Host = d.PublicHost
 		n.UUID = u.UUID
@@ -215,24 +213,39 @@ func (s *Store) Load(ctx context.Context, id int64, token *string) (Data, error)
 }
 
 // Names may collide with groups, tags or each other. Resolve deterministically
-// using IDs, without changing the input slice or allowing rule-string injection.
+// in inbound ID order, without changing the input slice or allowing rule-string
+// injection. All subscription formats and node links share these display names.
 func UniqueNames(nodes []share.Node) []share.Node {
 	result := append([]share.Node{}, nodes...)
-	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
-	used := map[string]bool{"proxy": true, "auto": true, "direct": true, "DIRECT": true, "REJECT": true, "节点选择": true, "自动选择": true}
+	sort.SliceStable(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	text := web.SubscriptionText()
+	used := map[string]bool{"proxy": true, "auto": true, "manual": true, "direct": true, "DIRECT": true, "REJECT": true,
+		text["select"]: true, text["auto"]: true, text["manual"]: true}
 	for i := range result {
 		n := &result[i]
 		n.Name = strings.Map(func(r rune) rune {
-			if r < 32 || r == 127 {
-				return -1
+			if unicode.IsControl(r) || unicode.IsSpace(r) {
+				return ' '
+			}
+			if r == ',' {
+				return '，'
 			}
 			return r
 		}, n.Name)
+		n.Name = strings.Join(strings.Fields(n.Name), " ")
 		if n.Name == "" {
-			n.Name = fmt.Sprintf("node-%d", n.ID)
+			switch {
+			case n.Reality != nil:
+				n.Name = fmt.Sprintf(text["realityName"], n.Port)
+			case n.Hysteria2 != nil:
+				n.Name = fmt.Sprintf(text["hysteria2Name"], n.Port)
+			default:
+				n.Name = fmt.Sprintf("node-%d", n.ID)
+			}
 		}
-		for used[n.Name] {
-			n.Name = fmt.Sprintf("%s [%d]", n.Name, n.ID)
+		base := n.Name
+		for suffix := 2; used[n.Name]; suffix++ {
+			n.Name = fmt.Sprintf("%s (%d)", base, suffix)
 		}
 		used[n.Name] = true
 	}

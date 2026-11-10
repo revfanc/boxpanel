@@ -58,21 +58,12 @@
   },
   "outbounds": [
     {
-      "default": "auto",
-      "outbounds": [
-        "auto"
-      ],
-      "tag": "proxy",
-      "type": "selector"
-    },
-    {
-      "interval": "3m",
+      "default": "direct",
       "outbounds": [
         "direct"
       ],
-      "tag": "auto",
-      "type": "urltest",
-      "url": "https://www.gstatic.com/generate_204"
+      "tag": "proxy",
+      "type": "selector"
     },
     {
       "tag": "direct",

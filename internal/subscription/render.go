@@ -93,11 +93,17 @@ func singboxConfig(s Snapshot, p rules.Plan) (object, error) {
 	}
 	// Empty subscriptions stay valid without silently giving proxy traffic a
 	// direct route. The private-IP exception still works; other traffic rejects.
-	choices := names
-	if len(choices) == 0 {
-		choices = []string{"direct"}
+	choices := append(append([]string{}, names...), "direct")
+	if len(names) >= 2 {
+		choices = []string{"auto", "manual", "direct"}
 	}
-	out := []object{{"type": "selector", "tag": "proxy", "outbounds": append([]string{"auto"}, names...), "default": "auto"}, {"type": "urltest", "tag": "auto", "outbounds": choices, "url": "https://www.gstatic.com/generate_204", "interval": "3m"}}
+	out := []object{{"type": "selector", "tag": "proxy", "outbounds": choices, "default": choices[0]}}
+	if len(names) >= 2 {
+		out = append(out,
+			object{"type": "urltest", "tag": "auto", "outbounds": names, "url": "https://www.gstatic.com/generate_204", "interval": "3m", "tolerance": 50},
+			object{"type": "selector", "tag": "manual", "outbounds": names},
+		)
+	}
 	for _, n := range s.Nodes {
 		o := object{"tag": n.Name, "server": n.Host, "server_port": n.Port}
 		if v := n.Reality; v != nil {
@@ -216,7 +222,7 @@ func singboxConfig(s Snapshot, p rules.Plan) (object, error) {
 
 func clashConfig(s Snapshot, p rules.Plan) object {
 	text := web.SubscriptionText()
-	selectName, autoName := text["select"], text["auto"]
+	selectName, autoName, manualName := text["select"], text["auto"], text["manual"]
 	names := []string{}
 	proxies := []object{}
 	for _, n := range s.Nodes {
@@ -366,6 +372,17 @@ func clashConfig(s Snapshot, p rules.Plan) object {
 	if len(choices) == 0 {
 		choices = []string{"REJECT"}
 	}
+	choices = append(append([]string{}, choices...), "DIRECT")
+	if len(names) >= 2 {
+		choices = []string{autoName, manualName, "DIRECT"}
+	}
+	groups := []object{{"name": selectName, "type": "select", "proxies": choices}}
+	if len(names) >= 2 {
+		groups = append(groups,
+			object{"name": autoName, "type": "url-test", "proxies": names, "url": "https://www.gstatic.com/generate_204", "interval": 300, "tolerance": 50, "lazy": true},
+			object{"name": manualName, "type": "select", "proxies": names},
+		)
+	}
 	return object{
 		"mixed-port": 7890, "allow-lan": false, "mode": "rule", "log-level": "warning", "ipv6": false,
 		"dns": object{
@@ -375,11 +392,7 @@ func clashConfig(s Snapshot, p rules.Plan) object {
 			"default-nameserver": []string{"https://223.5.5.5/dns-query"},
 			"nameserver":         localDNS, "nameserver-policy": policy, "proxy-server-nameserver": localDNS,
 		},
-		"proxies": proxies,
-		"proxy-groups": []object{
-			{"name": selectName, "type": "select", "proxies": append(append([]string{autoName}, names...), "DIRECT")},
-			{"name": autoName, "type": "url-test", "proxies": choices, "url": "https://www.gstatic.com/generate_204", "interval": 300},
-		},
+		"proxies": proxies, "proxy-groups": groups,
 		"rule-providers": providers, "rules": lines,
 	}
 }
