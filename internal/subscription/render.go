@@ -93,22 +93,14 @@ func singboxConfig(s Snapshot, p rules.Plan) (object, error) {
 	}
 	// Empty subscriptions stay valid without silently giving proxy traffic a
 	// direct route. The private-IP exception still works; other traffic rejects.
-	// Users pick only a mode (auto/manual); nodes live under manual. No direct
-	// choice: clients offer their own direct mode, so beginners cannot misselect.
+	// One manual selector listing the nodes, first node by default. No auto
+	// group (clients cannot hide it) and no direct choice (clients have a
+	// direct mode of their own).
 	choices := []string{"direct"}
-	switch {
-	case len(names) >= 2:
-		choices = []string{"auto", "manual"}
-	case len(names) == 1:
+	if len(names) > 0 {
 		choices = names
 	}
 	out := []object{{"type": "selector", "tag": "proxy", "outbounds": choices, "default": choices[0]}}
-	if len(names) >= 2 {
-		out = append(out,
-			object{"type": "urltest", "tag": "auto", "outbounds": names, "url": "https://www.gstatic.com/generate_204", "interval": "3m", "tolerance": 50},
-			object{"type": "selector", "tag": "manual", "outbounds": names},
-		)
-	}
 	for _, n := range s.Nodes {
 		o := object{"tag": n.Name, "server": n.Host, "server_port": n.Port}
 		if v := n.Reality; v != nil {
@@ -227,7 +219,7 @@ func singboxConfig(s Snapshot, p rules.Plan) (object, error) {
 
 func clashConfig(s Snapshot, p rules.Plan) object {
 	text := web.SubscriptionText()
-	selectName, autoName, manualName := text["select"], text["auto"], text["manual"]
+	selectName := text["select"]
 	names := []string{}
 	proxies := []object{}
 	for _, n := range s.Nodes {
@@ -377,18 +369,8 @@ func clashConfig(s Snapshot, p rules.Plan) object {
 	if len(choices) == 0 {
 		choices = []string{"REJECT"}
 	}
-	// Top group offers only the mode; nodes appear under manual. The url-test
-	// group works in the background and is hidden in UIs that honor `hidden`.
-	if len(names) >= 2 {
-		choices = []string{autoName, manualName}
-	}
+	// A single manual group: the user taps a node to use it.
 	groups := []object{{"name": selectName, "type": "select", "proxies": choices}}
-	if len(names) >= 2 {
-		groups = append(groups,
-			object{"name": autoName, "type": "url-test", "proxies": names, "url": "https://www.gstatic.com/generate_204", "interval": 300, "tolerance": 50, "lazy": true, "hidden": true},
-			object{"name": manualName, "type": "select", "proxies": names},
-		)
-	}
 	return object{
 		"mixed-port": 7890, "allow-lan": false, "mode": "rule", "log-level": "warning", "ipv6": false,
 		"dns": object{

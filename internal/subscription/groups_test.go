@@ -32,10 +32,7 @@ func TestSubscriptionGroups(t *testing.T) {
 					names = append(names, n.Name)
 				}
 				text := web.SubscriptionText()
-				groupCount := 1
-				if len(names) >= 2 {
-					groupCount = 3
-				}
+				groupCount := 1 // a single manual group, whatever the node count
 
 				t.Run("singbox", func(t *testing.T) {
 					raw, err := Render(s, Singbox)
@@ -65,25 +62,14 @@ func TestSubscriptionGroups(t *testing.T) {
 					if len(config.Outbounds) != groupCount+len(names)+1 {
 						t.Fatalf("unexpected outbounds: %+v", config.Outbounds)
 					}
-					// First layer offers only the mode; no direct choice.
+					// One manual selector of all nodes; no auto group, no direct choice.
 					want := []string{"direct"}
-					if len(names) >= 2 {
-						want = []string{"auto", "manual"}
-					} else if len(names) == 1 {
+					if len(names) > 0 {
 						want = slices.Clone(names)
 					}
 					main := config.Outbounds[0]
 					if main.Type != "selector" || main.Tag != "proxy" || !slices.Equal(main.Outbounds, want) || main.Default != want[0] {
 						t.Fatalf("wrong first layer: %+v", main)
-					}
-					if len(names) >= 2 {
-						auto, manual := config.Outbounds[1], config.Outbounds[2]
-						if auto.Type != "urltest" || auto.Tag != "auto" || !slices.Equal(auto.Outbounds, names) || auto.URL != "https://www.gstatic.com/generate_204" || auto.Interval != "3m" || auto.Tolerance != 50 {
-							t.Fatalf("wrong auto group: %+v", auto)
-						}
-						if manual.Type != "selector" || manual.Tag != "manual" || !slices.Equal(manual.Outbounds, names) {
-							t.Fatalf("wrong manual group: %+v", manual)
-						}
 					}
 					for _, out := range config.Outbounds[groupCount:] {
 						if out.Type == "selector" || out.Type == "urltest" {
@@ -128,25 +114,14 @@ func TestSubscriptionGroups(t *testing.T) {
 					if len(config.Groups) != groupCount {
 						t.Fatalf("unexpected groups: %+v", config.Groups)
 					}
-					// First layer offers only the mode; no DIRECT choice.
+					// One manual group of all nodes; no auto group, no DIRECT choice.
 					want := slices.Clone(names)
-					if len(names) >= 2 {
-						want = []string{text["auto"], text["manual"]}
-					} else if len(names) == 0 {
+					if len(names) == 0 {
 						want = []string{"REJECT"}
 					}
 					main := config.Groups[0]
 					if main.Type != "select" || main.Name != text["select"] || !slices.Equal(main.Proxies, want) {
 						t.Fatalf("wrong first layer: %+v", main)
-					}
-					if len(names) >= 2 {
-						auto, manual := config.Groups[1], config.Groups[2]
-						if auto.Type != "url-test" || auto.Name != text["auto"] || !slices.Equal(auto.Proxies, names) || auto.URL != "https://www.gstatic.com/generate_204" || auto.Interval != 300 || auto.Tolerance != 50 || !auto.Lazy || !auto.Hidden {
-							t.Fatalf("wrong auto group: %+v", auto)
-						}
-						if manual.Type != "select" || manual.Name != text["manual"] || !slices.Equal(manual.Proxies, names) {
-							t.Fatalf("wrong manual group: %+v", manual)
-						}
 					}
 					for _, provider := range config.Providers {
 						if provider.Proxy != text["select"] {

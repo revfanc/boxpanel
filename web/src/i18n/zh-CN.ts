@@ -264,8 +264,6 @@ export const subscriptionText = /* subscription-text:start */ {
   "compatibility": "sing-box 客户端需 1.14 或更新。通用 URI 不含分流规则，请在客户端内选择「绕过大陆」等规则。",
   "privacy": "请妥善保存订阅链接，不要公开分享；链接失效时请联系管理员。",
   "select": "节点选择",
-  "auto": "自动选择",
-  "manual": "手动选择",
   "realityName": "Reality · %d",
   "hysteria2Name": "Hysteria2 · %d"
 } /* subscription-text:end */ as const

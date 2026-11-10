@@ -58,33 +58,13 @@
   },
   "outbounds": [
     {
-      "default": "auto",
+      "default": "Reality · 443",
       "outbounds": [
-        "auto",
-        "manual"
+        "Reality · 443",
+        "Hysteria2 · 8443",
+        "Reality · 443 (2)"
       ],
       "tag": "proxy",
-      "type": "selector"
-    },
-    {
-      "interval": "3m",
-      "outbounds": [
-        "Reality · 443",
-        "Hysteria2 · 8443",
-        "Reality · 443 (2)"
-      ],
-      "tag": "auto",
-      "tolerance": 50,
-      "type": "urltest",
-      "url": "https://www.gstatic.com/generate_204"
-    },
-    {
-      "outbounds": [
-        "Reality · 443",
-        "Hysteria2 · 8443",
-        "Reality · 443 (2)"
-      ],
-      "tag": "manual",
       "type": "selector"
     },
     {

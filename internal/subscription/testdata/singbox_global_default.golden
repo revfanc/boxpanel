@@ -58,31 +58,12 @@
   },
   "outbounds": [
     {
-      "default": "auto",
+      "default": "香港 Reality",
       "outbounds": [
-        "auto",
-        "manual"
+        "香港 Reality",
+        "香港 Hysteria2"
       ],
       "tag": "proxy",
-      "type": "selector"
-    },
-    {
-      "interval": "3m",
-      "outbounds": [
-        "香港 Reality",
-        "香港 Hysteria2"
-      ],
-      "tag": "auto",
-      "tolerance": 50,
-      "type": "urltest",
-      "url": "https://www.gstatic.com/generate_204"
-    },
-    {
-      "outbounds": [
-        "香港 Reality",
-        "香港 Hysteria2"
-      ],
-      "tag": "manual",
       "type": "selector"
     },
     {

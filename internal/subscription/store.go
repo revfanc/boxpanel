@@ -220,7 +220,7 @@ func UniqueNames(nodes []share.Node) []share.Node {
 	sort.SliceStable(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	text := web.SubscriptionText()
 	used := map[string]bool{"proxy": true, "auto": true, "manual": true, "direct": true, "DIRECT": true, "REJECT": true,
-		text["select"]: true, text["auto"]: true, text["manual"]: true}
+		text["select"]: true}
 	for i := range result {
 		n := &result[i]
 		n.Name = strings.Map(func(r rune) rune {

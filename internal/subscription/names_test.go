@@ -30,8 +30,8 @@ func TestUniqueDisplayNames(t *testing.T) {
 		{"duplicate", []string{"HK", " HK ", "HK"}, []string{"HK", "HK (2)", "HK (3)"}},
 		{"existing_suffix", []string{"HK (2)", "HK", "HK", "HK"}, []string{"HK (2)", "HK", "HK (3)", "HK (4)"}},
 		{"suffix_collision", []string{"HK", "HK", "HK (2)"}, []string{"HK", "HK (2)", "HK (2) (2)"}},
-		{"reserved", []string{"proxy", "auto", "manual", "direct", "DIRECT", "REJECT", text["select"], text["auto"], text["manual"]},
-			[]string{"proxy (2)", "auto (2)", "manual (2)", "direct (2)", "DIRECT (2)", "REJECT (2)", text["select"] + " (2)", text["auto"] + " (2)", text["manual"] + " (2)"}},
+		{"reserved", []string{"proxy", "auto", "manual", "direct", "DIRECT", "REJECT", text["select"]},
+			[]string{"proxy (2)", "auto (2)", "manual (2)", "direct (2)", "DIRECT (2)", "REJECT (2)", text["select"] + " (2)"}},
 		{"unsafe", []string{" a,b\r\nc\t\x00\x7f\u0085\u2028\u2029d ", "a,b", "a，b", `"quoted": [node] #/?%&`},
 			[]string{"a，b c d", "a，b", "a，b (2)", `"quoted": [node] #/?%&`}},
 	} {
@@ -94,7 +94,7 @@ func TestStoreDisplayNames(t *testing.T) {
 		{" \t\n\u3000", "\r\x00\u2028", "Reality · 443", "Hysteria2 · 8443"},
 		{" HK ", "HK", "HK", "HK (2)"},
 		{" Hysteria2 · 8443 ", "", "Hysteria2 · 8443", "Hysteria2 · 8443 (2)"},
-		{"manual", "手动选择", "manual (2)", "手动选择 (2)"},
+		{"manual", "手动选择", "manual (2)", "手动选择"}, // no longer a group name
 		{" a,b\nname ", `"node": [x] #/?%&`, "a，b name", `"node": [x] #/?%&`},
 	} {
 		t.Run(fmt.Sprintf("%q/%q", tc.reality, tc.hysteria2), func(t *testing.T) {

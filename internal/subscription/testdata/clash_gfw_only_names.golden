@@ -76,22 +76,6 @@ proxies:
 proxy-groups:
   - name: 节点选择
     proxies:
-      - 自动选择
-      - 手动选择
-    type: select
-  - hidden: true
-    interval: 300
-    lazy: true
-    name: 自动选择
-    proxies:
-      - Reality · 443
-      - Hysteria2 · 8443
-      - Reality · 443 (2)
-    tolerance: 50
-    type: url-test
-    url: https://www.gstatic.com/generate_204
-  - name: 手动选择
-    proxies:
       - Reality · 443
       - Hysteria2 · 8443
       - Reality · 443 (2)

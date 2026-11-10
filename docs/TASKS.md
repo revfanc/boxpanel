@@ -567,6 +567,15 @@ Let's Encrypt 自 2026-01-15 起正式签发 IP 地址证书（必须使用 `sho
 
 - [x] 审查者直接实现；golden 更新，groups_test 断言新结构与 hidden；make lint test build（含 e2e）通过。
 
+### T6.9 只保留一个手动分组（v0.1.3，用户反馈）
+
+真机反馈：iPhone 上的 Clash 客户端不支持 `hidden`，T6.8 的自动组仍可见；两个平级分组又会让其中一个不被规则引用。
+定稿：Clash 与 sing-box 都只有一个分组 `节点选择` / `proxy`（select / selector），列出全部节点，默认第一个；
+不生成自动测速组，不含 DIRECT（直连用客户端自带模式）。无节点时 Clash 为 `[REJECT]`、sing-box 为 `[direct]`（沿用既有空订阅语义）。
+`自动选择`/`手动选择` 文案键删除，节点名不再为其保留。
+
+- [x] 审查者直接实现；golden、groups_test、names_test 更新；make lint test build（含 e2e）通过。
+
 ## M7 后续增强（MVP 之后，按需排期）
 
 - T7.1 每用户流量统计（评估 v2ray_api 统计是否在官方构建中可用；否则基于 clash_api 连接统计近似）、超额/到期自动禁用（定时任务 + 生效流程）
