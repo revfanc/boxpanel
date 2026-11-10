@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/revfanc/boxpanel/internal/acme"
 	"github.com/revfanc/boxpanel/internal/app"
@@ -133,15 +134,28 @@ func configCommand(ctx context.Context, command string, opts app.InitOptions, st
 	}
 	fmt.Fprintf(stdout, "面板地址: %s\n用户名:   %s\n", cfg.URL(), username)
 	if cfg.TLSMode != "http" {
-		status, err := acme.StoredStatus(ctx, conn)
+		status, directory, err := acme.StoredInfo(ctx, conn)
 		if err != nil {
 			return err
 		}
 		certificateType := "自签证书（可信证书未生效；请到设置查看签发状态）"
 		if status.Type == "acme" {
-			certificateType = "ACME 证书（staging 证书不受公开信任）"
+			certificateType = "ACME 证书"
 		}
 		fmt.Fprintf(stdout, "面板证书: %s\n", certificateType)
+		if status.Issuer != "" {
+			fmt.Fprintf(stdout, "签发者:   %s\n", status.Issuer)
+		}
+		if status.NotAfter != 0 {
+			fmt.Fprintf(stdout, "到期时间: %s (UTC)\n", time.Unix(status.NotAfter, 0).UTC().Format(time.RFC3339))
+		}
+		if status.Type == "acme" {
+			if directory == "" {
+				fmt.Fprintln(stdout, "签发来源未记录；请在面板设置重新申请证书后核对。")
+			} else if directory != acme.DefaultDirectory {
+				fmt.Fprintln(stdout, "提示: 当前 ACME 来源不是 Let's Encrypt 正式环境；staging 证书不受公开信任，自定义 CA 请确认客户端信任，或改用正式环境重新申请。")
+			}
+		}
 		if status.Hint != "" {
 			fmt.Fprintln(stdout, status.Hint)
 		}

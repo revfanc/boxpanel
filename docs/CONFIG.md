@@ -459,17 +459,21 @@ check 只校验格式，不启动 TUN、不连接节点、不下载 rule-set。
 
 ## 6. 节点地址 `public_host`
 
-- 默认：安装时探测公网 IPv4（多个探测源取多数，超时 3 秒）。
-- T1.2 初始化使用可注入的探测函数与 HTTP client/source 列表；三个源并发共享 3 秒总超时，
-  默认使用 [ipify](https://www.ipify.org/) 的 `api64.ipify.org`、
-  [ifconfig.me](https://ifconfig.me/) 的 `/ip`、[icanhazip](https://icanhazip.com/)。
-  仅采纳 HTTP 200、最多 64 字节且合法的非私网/非回环 IP；优先 IPv4，
-  无 IPv4 时采用 IPv6，要求所选地址族的有效响应有严格多数（仅一个成功响应也可用）。
-  超时/全失败/意见冲突则提示重试或 `init --public-ip IP`，不写入业务初始数据。
-  显式 IP 可用于离线初始化，单测仅使用注入的响应，不访问外网。
-- T1.3 将探测实现共享到 `internal/sysinfo`，保留 init 的上述行为；系统自检/重新探测接口
-  则对同样三个源分别用 IPv4、IPv6 连接并发请求（总计六次，共享 3 秒窗口，无重定向），
-  每个地址族独立取有效响应的严格多数。未探测到或意见冲突的地址族返回空字符串，
-  两者均为空才算整体失败；不要求 IPv4-only VPS 具有 IPv6。探测不会修改 `public_host`。
+- T6.4：初始化、环境检查、`/system/public-ip`、域名校验和端口探测统一复用
+  `internal/sysinfo` 的 **IPv4 优先**探测，最多 3 秒，不使用环境代理或跟随重定向。
+  先并发请求 `https://api.ipify.org`、`https://ipv4.icanhazip.com`、`https://ifconfig.me/ip`，
+  HTTP 拨号强制 `tcp4`。初始化得到有效 IPv4 后立即采用；没有可用 IPv4 才请求
+  `https://api6.ipify.org`、`https://ipv6.icanhazip.com`、`https://ifconfig.me/ip`，拨号强制 `tcp6`。
+  [ipify 官方说明](https://www.ipify.org/) 区分 IPv4/IPv6 专用入口与双栈 api64，
+  不能仅靠双栈响应中的地址选择保证 IPv4；拨号地址族遵循 [Go net 文档](https://pkg.go.dev/net#Dialer.DialContext)。
+- 超时预算补齐：IPv4 阶段至多占剩余总窗口的一半（通常 1.5 秒），其余留给 IPv6；
+  父 context 更短时按其剩余时间分配，IPv4 超时不会耗尽回退预算。每阶段三个源并发，
+  仅采纳 HTTP 200、最多 64 字节、合法非私网/非回环且属于当前地址族的 IP。
+  每族独立取有效响应的严格多数（仅一个成功响应也可用）；缺失或冲突视为该族不可用。
+  两族均不可用才整体失败，提示重试或 `init --public-ip IP`，初始化不写入业务数据。
+- 自检/重新探测/域名校验/端口探测在完成 IPv4 阶段后仍收集 IPv6，供双栈展示和校验；
+  返回结构保持 `{ipv4,ipv6}`，没有可用地址的族为空。选择单一地址及端口探测目标列表均先 IPv4。
+  探测不会覆盖已有 `public_host`；旧实例地址可用 `boxpanel set-host <IP|域名>` 修复。
+  探测函数、HTTP 客户端/拨号器可注入；显式 IP 可离线初始化，所有网络单测不访问外网。
 - 用户可改为域名。所有订阅/URI 中的 server 都用它。
 - IPv6-only 机器：URI 中 IPv6 需加方括号。

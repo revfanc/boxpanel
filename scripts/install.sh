@@ -226,6 +226,7 @@ install_panel() {
     if [[ -x $BINARY && -f $CORE_BINARY && -f $UNIT_DIR/boxpanel.service && -f $UNIT_DIR/boxpanel-singbox.service && ! -e $marker ]] && "$BINARY" info >/dev/null 2>&1; then
         say 'boxpanel 已安装；升级请运行 install.sh update。'
         "$BINARY" info
+        say '地址不对或无法打开面板时，可运行 boxpanel set-host <IP或域名> 修正节点地址；请将占位内容替换为实际地址。'
         return
     fi
     progress 3 '安装系统依赖'
@@ -258,6 +259,7 @@ install_panel() {
     say 'boxpanel 安装完成。'
     "$BINARY" info
     say '证书类型见上方 info 输出。服务会自动尝试申请可信证书；若仍为自签，请到面板设置查看签发结果及修复建议。请在云安全组放行面板 TCP 端口及 ACME 验证所需的 TCP 80。'
+    say '地址不对或无法打开面板时，可运行 boxpanel set-host <IP或域名> 修正节点地址；请将占位内容替换为实际地址。'
 }
 
 update_panel() {

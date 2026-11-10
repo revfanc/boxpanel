@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/revfanc/boxpanel/internal/db"
+	"github.com/revfanc/boxpanel/internal/rules"
 	"github.com/revfanc/boxpanel/internal/spa"
 )
 
@@ -55,7 +56,7 @@ func (p Paths) Validate() error {
 	return nil
 }
 
-// OpenExisting never creates a database as a side effect of info/reset/serve.
+// OpenExisting never creates a database as a side effect of info/reset/serve/set-host.
 func OpenExisting(ctx context.Context, path string) (*sql.DB, error) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, fmt.Errorf("open panel database (run boxpanel init with the same --data-dir/--db-path first): %w", err)
@@ -77,16 +78,22 @@ func LoadConfig(ctx context.Context, conn *sql.DB) (Config, error) {
 		return cfg, fmt.Errorf("read panel configuration: %w", err)
 	}
 	defer tx.Rollback()
-	if cfg.WebPort, err = db.GetSetting(ctx, tx, db.WebPort); err != nil {
+	return loadConfig(ctx, tx)
+}
+
+func loadConfig(ctx context.Context, q db.SettingsDB) (Config, error) {
+	var cfg Config
+	var err error
+	if cfg.WebPort, err = db.GetSetting(ctx, q, db.WebPort); err != nil {
 		return cfg, err
 	}
-	if cfg.WebPath, err = db.GetSetting(ctx, tx, db.WebPath); err != nil {
+	if cfg.WebPath, err = db.GetSetting(ctx, q, db.WebPath); err != nil {
 		return cfg, err
 	}
-	if cfg.PublicHost, err = db.GetSetting(ctx, tx, db.PublicHost); err != nil {
+	if cfg.PublicHost, err = db.GetSetting(ctx, q, db.PublicHost); err != nil {
 		return cfg, err
 	}
-	if cfg.TLSMode, err = db.GetSetting(ctx, tx, db.PanelTLSMode); err != nil {
+	if cfg.TLSMode, err = db.GetSetting(ctx, q, db.PanelTLSMode); err != nil {
 		return cfg, err
 	}
 	if cfg.WebPort < 1 || cfg.WebPort > 65535 {
@@ -100,6 +107,30 @@ func LoadConfig(ctx context.Context, conn *sql.DB) (Config, error) {
 	}
 	if cfg.PublicHost == "" || strings.ContainsAny(cfg.PublicHost, "/?#@\\ \t\r\n") {
 		return cfg, fmt.Errorf("read public_host: restore a hostname or IP without a URL scheme or path")
+	}
+	return cfg, nil
+}
+
+// SetPublicHost changes client/panel metadata only, like the settings API. It
+// never writes sing-box configuration. The certificate worker rereads this key.
+func SetPublicHost(ctx context.Context, conn *sql.DB, name string) (Config, error) {
+	if !rules.ValidHost(name) {
+		return Config{}, fmt.Errorf("set public_host: 请填写域名或裸 IPv4/IPv6 地址，不含协议、端口或路径")
+	}
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return Config{}, fmt.Errorf("set public_host: begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if err := db.SetSetting(ctx, tx, db.PublicHost, name); err != nil {
+		return Config{}, fmt.Errorf("set public_host: %w", err)
+	}
+	cfg, err := loadConfig(ctx, tx)
+	if err != nil {
+		return Config{}, fmt.Errorf("set public_host: read panel configuration: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return Config{}, fmt.Errorf("set public_host: commit: %w", err)
 	}
 	return cfg, nil
 }

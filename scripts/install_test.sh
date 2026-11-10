@@ -107,6 +107,7 @@ test_install() {
     contains "$FIXTURE/calls" 'system firewall-open'
     contains "$FIXTURE/calls" 'system bbr'
     contains "$FIXTURE/calls" 'system ready'
+    contains "$FIXTURE/output" 'boxpanel set-host'
     [[ ! -e $FIXTURE/data/.installing && ! -e $FIXTURE/lock ]] || fail 'unfinished installation'
     local first
     first=$(grep -c '^curl ' "$FIXTURE/calls")
@@ -114,6 +115,7 @@ test_install() {
     [[ $(grep -c '^curl ' "$FIXTURE/calls") == "$first" ]] || fail 'repeat downloaded again'
     [[ $(grep -c 'cli .* init' "$FIXTURE/calls") == 1 ]] || fail 'repeat initialized again'
     contains "$FIXTURE/output" 'update'
+    contains "$FIXTURE/output" 'boxpanel set-host'
 }
 
 test_resume() {

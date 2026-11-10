@@ -200,6 +200,9 @@ func TestPortProbePinsDiscoveredIPsAndClosesConnections(t *testing.T) {
 	if strings.Count(w.Body.String(), `"ok":true`) != 2 {
 		t.Fatal(w.Body.String())
 	}
+	if strings.Index(w.Body.String(), `"ip":"203.0.113.1"`) > strings.Index(w.Body.String(), `"ip":"2001:db8::1"`) {
+		t.Fatal("port probe results must list IPv4 first")
+	}
 	for _, body := range []string{`{}`, `{"port":0}`, `{"port":65536}`, `{"port":1.5}`, `{"port":null}`, `{"port":443,"host":"127.0.0.1"}`, `{"port":443,"target":"https://evil.test"}`, `{"port":443,"proto":"udp"}`, `{"port":443,"port":80}`} {
 		f.call(t, "POST", "system/port-probe", body, 400)
 	}

@@ -15,6 +15,7 @@ Commands:
   init     Initialize the panel and print initial credentials once
   info     Print the panel URL and administrator username
   reset-admin  Reset administrator credentials and revoke sessions
+  set-host <IP|domain>  Change the public host and print the new panel URL
   serve    Serve the panel over HTTPS (see 'boxpanel serve --help')
   apply    Regenerate, validate and apply sing-box configuration
   singbox  Install or inspect the managed sing-box binary
@@ -43,6 +44,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if args[0] == "system" {
 		return runSystem(args[1:], stdout, stderr)
+	}
+	if args[0] == "set-host" {
+		return runSetHost(args[1:], stdout, stderr)
 	}
 	if args[0] == "init" || args[0] == "info" || args[0] == "reset-admin" {
 		return runConfigCommand(args[0], args[1:], stdout, stderr)

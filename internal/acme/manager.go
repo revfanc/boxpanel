@@ -120,9 +120,11 @@ func readState(ctx context.Context, q db.SettingsDB) (savedState, error) {
 	return state, nil
 }
 
-func StoredStatus(ctx context.Context, q db.SettingsDB) (Status, error) {
+// StoredInfo is for the local CLI. Keep directory metadata out of the public
+// certificate Status/API; use the serving worker's record, not the CLI's env.
+func StoredInfo(ctx context.Context, q db.SettingsDB) (Status, string, error) {
 	s, err := readState(ctx, q)
-	return s.Status, err
+	return s.Status, s.Directory, err
 }
 
 // ActiveFile is used only by the local readiness CLI. Never expose it via API.

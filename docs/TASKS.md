@@ -346,6 +346,49 @@ Let's Encrypt 自 2026-01-15 起正式签发 IP 地址证书（必须使用 `sho
   具体链接及规格缺口见 FRONTEND.md §7。更正原“classic 约 30 天”半寿命示例，统一按实际有效期计算。
 - 本次仅 T6.3，Hysteria2 仍自签+指纹；未提前实现 M7。
 
+### T6.4 真机验收修复（207.57.124.128，Ubuntu 22.04 双栈）
+
+真机安装 v0.1.0-rc.2 结果：安装、sing-box 生效、**Let's Encrypt 正式 IP 证书签发均成功**（YE2，约 160h）。发现问题：
+
+1. **公网 IP 优先选了 IPv6**：`api64.ipify.org` 在双栈机器返回 IPv6，面板地址/节点地址/证书都变成
+   `2001:df1:7880:6::18e`，国内多数家宽没有 IPv6，小白第一步就打不开面板。
+   - 修复：所有公网 IP 探测（init、setup 环境检查、`/system/public-ip`、端口探测本机 IP 列表等）**优先 IPv4**：
+     先用强制 IPv4 的来源（例如 `https://api.ipify.org`、`https://ipv4.icanhazip.com`，HTTP 客户端拨号限定 `tcp4`），
+     全部失败再回退 IPv6 来源。环境检查同时展示 v4/v6（如已有）。
+   - 单测覆盖：双栈返回 v4；仅 v6 时回退 v6；v4 来源超时时的回退。
+2. **`boxpanel info` 证书文案误导**：ACME 证书生效时固定输出「staging 证书不受公开信任」。
+   - 修复：显示签发者与到期时间（本地时区无关，用 UTC 或 RFC3339），只有当前 ACME directory 不是 LE 正式环境时才提示 staging。
+3. **缺少不登录面板修改节点地址的途径**：探测错了用户无法进面板。
+   - 新增 CLI `boxpanel set-host <IP|域名>`（支持 `--data-dir/--db-path` 等现有路径参数）：复用 settings API 的校验
+     （rules.ValidHost 等），写入 public_host；ACME 模式下证书 worker 会在下一轮检测到变化并重新签发
+     （若进程内无法通知，则输出「执行 systemctl restart boxpanel 立即生效」并在 systemd 下自动重启 boxpanel 服务，
+     失败时只提示不报错退出）。完成后打印新的面板地址。INSTALL.md 记录用法；install.sh 结尾提示里说明地址不对时可用该命令。
+
+- **验收**：
+  - [ ] make lint test build 通过；新增单测覆盖上述三项。
+  - [x] 文档同步（INSTALL.md CLI 一节、API.md 如涉及）。
+
+**T6.4 实现与验证记录（2026-11-09）**：
+- [x] init 与系统检查/重新探测/域名校验/端口探测共享 IPv4 优先路径；专用来源、`tcp4/tcp6`、
+  无代理/重定向、每族多数、3 秒总窗口内保留 IPv6 回退预算；环境检查展示已探测到的双栈地址。
+- [x] 离线 HTTP 客户端/拨号器测试覆盖双栈 IPv4 优先、IPv6-only、IPv4 超时/冲突回退、
+  错误地址族、取消与短父 deadline；系统检查保留双栈，端口探测列表 IPv4 在前。
+- [x] info 输出签发者和 UTC RFC3339 到期时间；仅已记录的非正式 ACME 来源提示 staging/自定义 CA，
+  不受 CLI shell 的 directory 环境变量影响；覆盖正式/staging/自定义/来源缺失/自签回退。
+- [x] set-host 复用 rules.ValidHost 与既有路径参数/环境变量，原子更新 public_host、打印新 URL；
+  提交后才尝试重启 boxpanel，失败仅提示、保留成功保存；开发/非 Linux 不执行系统命令。
+  测试覆盖 IPv4/IPv6/域名、参数前后位置/覆盖、非法输入、缺失 DB、写入失败及重启失败；
+  证书 worker 另用独立 DB 连接验证无需进程内通知即可在下一轮为新主机签发。
+- [x] 安装结束及重复安装提供 set-host 提示；INSTALL/API/CONFIG/FRONTEND 同步。
+  超时预算、签发来源缺失与跨进程通知缺口的最小处理已在对应规格中说明。
+- [x] make lint（含 ShellCheck）、make build 通过；前端 typecheck/lint/vitest 通过（17 文件 / 103 测试）。
+  构建后二进制用全新临时 DB 离线验证 init → set-host（IPv4/域名）→ info，地址持久化及参数位置正常。
+- [ ] 完整 make test：已执行，安装脚本及其余 Go 包通过；仅既有 internal/e2e.TestLoopback
+  被 macOS 沙箱的 `watch DNS configuration: register DNS configuration notification: status 9` 阻断。
+  未修改或跳过该测试，总验收保持未勾选，需普通终端/CI 复验；本机未做 Linux/systemd VPS 实测。
+- [x] 仅 T6.4，无新依赖，无配置生成/Apply 流程改动；未修改内核回环测试、pnpm 冷静期或锁文件，
+  未执行 git commit/push/切换分支。
+
 ## M7 后续增强（MVP 之后，按需排期）
 
 - T7.1 每用户流量统计（评估 v2ray_api 统计是否在官方构建中可用；否则基于 clash_api 连接统计近似）、超额/到期自动禁用（定时任务 + 生效流程）

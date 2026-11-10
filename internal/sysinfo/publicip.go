@@ -19,13 +19,17 @@ type HTTPDoer interface {
 type IPProbe func(context.Context) (netip.Addr, error)
 
 func DefaultIPProbe(ctx context.Context) (netip.Addr, error) {
-	client := &http.Client{Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	defer client.CloseIdleConnections()
-	return ProbePublicIP(ctx, client, []string{"https://api64.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com"}, 3*time.Second)
+	ips, err := defaultPublicIPs(ctx, false)
+	if err != nil {
+		return netip.Addr{}, fmt.Errorf("detect public IP: %w; retry or supply --public-ip with the server IP", err)
+	}
+	if ips.IPv4 != "" {
+		return netip.ParseAddr(ips.IPv4)
+	}
+	return netip.ParseAddr(ips.IPv6)
 }
 
-// ProbePublicIP probes all sources concurrently under one deadline. Among valid
-// replies it prefers IPv4, then requires a strict majority within that family.
+// collectIPs probes the supplied sources concurrently under one deadline.
 func collectIPs(ctx context.Context, client HTTPDoer, sources []string, timeout time.Duration) map[netip.Addr]int {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -89,17 +93,14 @@ func majority(votes map[netip.Addr]int, ipv4 bool) (netip.Addr, int) {
 }
 
 func ProbePublicIP(ctx context.Context, client HTTPDoer, sources []string, timeout time.Duration) (netip.Addr, error) {
-	votes := collectIPs(ctx, client, sources, timeout)
-	for _, ipv4 := range []bool{true, false} {
-		winner, total := majority(votes, ipv4)
-		if total > 0 {
-			if winner.IsValid() {
-				return winner, nil
-			}
-			break
-		}
+	ips, err := ProbePublicIPs(ctx, client, sources, timeout)
+	if err != nil {
+		return netip.Addr{}, fmt.Errorf("detect public IP: %w; retry or supply --public-ip with the server IP", err)
 	}
-	return netip.Addr{}, fmt.Errorf("detect public IP: sources failed or disagreed; retry or supply --public-ip with the server IP")
+	if ips.IPv4 != "" {
+		return netip.ParseAddr(ips.IPv4)
+	}
+	return netip.ParseAddr(ips.IPv6)
 }
 
 type PublicIPs struct {
@@ -127,29 +128,41 @@ func ProbePublicIPs(ctx context.Context, client HTTPDoer, sources []string, time
 }
 
 func DefaultPublicIPs(ctx context.Context) (PublicIPs, error) {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	return defaultPublicIPs(ctx, true)
+}
+
+func defaultPublicIPs(ctx context.Context, both bool) (PublicIPs, error) {
+	dial := (&net.Dialer{}).DialContext
+	ipv4, ipv6 := ipClient("tcp4", dial), ipClient("tcp6", dial)
+	defer ipv4.CloseIdleConnections()
+	defer ipv6.CloseIdleConnections()
+	return probeIPFamilies(ctx, ipv4, ipv6, 3*time.Second, both)
+}
+
+// No environment proxy or redirect: the result must describe this server's
+// egress on the requested family. Dial injection keeps transport tests offline.
+func ipClient(network string, dial func(context.Context, string, string) (net.Conn, error)) *http.Client {
+	transport := &http.Transport{DialContext: func(ctx context.Context, _, address string) (net.Conn, error) {
+		return dial(ctx, network, address)
+	}}
+	return &http.Client{Transport: transport, Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+}
+
+// IPv4 always runs first. Init stops on an agreed IPv4 address; diagnostics also
+// collect IPv6 for display, DNS validation and port probes. Reserve at least
+// half the remaining deadline for IPv6 so IPv4 timeouts cannot starve fallback.
+func probeIPFamilies(ctx context.Context, ipv4, ipv6 HTTPDoer, timeout time.Duration, both bool) (PublicIPs, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	results := make(chan PublicIPs, 2)
-	for _, network := range []string{"tcp4", "tcp6"} {
-		go func(network string) {
-			transport := &http.Transport{DialContext: func(ctx context.Context, _, address string) (net.Conn, error) {
-				return (&net.Dialer{}).DialContext(ctx, network, address)
-			}}
-			defer transport.CloseIdleConnections()
-			client := &http.Client{Transport: transport, Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-			ips, _ := ProbePublicIPs(ctx, client, []string{"https://api64.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com"}, 3*time.Second)
-			results <- ips
-		}(network)
-	}
 	var result PublicIPs
-	for range 2 {
-		r := <-results
-		if r.IPv4 != "" {
-			result.IPv4 = r.IPv4
-		}
-		if r.IPv6 != "" {
-			result.IPv6 = r.IPv6
-		}
+	deadline, _ := ctx.Deadline()
+	if ctx.Err() == nil {
+		ips, _ := ProbePublicIPs(ctx, ipv4, []string{"https://api.ipify.org", "https://ipv4.icanhazip.com", "https://ifconfig.me/ip"}, time.Until(deadline)/2)
+		result.IPv4 = ips.IPv4
+	}
+	if (both || result.IPv4 == "") && ctx.Err() == nil {
+		ips, _ := ProbePublicIPs(ctx, ipv6, []string{"https://api6.ipify.org", "https://ipv6.icanhazip.com", "https://ifconfig.me/ip"}, time.Until(deadline))
+		result.IPv6 = ips.IPv6
 	}
 	if result.IPv4 == "" && result.IPv6 == "" {
 		return result, fmt.Errorf("detect public IPs: check outbound HTTPS and retry")

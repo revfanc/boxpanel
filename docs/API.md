@@ -146,6 +146,9 @@ CSRF、8 KiB 严格 JSON 和统一错误契约。GET 支持 HEAD。前端不再�
 - `/system/public-ip` 按 CONFIG.md §6 分别探测两个地址族，缺失/冲突的地址族为空字符串；
   至少一个地址族成功即 200，两个都失败返回 `500 internal_error`，提示检查网络后重试。
   重新探测不会覆盖 DB 中的 `public_host`。
+  T6.4：先以 `tcp4` 请求 IPv4 来源，再收集 IPv6；3 秒总窗口为 IPv6 保留至少一半剩余预算，
+  避免 IPv4 超时阻止回退。check、域名校验及 port-probe 共享此实现，双栈响应格式不变；
+  选择单一地址与本机 IP 列表均优先 IPv4。CLI `set-host` 复用 settings 的主机校验，详见 INSTALL.md。
 - 非 Linux 或 `--dev`：check 只包含 `platform` warn 与空探测值（ports 的 free 为 null）；
   status 为 `supported:false` 且指标为零，不能解读为真实的系统指标。
   public-ip 和 bbr 返回 `409 system_unsupported`。Linux 内核不提供 BBR 时返回

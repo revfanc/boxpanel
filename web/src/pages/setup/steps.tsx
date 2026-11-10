@@ -21,6 +21,12 @@ export function CheckStep({ next, setBusy }: StepProps) {
   return <>
     <Button variant="outline" disabled={check.isFetching || bbr.pending} onClick={() => { void check.refetch() }}>{t.common.refresh}</Button>
     {check.isPending ? <Loading /> : check.isError ? <ErrorNotice error={check.error} retry={() => { void check.refetch() }} /> : <>
+      {(check.data.ipv4 || check.data.ipv6) && <Panel title={t.setup.publicIPs} hint={t.setup.publicIPsHint}>
+        <dl className="grid gap-3 sm:grid-cols-2">
+          {check.data.ipv4 && <div><dt className="text-sm text-muted-foreground">{t.setup.ipv4}</dt><dd className="break-all font-mono text-sm">{check.data.ipv4}</dd></div>}
+          {check.data.ipv6 && <div><dt className="text-sm text-muted-foreground">{t.setup.ipv6}</dt><dd className="break-all font-mono text-sm">{check.data.ipv6}</dd></div>}
+        </dl>
+      </Panel>}
       <ul className="space-y-3">{check.data.items.map((item) => <li key={item.id} className="space-y-2 rounded-lg border p-4"><p className="font-medium">{({ ok: '✅', warn: '⚠️', error: '❌' })[item.level]} {t.setup.levels[item.level]} · {item.title}</p><p className="text-sm leading-6 text-muted-foreground">{item.hint}</p>{item.action === 'enable_bbr' && !check.data.bbr.enabled && <Button disabled={bbr.pending} onClick={() => {
         setBusy(true)
         void bbr.run(() => api<BBR>('/system/bbr', { method: 'POST' }), async () => { await check.refetch() }).finally(() => setBusy(false))

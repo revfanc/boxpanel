@@ -25,6 +25,7 @@ func TestPublicIPProbe(t *testing.T) {
 		{"partial success", []string{"203.0.113.1", "invalid"}, "203.0.113.1"},
 		{"ipv6 only", []string{"2001:db8::1", "2001:db8::1"}, "2001:db8::1"},
 		{"ipv4 preferred", []string{"2001:db8::1", "203.0.113.1", "2001:db8::1"}, "203.0.113.1"},
+		{"ipv4 conflict fallback", []string{"203.0.113.1", "203.0.113.2", "2001:db8::1"}, "2001:db8::1"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			sources := []string{}

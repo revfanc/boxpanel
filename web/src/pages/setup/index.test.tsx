@@ -95,6 +95,21 @@ it.each(setupSteps.slice(1))('persists Back from %s', async (current) => {
   expect(router.state.location.pathname).toBe(`/setup/${previous}`)
 })
 
+it.each([
+  { ipv4: '203.0.113.8', ipv6: '2001:db8::8' },
+  { ipv4: '203.0.113.8', ipv6: '' },
+  { ipv4: '', ipv6: '2001:db8::8' },
+  { ipv4: '', ipv6: '' },
+])('shows discovered address families without inventing missing ones: %j', async (ips) => {
+  fixture({ step: 'check' }, { '/system/check': () => Response.json({ ...check, ...ips }) })
+  mount()
+  await screen.findByText('Use Linux to apply')
+  const addresses = screen.queryAllByRole('definition').map((node) => node.textContent)
+  expect(addresses).toEqual([ips.ipv4, ips.ipv6].filter(Boolean))
+  if (ips.ipv4 || ips.ipv6) expect(screen.getByText(t.setup.publicIPsHint)).toBeVisible()
+  else expect(screen.queryByText(t.setup.publicIPs)).not.toBeInTheDocument()
+})
+
 it('blocks check errors, enables BBR and rechecks before proceeding', async () => {
   let fixed = false
   let bbr = false

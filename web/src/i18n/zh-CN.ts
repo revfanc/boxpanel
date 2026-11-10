@@ -56,6 +56,8 @@ export const zhCN = {
     welcome: '用大约 2 分钟，完成环境检查、创建节点与用户，再把订阅导入客户端。',
     certificate: '浏览器提示“不安全”是因为面板使用自签证书，属正常现象。请确认地址确实是自己的服务器，再通过浏览器的“高级 → 继续访问”进入。',
     checkHint: '请先修复标为错误的项目，再刷新检查。警告不会阻止继续。',
+    publicIPs: '服务器公网地址', ipv4: '公网 IPv4（优先）', ipv6: '公网 IPv6',
+    publicIPsHint: '自动选择地址时优先采用 IPv4。这里展示本次探测结果，不会修改已保存的节点地址。',
     levels: { ok: '通过', warn: '提醒', error: '错误' }, bbr: '一键开启 BBR',
     noDomain: '我没有域名（推荐）', hasDomain: '我有域名', domain: '你的域名',
     noDomainHint: '使用服务器公网 IP，创建 VLESS + Reality。面板会自动尝试申请 IP 可信证书，需放行 TCP 80。',

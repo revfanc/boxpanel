@@ -112,6 +112,26 @@ func (f *fixture) tick(t *testing.T, force bool) Status {
 	return s
 }
 
+func TestExternalHostChangeIsPickedUpWithoutNotification(t *testing.T) {
+	f := newFixture(t)
+	f.tick(t, false)
+	previous, _ := f.m.GetCertificate(nil)
+	// Simulate set-host in a separate process: no Changed call and no restart.
+	other, err := db.Open(context.Background(), filepath.Join(filepath.Dir(f.m.opts.Dir), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if err := db.SetSetting(context.Background(), other, db.PublicHost, "203.0.113.8"); err != nil {
+		t.Fatal(err)
+	}
+	status := f.tick(t, false)
+	current, _ := f.m.GetCertificate(nil)
+	if f.calls != 2 || status.Host != "203.0.113.8" || status.Type != "acme" || bytes.Equal(previous.Certificate[0], current.Certificate[0]) || current.Leaf.VerifyHostname("203.0.113.8") != nil {
+		t.Fatalf("worker did not reconcile external host change: %+v calls=%d", status, f.calls)
+	}
+}
+
 func TestRenewalHalfLifetimeHotSwapAndRestart(t *testing.T) {
 	for _, life := range []time.Duration{160 * time.Hour, 90 * 24 * time.Hour} {
 		t.Run(life.String(), func(t *testing.T) {

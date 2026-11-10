@@ -18,6 +18,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/main/script
 密码:     xxxxxxxxxxxxxxxx
 面板证书: ACME 证书（若申请未完成或失败，则明确显示自签证书和下一步提示）
 请确认云服务商安全组已放行 TCP 23456 和 TCP 80。
+地址不对时可运行 boxpanel set-host 你的公网IPv4或域名 修正（请替换示例占位内容）。
 ```
 
 ## 2. `scripts/install.sh` 行为
@@ -99,6 +100,7 @@ shellcheck scripts/*.sh
 | `boxpanel serve --dev` | 开发模式：`web_path=""`，HTTP，监听 127.0.0.1:2053，默认 DB 在 `./dev.db`；首次自动初始化并打印随机账号密码，不调用 systemctl |
 | `boxpanel init [--port N]` | 首次初始化（已初始化则拒绝） |
 | `boxpanel info` | 打印面板地址、用户名（不打印密码） |
+| `boxpanel set-host <IP\|域名>` | 修复节点/面板地址，打印新地址，并在 Linux/systemd 下尝试重启面板 |
 | `boxpanel reset-admin` | 重置管理员用户名与密码并打印 |
 | `boxpanel set port <N>` / `set path <p>` | 修改面板端口/路径并重启面板 |
 | `boxpanel singbox install [--version v]` | 安装 sing-box；未生成配置时可切换稳定版本，已有配置的升级留在 T7.6 |
@@ -118,9 +120,38 @@ T6.1 的 `system` 子命令支持已有数据/证书/内核路径参数，仅在
 未完成 `.pending` 的前后计划和 panel_firewall_ports，目标为空；运行中服务、损坏恢复记录或
 检测失败时拒绝清理。不重启来恢复 pending，不写 sing-box JSON，不删除恢复材料；重装后 Apply 可恢复。
 
+### T6.4 地址修复与证书信息
+
+```bash
+boxpanel set-host 203.0.113.8
+boxpanel set-host panel.example.com --data-dir /etc/boxpanel
+boxpanel set-host --data-dir /srv/boxpanel --db-path /srv/boxpanel/panel.db 2001:db8::8
+```
+
+- 将示例 IP/域名替换为本机实际公网地址。支持下表全部数据/证书路径参数及环境变量，
+  参数可放在地址前后；显式参数优先于环境变量。数据库必须已初始化，缺失时不会新建。
+  校验与 settings API 复用 `rules.ValidHost`：接受 ASCII 域名或裸 IPv4/IPv6，
+  不接受 URL、端口、路径、IPv6 方括号/zone。此命令不联网探测或验证域名 DNS，需自行确认地址正确。
+- 仅在事务中更新 `public_host`，保持端口、面板/订阅路径、TLS 策略及账号不变；成功后打印
+  新面板 URL（IPv6 自动加方括号），不输出凭证。下一次订阅使用新地址，已导入客户端需更新订阅。
+  不直接写 sing-box 配置；面板重启仍遵守正常 Startup/Apply 流程。
+- CLI 与服务是不同进程，无法调用进程内通知；运行中的证书 worker 会在下一轮每分钟检查时
+  发现主机变化，acme 模式自动重新签发，期间使用匹配新地址的自签备用证书。
+  self_signed 模式保持自签。云安全组 TCP 80 和域名 A/AAAA 仍须正确配置，签发结果见设置页。
+- 保存后提示 `执行 systemctl restart boxpanel 立即生效`，Linux 下通过已有 systemd 封装自动
+  尝试重启 `boxpanel.service`。数据库已提交并释放事务后才重启；systemctl 缺失/失败时仅提示
+  手动重试及查看 journal，地址不回滚、命令仍退出 0。保存失败退出非零且不尝试重启。
+  自定义路径应与该服务使用的路径一致；非 Linux 不调用系统命令，非 systemd 部署可重启
+  同路径的面板进程，或等待 worker 检查。`--dev` 使用已有开发路径规则且不重启服务。
+- `info` 显示已记录的实际证书类型、签发者及 UTC RFC3339 到期时间。
+  信任提示以运行中 worker 持久化的 directory 为准，不受调用 `info` 的 shell 环境变量影响；
+  只有已记录来源不是 LE 正式 directory 的 ACME 证书才提示 staging/自定义 CA 信任问题。
+  来源缺失则提示核对/重新申请，不推断为 staging；尚无证书状态时显示自签备用说明。
+  安装结束和重复安装提示均提供 `set-host` 修复入口。
+
 ### T1.2 初始化、路径与启动约定
 
-`init`、`info`、`reset-admin`、`serve` 均支持以下路径参数；优先级是显式参数 > 环境变量 > 默认值。
+`init`、`info`、`reset-admin`、`set-host`、`serve` 均支持以下路径参数；优先级是显式参数 > 环境变量 > 默认值。
 不要求 root，只需目录可写且监听端口可用。
 
 | 参数 | 环境变量 | 默认值 |

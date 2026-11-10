@@ -3,15 +3,69 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/revfanc/boxpanel/internal/acme"
 	"github.com/revfanc/boxpanel/internal/app"
 	"github.com/revfanc/boxpanel/internal/db"
 )
+
+func TestInfoCertificateSourceAndUTCExpiry(t *testing.T) {
+	paths, conn := hostFixture(t)
+	t.Setenv("BOXPANEL_DB_PATH", paths.Database)
+	t.Setenv("BOXPANEL_DATA_DIR", paths.DataDir)
+	expiry := time.Date(2026, 11, 15, 18, 30, 0, 0, time.UTC)
+	for _, tt := range []struct {
+		name, kind, directory string
+		warning               bool
+	}{
+		{"production", "acme", acme.DefaultDirectory, false},
+		{"staging", "acme", "https://acme-staging-v02.api.letsencrypt.org/directory", true},
+		{"custom CA", "acme", "https://ca.example.com/directory", true},
+		{"unknown source", "acme", "", false},
+		{"self signed fallback", "self_signed", "https://ca.example.com/directory", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			// The invoking shell is not the running service's configuration.
+			env := acme.DefaultDirectory
+			if tt.directory == env {
+				env = "https://acme-staging-v02.api.letsencrypt.org/directory"
+			}
+			t.Setenv("BOXPANEL_ACME_DIRECTORY", env)
+			t.Setenv("TZ", "Pacific/Honolulu")
+			raw, err := json.Marshal(struct {
+				acme.Status
+				Directory string `json:"directory"`
+				File      string `json:"file"`
+			}{acme.Status{Mode: "acme", Type: tt.kind, Issuer: "CN=YE2,O=Let's Encrypt,C=US", NotAfter: expiry.Unix(), Hint: "请检查云安全组 TCP 80。"}, tt.directory, "sensitive-internal-file"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.SetSetting(context.Background(), conn, db.PanelCertificate, json.RawMessage(raw)); err != nil {
+				t.Fatal(err)
+			}
+			var out, stderr bytes.Buffer
+			if code := run([]string{"info"}, &out, &stderr); code != 0 {
+				t.Fatalf("info: %d %s", code, &stderr)
+			}
+			text := out.String()
+			for _, want := range []string{"签发者:   CN=YE2", "到期时间: 2026-11-15T18:30:00Z (UTC)", "请检查云安全组 TCP 80。"} {
+				if !strings.Contains(text, want) {
+					t.Errorf("missing %q: %s", want, text)
+				}
+			}
+			if strings.Contains(text, "staging") != tt.warning || strings.Contains(text, "sensitive-internal-file") || strings.Contains(text, "密码:") {
+				t.Fatalf("incorrect trust warning or leaked metadata: %s", text)
+			}
+		})
+	}
+}
 
 func clearEnvironment(t *testing.T) {
 	t.Helper()

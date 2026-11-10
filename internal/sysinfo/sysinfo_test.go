@@ -227,7 +227,7 @@ func TestStatusConcurrent(t *testing.T) {
 func TestCheckItemsAndFailures(t *testing.T) {
 	s, f, r := fixture()
 	check, err := s.Check(context.Background())
-	if err != nil || check.OS != "debian 12" || check.Arch != "arm64" || check.Virt != "kvm" || !check.BBR.Available || check.BBR.Enabled || check.IPv4 == "" {
+	if err != nil || check.OS != "debian 12" || check.Arch != "arm64" || check.Virt != "kvm" || !check.BBR.Available || check.BBR.Enabled || check.IPv4 != "203.0.113.1" || check.IPv6 != "2001:db8::1" {
 		t.Fatalf("check=%+v %v", check, err)
 	}
 	if *check.Ports[0].Free || !*check.Ports[1].Free {
