@@ -411,6 +411,12 @@ JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未�
 - 浏览器 HTML 以 text/html 内联显示（不发 attachment），仍带流量/更新头；二维码在本地生成 PNG，
   页面使用 no-store、no-referrer、CSP、HTML 转义，无外部脚本、字体、QR 服务或请求日志中的 token。
   显示各格式链接、sing-box/Clash 导入按钮、流量与 UTC 到期时间，提示客户端版本与 URI 规则限制。
+- T6.5：成功 GET/HEAD 写响应后记录一条 `INFO subscription served`，业务字段仅
+  `format`、`user_agent`、`user_id`。format 为 singbox/clash/uri（base64 记作 uri）；
+  规格未列浏览器页面，补充为 html，避免误报客户端格式。格式取实际生成结果，显式参数仍优先。
+  UA 删除控制/不可打印字符，按 Unicode 字符截断至 128；截断前屏蔽已知用户凭证、token、
+  混淆密码、请求路径与来源 IP（含 URL 转义形式），避免 UA 反射泄漏。
+  不记录 URL/query、客户端 IP、Cookie、认证头、响应体或原始错误；失败请求和写出失败不记成功事件。
 
 自动化验证：三种格式 × 三个预设 × 默认/完整选项/空节点共 27 份 golden；9 份 sing-box golden
 逐一执行锁定内核 check。另覆盖 UA、URI 特殊字符/IPv6、规则顺序/源、有效期/流量边界、

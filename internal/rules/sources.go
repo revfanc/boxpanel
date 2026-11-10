@@ -5,7 +5,7 @@ import "fmt"
 
 const (
 	MetaSRSBase   = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/"
-	MetaMRSBase   = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/"
+	MetaYAMLBase  = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/"
 	SagerSiteBase = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/"
 	SagerIPBase   = "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/"
 	MetaSRCN      = MetaSRSBase + "geosite/cn.srs"
@@ -13,11 +13,11 @@ const (
 	MetaSRGFW     = MetaSRSBase + "geosite/gfw.srs"
 	MetaSRNonCN   = MetaSRSBase + "geosite/geolocation-!cn.srs"
 	MetaSRAds     = MetaSRSBase + "geosite/category-ads-all.srs"
-	MetaMRCN      = MetaMRSBase + "geosite/cn.mrs"
-	MetaMRIPCN    = MetaMRSBase + "geoip/cn.mrs"
-	MetaMRGFW     = MetaMRSBase + "geosite/gfw.mrs"
-	MetaMRNonCN   = MetaMRSBase + "geosite/geolocation-!cn.mrs"
-	MetaMRAds     = MetaMRSBase + "geosite/category-ads-all.mrs"
+	MetaYAMLCN    = MetaYAMLBase + "geosite/cn.yaml"
+	MetaYAMLIPCN  = MetaYAMLBase + "geoip/cn.yaml"
+	MetaYAMLGFW   = MetaYAMLBase + "geosite/gfw.yaml"
+	MetaYAMLNonCN = MetaYAMLBase + "geosite/geolocation-!cn.yaml"
+	MetaYAMLAds   = MetaYAMLBase + "geosite/category-ads-all.yaml"
 	SagerCN       = SagerSiteBase + "geosite-cn.srs"
 	SagerIPCN     = SagerIPBase + "geoip-cn.srs"
 	// SagerNet does not publish geosite-gfw.srs (verified HTTP 404). Keep
@@ -27,16 +27,16 @@ const (
 	SagerAds   = SagerSiteBase + "geosite-category-ads-all.srs"
 )
 
-type Source struct{ Tag, Behavior, MetaSRS, MetaMRS, SagerSRS string }
+type Source struct{ Tag, Behavior, MetaSRS, MetaYAML, SagerSRS string }
 
 // Sources returns a copy, in a stable order. Tests never fetch these URLs.
 func Sources() []Source {
 	return []Source{
-		{"geosite-cn", "domain", MetaSRCN, MetaMRCN, SagerCN},
-		{"geoip-cn", "ipcidr", MetaSRIPCN, MetaMRIPCN, SagerIPCN},
-		{"geosite-gfw", "domain", MetaSRGFW, MetaMRGFW, SagerGFW},
-		{"geosite-geolocation-!cn", "domain", MetaSRNonCN, MetaMRNonCN, SagerNonCN},
-		{"geosite-ads", "domain", MetaSRAds, MetaMRAds, SagerAds},
+		{"geosite-cn", "domain", MetaSRCN, MetaYAMLCN, SagerCN},
+		{"geoip-cn", "ipcidr", MetaSRIPCN, MetaYAMLIPCN, SagerIPCN},
+		{"geosite-gfw", "domain", MetaSRGFW, MetaYAMLGFW, SagerGFW},
+		{"geosite-geolocation-!cn", "domain", MetaSRNonCN, MetaYAMLNonCN, SagerNonCN},
+		{"geosite-ads", "domain", MetaSRAds, MetaYAMLAds, SagerAds},
 	}
 }
 
@@ -54,7 +54,7 @@ func URL(tag, source, format, mirror string, rewrite Mirror) (string, error) {
 			u = s.SagerSRS
 		}
 		if format == "clash" {
-			u = s.MetaMRS
+			u = s.MetaYAML
 		}
 		if rewrite == nil {
 			rewrite = PrefixMirror

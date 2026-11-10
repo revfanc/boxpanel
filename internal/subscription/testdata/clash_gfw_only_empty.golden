@@ -1,15 +1,33 @@
 allow-lan: false
 dns:
+  default-nameserver:
+    - https://223.5.5.5/dns-query
   enable: true
-  enhanced-mode: redir-host
+  enhanced-mode: fake-ip
+  fake-ip-filter:
+    - '*.lan'
+    - '*.local'
+    - localhost.ptlink
+    - localhost.ptlogin2.qq.com
+    - time.*.com
+    - ntp.*.com
+    - +.pool.ntp.org
+    - +.msftconnecttest.com
+    - +.msftncsi.com
+    - captive.apple.com
+  fake-ip-range: 198.18.0.1/16
+  follow-rule: true
   ipv6: false
   nameserver:
     - https://223.5.5.5/dns-query
+    - https://doh.pub/dns-query
   nameserver-policy:
     rule-set:geosite-gfw:
       - https://1.1.1.1/dns-query
   proxy-server-nameserver:
     - https://223.5.5.5/dns-query
+    - https://doh.pub/dns-query
+  respect-rules: true
 ipv6: false
 log-level: warning
 mixed-port: 7890
@@ -30,12 +48,15 @@ proxy-groups:
 rule-providers:
   geosite-gfw:
     behavior: domain
-    format: mrs
+    format: yaml
     interval: 86400
     proxy: 节点选择
     type: http
-    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/gfw.mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/gfw.yaml
 rules:
+  - IP-CIDR,1.1.1.1/32,REJECT,no-resolve
+  - IP-CIDR,223.5.5.5/32,DIRECT,no-resolve
+  - DOMAIN,doh.pub,DIRECT
   - IP-CIDR,0.0.0.0/8,DIRECT,no-resolve
   - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
   - IP-CIDR,100.64.0.0/10,DIRECT,no-resolve

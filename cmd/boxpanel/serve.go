@@ -186,7 +186,7 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 		if err != nil {
 			return nil, fmt.Errorf("prepare HTTP server: %w", err)
 		}
-		return &subscription.Handler{Store: store, Next: spaHandler, Limiter: limiter, PanelPort: settings.WebPort}, nil
+		return &subscription.Handler{Store: store, Next: spaHandler, Limiter: limiter, PanelPort: settings.WebPort, Logger: logger}, nil
 	}
 	handler, err := panel.build(httpapi.PanelSettings{WebPath: cfg.WebPath, WebPort: cfg.WebPort})
 	if err != nil {

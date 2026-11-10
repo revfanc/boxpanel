@@ -19,7 +19,7 @@
 | 存储 | SQLite（`modernc.org/sqlite`） | 零依赖、易备份 |
 | 前端路由 | React Router **history 模式** + 运行时 basename | 面板挂在随机路径下，刷新深链接可用 |
 | 默认协议 | 无域名：VLESS+Reality；可选 Hysteria2 | 无需证书、抗探测 |
-| 规则 | 远程 `.srs` / `.mrs` rule-set，客户端自动更新 | 规则保持活跃，不依赖已废弃的 geoip/geosite.db |
+| 规则 | 远程 `.srs` / `.yaml` rule-set，客户端自动更新 | 规则保持活跃，不依赖已废弃的 geoip/geosite.db |
 | 进程管理 | systemd 两个服务：`boxpanel`、`boxpanel-singbox` | 互相独立，面板挂了不影响代理 |
 
 ## 3. 运行时布局

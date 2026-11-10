@@ -268,6 +268,37 @@ func clashConfig(s Snapshot, p rules.Plan) object {
 	}
 	lines := []string{}
 	policy := object{}
+	localDNS := []string{s.Rules.DNS.Local}
+	if s.Rules.DNS.Local == "https://223.5.5.5/dns-query" {
+		localDNS = append(localDNS, "https://doh.pub/dns-query")
+	}
+	remoteDNS := []string{s.Rules.DNS.Remote}
+	// DNS transports follow these rules (respect-rules in mihomo, follow-rule
+	// in Stash). The remote endpoint comes first even in gfw_only or when a
+	// custom direct suffix also covers it. Node DNS has its own resolver chain.
+	dnsTarget := selectName
+	if len(s.Nodes) == 0 {
+		dnsTarget = "REJECT"
+	}
+	lines = append(lines, clashDNSRule(s.Rules.DNS.Remote, dnsTarget))
+	seenDNSHosts := map[string]bool{}
+	remoteURL, _ := rules.HTTPS(s.Rules.DNS.Remote)
+	seenDNSHosts[strings.ToLower(remoteURL.Hostname())] = true
+	for _, resolver := range append([]string{"https://223.5.5.5/dns-query"}, localDNS...) {
+		u, _ := rules.HTTPS(resolver)
+		host := strings.ToLower(u.Hostname())
+		if !seenDNSHosts[host] {
+			lines = append(lines, clashDNSRule(resolver, "DIRECT"))
+			seenDNSHosts[host] = true
+		}
+	}
+	realIPExceptions := []string{"time.*.com", "ntp.*.com", "+.pool.ntp.org", "+.msftconnecttest.com", "+.msftncsi.com", "captive.apple.com"}
+	fakeIPFilter := append([]string{"*.lan", "*.local", "localhost.ptlink", "localhost.ptlogin2.qq.com"}, realIPExceptions...)
+	tags := append([]string{}, p.Tags...)
+	if p.Final == "proxy" {
+		tags = append(tags, "geosite-geolocation-!cn")
+		policy["rule-set:geosite-geolocation-!cn"] = remoteDNS
+	}
 	for _, r := range p.Rules {
 		t := target(r.Target)
 		if r.Target == "proxy" && len(s.Nodes) == 0 {
@@ -285,19 +316,34 @@ func clashConfig(s Snapshot, p rules.Plan) object {
 			lines = append(lines, "DOMAIN-SUFFIX,"+r.Value+","+t)
 			key := "+." + r.Value
 			if _, exists := policy[key]; !exists {
-				resolver := s.Rules.DNS.Local
+				resolvers := localDNS
 				if r.Target == "proxy" {
-					resolver = s.Rules.DNS.Remote
+					resolvers = remoteDNS
 				}
-				policy[key] = []string{resolver}
+				policy[key] = resolvers
 			}
 		case "set":
-			lines = append(lines, "RULE-SET,"+r.Value+","+t)
+			line := "RULE-SET," + r.Value + "," + t
+			if r.Value == "geoip-cn" {
+				line += ",no-resolve"
+			}
+			lines = append(lines, line)
 			if r.Value == "geosite-gfw" {
-				policy["rule-set:"+r.Value] = []string{s.Rules.DNS.Remote}
+				policy["rule-set:"+r.Value] = remoteDNS
 			}
 			if r.Value == "geosite-cn" {
-				policy["rule-set:"+r.Value] = []string{s.Rules.DNS.Local}
+				policy["rule-set:"+r.Value] = localDNS
+				// Supported by mihomo and current Stash; only reference sets
+				// present in this preset, so global keeps proxying CN domains.
+				fakeIPFilter = append(fakeIPFilter, "rule-set:geosite-cn")
+			}
+		}
+	}
+	if p.Final == "proxy" {
+		// Protect real-IP exceptions, while keeping explicit custom policies.
+		for _, domain := range realIPExceptions {
+			if _, exists := policy[domain]; !exists {
+				policy[domain] = remoteDNS
 			}
 		}
 	}
@@ -308,25 +354,45 @@ func clashConfig(s Snapshot, p rules.Plan) object {
 	}
 	providers := object{}
 	interval, _ := rules.Interval(s.Rules.UpdateInterval)
-	for _, tag := range p.Tags {
+	for _, tag := range tags {
 		u, _ := rules.URL(tag, s.Rules.Source, "clash", s.Rules.Mirror, nil)
 		behavior := "domain"
 		if tag == "geoip-cn" {
 			behavior = "ipcidr"
 		}
-		providers[tag] = object{"type": "http", "behavior": behavior, "format": "mrs", "url": u, "interval": int(interval.Seconds()), "proxy": selectName}
-	}
-	mode := "redir-host"
-	if s.Rules.DNS.FakeIP {
-		mode = "fake-ip"
-	}
-	resolver := s.Rules.DNS.Remote
-	if p.Final == "direct" {
-		resolver = s.Rules.DNS.Local
+		providers[tag] = object{"type": "http", "behavior": behavior, "format": "yaml", "url": u, "interval": int(interval.Seconds()), "proxy": selectName}
 	}
 	choices := names
 	if len(choices) == 0 {
 		choices = []string{"REJECT"}
 	}
-	return object{"mixed-port": 7890, "allow-lan": false, "mode": "rule", "log-level": "warning", "ipv6": s.Rules.IPv6, "dns": object{"enable": true, "ipv6": s.Rules.IPv6, "enhanced-mode": mode, "nameserver": []string{resolver}, "nameserver-policy": policy, "proxy-server-nameserver": []string{s.Rules.DNS.Local}}, "proxies": proxies, "proxy-groups": []object{{"name": selectName, "type": "select", "proxies": append(append([]string{autoName}, names...), "DIRECT")}, {"name": autoName, "type": "url-test", "proxies": choices, "url": "https://www.gstatic.com/generate_204", "interval": 300}}, "rule-providers": providers, "rules": lines}
+	return object{
+		"mixed-port": 7890, "allow-lan": false, "mode": "rule", "log-level": "warning", "ipv6": false,
+		"dns": object{
+			"enable": true, "ipv6": false, "enhanced-mode": "fake-ip",
+			"respect-rules": true, "follow-rule": true,
+			"fake-ip-range": "198.18.0.1/16", "fake-ip-filter": fakeIPFilter,
+			"default-nameserver": []string{"https://223.5.5.5/dns-query"},
+			"nameserver":         localDNS, "nameserver-policy": policy, "proxy-server-nameserver": localDNS,
+		},
+		"proxies": proxies,
+		"proxy-groups": []object{
+			{"name": selectName, "type": "select", "proxies": append(append([]string{autoName}, names...), "DIRECT")},
+			{"name": autoName, "type": "url-test", "proxies": choices, "url": "https://www.gstatic.com/generate_204", "interval": 300},
+		},
+		"rule-providers": providers, "rules": lines,
+	}
+}
+
+func clashDNSRule(raw, target string) string {
+	u, _ := rules.HTTPS(raw) // validated by rules.Build
+	host := strings.ToLower(u.Hostname())
+	if ip, err := netip.ParseAddr(host); err == nil {
+		kind, bits := "IP-CIDR", "/32"
+		if ip.Is6() {
+			kind, bits = "IP-CIDR6", "/128"
+		}
+		return kind + "," + host + bits + "," + target + ",no-resolve"
+	}
+	return "DOMAIN," + host + "," + target
 }

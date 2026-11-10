@@ -38,6 +38,12 @@ func TestPlansAndSources(t *testing.T) {
 				if format == "clash" && !strings.Contains(got, "MetaCubeX") {
 					t.Fatal("mihomo must use MetaCubeX")
 				}
+				if format == "clash" && !strings.HasSuffix(got, ".yaml") {
+					t.Fatal("Clash providers must use portable YAML")
+				}
+				if format == "singbox" && !strings.HasSuffix(got, ".srs") {
+					t.Fatal("sing-box providers must retain SRS")
+				}
 			}
 		}
 	}

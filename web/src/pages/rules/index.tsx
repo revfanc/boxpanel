@@ -60,7 +60,7 @@ function RulesForm({ rules }: { rules: RulesSettings }) {
           }} remove={(domain) => form.setValue(field, form.getValues(field).filter((value) => value !== domain), { shouldDirty: true, shouldValidate: true })} />
         })}
       </Panel>
-      <Panel title={t.rules.dns}>
+      <Panel title={t.rules.dns} hint={t.rules.dnsHint}>
         <Field label={t.rules.remote} {...form.register('dns.remote')} error={errors.dns?.remote?.message} />
         <Field label={t.rules.local} {...form.register('dns.local')} error={errors.dns?.local?.message} />
         <Toggle label={t.rules.fakeip} checked={values.dns?.fakeip ?? false} onChange={(value) => form.setValue('dns.fakeip', value, { shouldDirty: true })} />

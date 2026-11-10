@@ -389,6 +389,66 @@ Let's Encrypt 自 2026-01-15 起正式签发 IP 地址证书（必须使用 `sho
 - [x] 仅 T6.4，无新依赖，无配置生成/Apply 流程改动；未修改内核回环测试、pnpm 冷静期或锁文件，
   未执行 git commit/push/切换分支。
 
+### T6.5 客户端 DNS 防泄漏 + Clash 兼容（真机反馈）
+
+真机反馈：iPhone 上名为「Clash」的 App 导入订阅后「连不上」。服务端抓包确认 VLESS Reality/Hysteria2 握手成功且有数据往返，
+服务器上用同一订阅跑 sing-box 客户端两个节点均可访问 Google。判断问题在 mihomo 订阅的 DNS：
+`redir-host` + `nameserver: https://1.1.1.1/dns-query` **直连**，国内网络常被干扰，表现为测速通、网页打不开；
+同时外网域名的 DNS 查询从用户真实 IP 发出，属于 DNS 泄漏。
+
+**mihomo / Clash YAML（必须）**
+1. `dns.enhanced-mode: fake-ip`，`fake-ip-range: 198.18.0.1/16`，`fake-ip-filter` 至少含 `*.lan`、`*.local`、`localhost.ptlink`、
+   常见 NTP/系统连通性检测域名（如 `time.*.com`、`+.msftconnecttest.com`、`+.msftncsi.com`、`captive.apple.com`），
+   以及 `rule-set:geosite-cn`（仅在客户端支持时；不支持就不加，以兼容性为准，写明依据）。
+2. 默认 `nameserver` 改为国内 DoH（`https://223.5.5.5/dns-query`、`https://doh.pub/dns-query`）只用于直连域名；
+   **外网域名不在本地解析**：fake-ip 下按域名交给代理，由服务端 resolve。
+   `nameserver-policy` 保留 geosite-cn → 国内 DoH；如需远端 DNS（例如 `geolocation-!cn`），必须走代理
+   （`https://1.1.1.1/dns-query#节点选择` 语法，或 `respect-rules: true` + `proxy-server-nameserver`，按 mihomo 官方文档核实并引用）。
+3. 所有 IP 类规则（`IP-CIDR`、`RULE-SET,geoip-cn`）加 `no-resolve`，避免为匹配规则在本地解析外网域名。
+4. `rule-providers` 改用通用格式：`format: yaml`（`.yaml` 文件，MetaCubeX meta-rules-dat 同路径已存在，已核实 200），
+   不再输出 mihomo 专有的 `mrs`，以兼容 Stash 等非 mihomo 客户端；仍通过 `proxy: 节点选择` 下载。
+5. `dns.ipv6: false` 保持；`ipv6: false` 保持。
+6. 用户选择的规则预设（全局/绕过大陆/仅 GFW）都要满足上述防泄漏规则；gfw_only 预设下非 GFW 域名直连属于预期。
+
+**sing-box JSON（核对 + 测试）**
+7. 现有设计（hijack-dns；外网 dns-remote 经 proxy；geosite-cn 走 dns-local；AAAA 回空）保持；补测试断言：
+   dns-remote 的 detour 必须是代理出站、final 是 dns-remote（gfw_only 除外）、存在 hijack-dns 规则。
+
+**诊断**
+8. 公开订阅请求成功时记录一条 INFO 日志：格式（singbox/clash/uri）、User-Agent（截断 128 字符，去控制字符）、
+   用户 id；**不得记录 token、完整路径或客户端 IP 以外的敏感信息**（客户端 IP 也不要记）。
+
+**测试与文档**
+9. golden 全部更新；新增「防泄漏」单测：解析生成的 YAML/JSON，断言：无直连的境外 DNS 服务器；IP 规则都有 no-resolve；
+   fake-ip 开启；rule-provider 不是 mrs。若 PATH 有 sing-box 仍跑 check。
+10. CONFIG.md §4.4 示例与说明同步，并附 mihomo DNS 文档链接。
+
+- **验收**：
+  - [ ] make lint test build 通过；golden 与新单测覆盖上述各项。
+  - [x] 文档同步。
+
+**T6.5 实现与验证记录（2026-11-09）**：
+- [x] 1：Clash 固定 Fake-IP、198.18.0.1/16，包含 LAN/local/NTP/连通性检测例外；
+  bypass_cn 含 rule-set:geosite-cn。mihomo 与当前 Stash 官方文档均确认集合 filter 支持，依据见 CONFIG.md §4.4。
+- [x] 2：默认阿里/腾讯 DoH；国内域名和节点地址使用本地 DNS；远端 DNS 配合 respect-rules、
+  proxy-server-nameserver 及置顶端点路由走代理。补 Stash 对应 follow-rule，不依赖未确认的 URL 后缀语法。
+  自定义本地 DNS、同主机 local/remote 冲突、Fake-IP 与非地址查询边界在 CONFIG.md 明确。
+- [x] 3：所有 IP-CIDR/IP-CIDR6/geoip-cn 规则均含 no-resolve，包括新增 DNS 端点 IP 规则。
+- [x] 4：Clash 五种规则源全部为 MetaCubeX YAML，实际 HEAD 均为 200；保持代理下载与镜像前缀。
+- [x] 5：Clash 顶层和 DNS IPv6 固定 false；原开关继续控制 sing-box，规则页文案注明区别。
+- [x] 6：三种预设保持语义，gfw_only 非 GFW 默认直连；空节点远端 DNS/代理流量拒绝，无自动直连兜底。
+- [x] 7：sing-box 生成逻辑未修改；测试断言远端代理 detour、final、hijack-dns、国内 DNS 与 AAAA 回空。
+- [x] 8：成功 GET/HEAD 一条 INFO，含实际格式、128 字符以内的清理后 UA、用户 ID；
+  测试覆盖格式覆盖、Unicode/控制字符、凭证/路径/IP 反射脱敏及失败不记成功。HTML 格式缺口补为 html。
+- [x] 9：重新生成全部 27 份 golden（9 份 Clash 内容变化，JSON/URI 保持）；9 份 sing-box 实际 check 通过。
+  解析测试覆盖三预设、默认/选项/自定义 DNS/IPv6 DNS/共享 DNS/空节点，以及 IP no-resolve、YAML provider 和 DNS 出站。
+- [x] 10：CONFIG §4.4 示例、规则源表和官方依据同步；API 日志契约、SPEC 规则格式、FRONTEND 开关说明同步。
+- [x] make lint、make build 通过；安装脚本及除 e2e 外全部 Go 包通过；前端 typecheck/lint/vitest 通过（17 文件 / 103 测试）。
+- [ ] 完整 make test 已运行，唯一失败为既有 internal/e2e.TestLoopback 的
+  `watch DNS configuration: register DNS configuration notification: status 9`；未修改或跳过该测试。
+  需普通终端/CI 复验，并在反馈问题的 iOS 客户端更新订阅后复验；本机没有该 App 的实机验证结果。
+- [x] 仅 T6.5，无新依赖、无供应链设置变动、无服务端 Apply 改动，未执行 commit/push/切换分支。
+
 ## M7 后续增强（MVP 之后，按需排期）
 
 - T7.1 每用户流量统计（评估 v2ray_api 统计是否在官方构建中可用；否则基于 clash_api 连接统计近似）、超额/到期自动禁用（定时任务 + 生效流程）

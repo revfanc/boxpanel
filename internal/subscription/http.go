@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"net"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/revfanc/boxpanel/internal/db"
 )
@@ -64,6 +66,7 @@ type Handler struct {
 	Next      http.Handler
 	Limiter   *Limiter
 	PanelPort int // actual listener, including initial CLI overrides
+	Logger    *slog.Logger
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -146,9 +149,51 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(200)
 	if r.Method != "HEAD" {
-		_, _ = w.Write(body)
+		if _, err := w.Write(body); err != nil {
+			return
+		}
 	}
+	logger := h.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	format := string(f)
+	if f == Base64 {
+		format = "uri"
+	}
+	secrets := []string{r.URL.Path, r.URL.EscapedPath(), d.User.Token, d.User.UUID, d.User.Password, r.RemoteAddr, ip}
+	for _, n := range d.Nodes {
+		if n.Hysteria2 != nil {
+			secrets = append(secrets, n.Hysteria2.ObfsPassword)
+		}
+	}
+	logger.InfoContext(r.Context(), "subscription served", "format", format, "user_agent", logUserAgent(r.UserAgent(), secrets), "user_id", d.User.ID)
 }
+
+// User-Agent is untrusted. Remove control/formatting characters and known
+// credentials before truncating by Unicode character, never in the middle of
+// a UTF-8 sequence or before redaction has seen a complete secret.
+func logUserAgent(ua string, secrets []string) string {
+	clean := func(s string) string {
+		return strings.Map(func(r rune) rune {
+			if !unicode.IsPrint(r) {
+				return -1
+			}
+			return r
+		}, s)
+	}
+	ua = clean(ua)
+	for _, secret := range secrets {
+		for _, form := range []string{secret, url.QueryEscape(secret), url.PathEscape(secret)} {
+			if form = clean(form); form != "" {
+				ua = strings.ReplaceAll(ua, form, "[REDACTED]")
+			}
+		}
+	}
+	runes := []rune(ua)
+	return string(runes[:min(len(runes), 128)])
+}
+
 func publicError(w http.ResponseWriter, r *http.Request, status int, message string) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")

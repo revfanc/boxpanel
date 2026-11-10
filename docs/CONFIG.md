@@ -203,13 +203,13 @@ T2.2 不写服务端 JSON、不重启服务、不生成端口跳跃规则、不�
 
 ### rule-set 源（实现时须确认 URL 仍然有效，放在 `internal/rules/sources.go`）
 
-| 用途 | 名称 | metacubex（sing-box `.srs`） | metacubex（mihomo `.mrs`） |
+| 用途 | 名称 | metacubex（sing-box `.srs`） | metacubex（Clash `.yaml`） |
 |---|---|---|---|
-| 国内域名 | `geosite-cn` | `MetaCubeX/meta-rules-dat@sing/geo/geosite/cn.srs` | `@meta/geo/geosite/cn.mrs` |
-| 国内 IP | `geoip-cn` | `@sing/geo/geoip/cn.srs` | `@meta/geo/geoip/cn.mrs` |
-| GFW 列表 | `geosite-gfw` | `@sing/geo/geosite/gfw.srs` | `@meta/geo/geosite/gfw.mrs` |
-| 非中国 | `geosite-geolocation-!cn` | `@sing/geo/geosite/geolocation-!cn.srs` | `@meta/geo/geosite/geolocation-!cn.mrs` |
-| 广告 | `geosite-ads` | `@sing/geo/geosite/category-ads-all.srs` | `@meta/geo/geosite/category-ads-all.mrs` |
+| 国内域名 | `geosite-cn` | `MetaCubeX/meta-rules-dat@sing/geo/geosite/cn.srs` | `@meta/geo/geosite/cn.yaml` |
+| 国内 IP | `geoip-cn` | `@sing/geo/geoip/cn.srs` | `@meta/geo/geoip/cn.yaml` |
+| GFW 列表 | `geosite-gfw` | `@sing/geo/geosite/gfw.srs` | `@meta/geo/geosite/gfw.yaml` |
+| 非中国 | `geosite-geolocation-!cn` | `@sing/geo/geosite/geolocation-!cn.srs` | `@meta/geo/geosite/geolocation-!cn.yaml` |
+| 广告 | `geosite-ads` | `@sing/geo/geosite/category-ads-all.srs` | `@meta/geo/geosite/category-ads-all.yaml` |
 
 `sagernet` 源：`SagerNet/sing-geosite@rule-set/geosite-*.srs`、`SagerNet/sing-geoip@rule-set/geoip-*.srs`（仅 sing-box 订阅使用；mihomo 始终用 metacubex）。
 
@@ -310,11 +310,35 @@ log-level: warning
 ipv6: false
 dns:
   enable: true
-  enhanced-mode: redir-host        # fakeip=true 时 fake-ip
-  nameserver: [https://1.1.1.1/dns-query]
+  ipv6: false
+  enhanced-mode: fake-ip
+  respect-rules: true              # mihomo DNS 出站遵守 rules
+  follow-rule: true                # Stash 的对应选项
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-filter:
+    - '*.lan'
+    - '*.local'
+    - localhost.ptlink
+    - localhost.ptlogin2.qq.com
+    - 'time.*.com'
+    - 'ntp.*.com'
+    - '+.pool.ntp.org'
+    - '+.msftconnecttest.com'
+    - '+.msftncsi.com'
+    - captive.apple.com
+    - 'rule-set:geosite-cn'          # 仅 bypass_cn
+  default-nameserver: [https://223.5.5.5/dns-query]
+  nameserver: [https://223.5.5.5/dns-query, https://doh.pub/dns-query]
   nameserver-policy:
-    "rule-set:geosite-cn": [https://223.5.5.5/dns-query]
-  proxy-server-nameserver: [https://223.5.5.5/dns-query]
+    'rule-set:geosite-cn': [https://223.5.5.5/dns-query, https://doh.pub/dns-query]
+    'rule-set:geosite-geolocation-!cn': ['https://1.1.1.1/dns-query']
+    'time.*.com': ['https://1.1.1.1/dns-query']
+    'ntp.*.com': ['https://1.1.1.1/dns-query']
+    '+.pool.ntp.org': ['https://1.1.1.1/dns-query']
+    '+.msftconnecttest.com': ['https://1.1.1.1/dns-query']
+    '+.msftncsi.com': ['https://1.1.1.1/dns-query']
+    captive.apple.com: ['https://1.1.1.1/dns-query']
+  proxy-server-nameserver: [https://223.5.5.5/dns-query, https://doh.pub/dns-query]
 proxies:
   - name: <remark>
     type: vless
@@ -341,12 +365,47 @@ proxy-groups:
   - { name: 节点选择, type: select, proxies: [自动选择, <节点…>, DIRECT] }
   - { name: 自动选择, type: url-test, proxies: [<节点…>], url: https://www.gstatic.com/generate_204, interval: 300 }
 rule-providers:
-  geosite-cn: { type: http, behavior: domain, format: mrs, url: <见 §3>, interval: 86400 }
-  geoip-cn:   { type: http, behavior: ipcidr, format: mrs, url: <见 §3>, interval: 86400 }
+  geosite-cn: { type: http, behavior: domain, format: yaml, url: <见 §3>, interval: 86400, proxy: 节点选择 }
+  geoip-cn:   { type: http, behavior: ipcidr, format: yaml, url: <见 §3>, interval: 86400, proxy: 节点选择 }
+  geosite-geolocation-!cn: { type: http, behavior: domain, format: yaml, url: <见 §3>, interval: 86400, proxy: 节点选择 }
 rules:
-  - <按预设生成>
+  - IP-CIDR,1.1.1.1/32,节点选择,no-resolve
+  - IP-CIDR,223.5.5.5/32,DIRECT,no-resolve
+  - DOMAIN,doh.pub,DIRECT
+  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+  - <其他私网规则与自定义域名，按预设生成>
+  - RULE-SET,geosite-cn,DIRECT
+  - RULE-SET,geoip-cn,DIRECT,no-resolve
   - MATCH,节点选择
 ```
+
+T6.5（2026-11-09）防泄漏与兼容边界：
+
+- 上例为 bypass_cn。Clash 输出固定 Fake-IP、`198.18.0.1/16`，顶层与 DNS 的 IPv6 均关闭；
+  `settings.rules.dns.fakeip/ipv6` 继续保留，只控制 sing-box 输出，规则页注明区别，不迁移旧设置。
+- 默认国内 DoH 用于直连域名及节点地址；显式修改 `dns.local` 时保留该单一服务器，管理员应选择
+  国内可用的 DoH。`default-nameserver` 固定为 IP 地址的国内 DoH，只引导解析 DNS 服务器域名。
+  普通代理 A 查询返回 Fake-IP，连接携带域名交服务端解析；所有 IP-CIDR/IP-CIDR6 和 geoip-cn
+  规则均带 no-resolve，不为规则匹配提前查目标 IP。已知 IP 仍可命中国内/私网规则。
+- custom_proxy、gfw_only 的 GFW DNS 策略使用 `dns.remote`，通过 `respect-rules: true` 遵守路由；
+  远端 DoH 的精确域名/IP 路由置于最前并指向节点选择，国内 DoH/引导地址明确 DIRECT。
+  同一主机同时用作 local/remote 时代理优先；空节点时远端 DNS 为 REJECT，不能自动直连。
+  `proxy-server-nameserver` 隔离节点解析，Stash 用 `follow-rule: true` 遵守相同路由；
+  不依赖 Stash 文档未确认的 `#代理名` 语法。bypass_cn/global 另加载
+  geolocation-!cn 供真实 DNS 查询使用，NTP/连通性检测的真实 IP 例外也明确经代理。
+  custom_direct 仍使用本地 DNS，同一后缀 direct 优先；gfw_only 中非 GFW 域名直连是预期。
+  不输出直连境外 fallback。节点选择保留用户主动选择 DIRECT 的能力；防泄漏路径以选择代理节点为前提。
+- Fake-IP 不能覆盖应用自行使用的 DNS/DoH；未列入远程 policy 的非 A/AAAA 查询仍按默认 nameserver
+  处理。这里修复代理连接的地址解析路径及境外 DoH 直连，不声称接管设备所有 DNS 流量。
+- [mihomo DNS](https://wiki.metacubex.one/config/dns/) 确认 `respect-rules`、节点独立 DNS、Fake-IP 与
+  AAAA 回空；[规则说明](https://wiki.metacubex.one/config/rules/#no-resolve) 确认 no-resolve；
+  [规则集合](https://wiki.metacubex.one/config/rule-providers/) 确认 YAML、behavior 和代理下载。
+  [mihomo 集合语法](https://wiki.metacubex.one/handbook/syntax/) 与
+  [Stash DNS 文档](https://stash.wiki/features/dns-server) 均确认 filter 支持 rule-set，
+  因此仅在有 geosite-cn provider 的 bypass_cn 中加入该 filter；Stash 文档标注 iOS/tvOS 3.6+、macOS 4.3+。
+  不使用 mihomo 的 rule 模式过滤器；旧客户端须升级，App 名称为“Clash”不能证明内核支持这些字段。
+- 所有 Clash provider 使用 MetaCubeX 同路径 `.yaml`，包括 sagernet 选择和镜像前缀；
+  保持通过节点选择下载，sing-box 仍用 `.srs`。URI 无分流/DNS 语义，保持原样。
 
 ### 4.5 base64 URI
 
@@ -380,7 +439,7 @@ check 只校验格式，不启动 TUN、不连接节点、不下载 rule-set。
 | Hysteria2 `server/password/up_mbps/down_mbps/obfs/tls/server_ports` | [Hysteria2](https://sing-box.sagernet.org/configuration/outbound/hysteria2/)；TLS 内嵌已生效证书 PEM、SNI、h3，不设置 insecure；端口跳跃时仅输出 server_ports，省略冲突的 server_port |
 | mihomo VLESS / Reality | [VLESS](https://wiki.metacubex.one/config/proxies/vless/)、[TLS](https://wiki.metacubex.one/config/proxies/tls/)；network=tcp、udp=true、packet-encoding=xudp、Vision、servername、client-fingerprint、reality-opts.public-key/short-id |
 | mihomo Hysteria2 | [Hysteria2](https://wiki.metacubex.one/config/proxies/hysteria2/)；ports 用 `start-end`，up/down 仅正数，obfs=salamander 与 obfs-password；skip-cert-verify=false + fingerprint，按官方 TLS 文档固定叶证书指纹，无需系统信任自签根 |
-| mihomo rule-providers | [规则集合](https://wiki.metacubex.one/config/rule-providers/)；type=http、format=mrs、behavior=domain/ipcidr、interval 为整秒、proxy=节点选择；无 classical mrs；始终使用 MetaCubeX |
+| mihomo rule-providers | [规则集合](https://wiki.metacubex.one/config/rule-providers/)；type=http、format=yaml、behavior=domain/ipcidr、interval 为整秒、proxy=节点选择；始终使用 MetaCubeX（T6.5） |
 
 补齐的输入与输出约定：
 
@@ -389,7 +448,7 @@ check 只校验格式，不启动 TUN、不连接节点、不下载 rule-set。
   默认拼接 `{mirror}{原 URL}`；`rules.Mirror` 函数可注入其他重写策略。
 - 自定义域名每组至多 128 项，只接受 ASCII DNS 后缀，不接受 URL、通配符、IP、逗号。
   direct 优先于 proxy，proxy 优先于预设国内规则；广告优先于其他业务规则。
-  mihomo 的 gfw_only 使用本地默认 DNS，并为 GFW rule-set 指定远程 nameserver-policy。
+  Clash 的 gfw_only 使用本地默认 DNS，并为 GFW rule-set 指定经代理的远程 nameserver-policy（§4.4）。
   sing-box 在 bypass_cn 的域名决策之后、geoip-cn 之前显式 `resolve` 到 dns-remote，
   再检查私网和国内 IP，让 mixed/FakeIP 的域名目标也可命中 IP 规则；其他预设无需此解析。
   FakeIP 只处理 A/AAAA，代理域名的其他查询类型仍显式路由到远程 DNS。
@@ -404,12 +463,12 @@ check 只校验格式，不启动 TUN、不连接节点、不下载 rule-set。
   不改 web/package.json 或 pnpm-lock.yaml，不实现 M4 页面。独立订阅 HTML 的文案仍集中在
   `web/src/i18n/zh-CN.ts` 的标记 JSON 对象，通过 Go embed 共享，不加载外部脚本或资源。
 
-### T3.2 规则源实测（2026-11-09）
+### T3.2 / T6.5 规则源实测（2026-11-09）
 
 源 URL 定义于 `internal/rules/sources.go`；实现时逐 URL 实际发送 HTTPS **HEAD**，测试不联网。
 下表文件均相对 §3 对应 raw.githubusercontent.com 仓库/分支，最终常量共 14 个不同 URL。
 
-| 规则 | MetaCubeX `sing/geo` `.srs` | MetaCubeX `meta/geo` `.mrs` | SagerNet `rule-set` `.srs` |
+| 规则 | MetaCubeX `sing/geo` `.srs` | MetaCubeX `meta/geo` `.yaml`（T6.5 重新 HEAD 均 200） | SagerNet `rule-set` `.srs` |
 |---|---|---|---|
 | 国内域名 | geosite/cn：200 | geosite/cn：200 | sing-geosite / geosite-cn：200 |
 | 国内 IP | geoip/cn：200 | geoip/cn：200 | sing-geoip / geoip-cn：200 |
@@ -419,7 +478,7 @@ check 只校验格式，不启动 TUN、不连接节点、不下载 rule-set。
 
 这是原规格的可用性缺口：SagerNet 没有 GFW 产物，只对这一列表回退 MetaCubeX；
 不能用 geolocation-!cn 替代，否则会改变 gfw_only 的语义。选择 sagernet 时其余规则保持该源。
-非中国规则保留源常量以对应规格，但当前三个预设无需加载它。
+非中国规则供 Clash bypass_cn/global 的远程 DNS policy 使用；sing-box 的三个预设无需加载它。
 
 ### T3.3 离线端到端验证边界
 
