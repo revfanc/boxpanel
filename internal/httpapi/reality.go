@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/revfanc/boxpanel/internal/reality"
@@ -35,6 +36,12 @@ func (a *api) inboundSuggest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	options, err := a.prepareInbound(r.Context(), input.Protocol, nil)
+	hint := ""
+	var targetErr *resourceError
+	if errors.As(err, &targetErr) && targetErr.code == "reality_target_unavailable" {
+		hint = targetErr.hint
+		options, err = defaultInboundOptions(input.Protocol, "")
+	}
 	if err != nil {
 		a.resourceError(w, err)
 		return
@@ -68,5 +75,9 @@ func (a *api) inboundSuggest(w http.ResponseWriter, r *http.Request) {
 	// key that would be mismatched when creation generates fresh credentials.
 	fields := optionFields(in.Options)
 	delete(fields, "public_key")
-	writeJSON(w, 200, map[string]any{"protocol": input.Protocol, "port": port, "options": fields})
+	result := map[string]any{"protocol": input.Protocol, "port": port, "options": fields}
+	if hint != "" {
+		result["hint"] = hint
+	}
+	writeJSON(w, 200, result)
 }

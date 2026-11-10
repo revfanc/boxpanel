@@ -56,6 +56,22 @@ export interface PanelSettings {
   panel_name: string
 }
 export interface SettingsResult extends PanelSettings { panel_url: string; restart_after: 0 | 2 }
+export interface CertificateStatus {
+  mode: 'http' | 'self_signed' | 'acme'
+  type: 'http' | 'self_signed' | 'acme'
+  host: string
+  issuer: string
+  not_before: number
+  not_after: number
+  last_attempt: number
+  last_success: number
+  last_error: string
+  hint: string
+  failures: number
+  next_attempt: number
+  issuing: boolean
+  warning: boolean
+}
 export interface RealityTarget {
   server: string
   tls13: boolean
@@ -106,8 +122,8 @@ export type InboundInput = Partial<Pick<InboundBase, 'tag' | 'port' | 'enabled' 
   | { protocol: 'hysteria2'; options?: Hysteria2Input }
 )
 export type InboundSuggestion =
-  | { protocol: 'vless_reality'; port: number; options: Omit<RealityOptions, 'public_key'> }
-  | { protocol: 'hysteria2'; port: number; options: Hysteria2Options }
+  | { protocol: 'vless_reality'; port: number; options: Omit<RealityOptions, 'public_key'>; hint?: string }
+  | { protocol: 'hysteria2'; port: number; options: Hysteria2Options; hint?: string }
 
 export interface User {
   id: number

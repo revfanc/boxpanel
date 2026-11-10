@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { SetupLayout } from '@/layouts/SetupLayout'
 import { Button } from '@/components/ui/button'
 import { ErrorNotice, Loading } from '@/components/Feedback'
-import { Notice } from '@/components/ResourceUI'
+import { SetupCertificate } from '@/components/Certificate'
 import { useOperation } from '@/hooks/use-operation'
 import { api } from '@/lib/api'
 import { setupQuery, queryKeys } from '@/lib/query'
@@ -44,7 +44,7 @@ function Wizard({ status }: { status: SetupStatus }) {
     {operation.error != null && <ErrorNotice error={operation.error} />}
     {operation.pending && <Loading label={t.common.saving} />}
     <fieldset aria-busy={busy} disabled={operation.pending} className="min-w-0 space-y-5">
-      {status.step === 'welcome' && <><p className="leading-7">{t.setup.welcome}</p><Notice>{t.setup.certificate}</Notice><Button onClick={() => { void next() }}>{t.setup.start}</Button></>}
+      {status.step === 'welcome' && <><p className="leading-7">{t.setup.welcome}</p><SetupCertificate welcome /><Button onClick={() => { void next() }}>{t.setup.start}</Button></>}
       {status.step === 'check' && <CheckStep {...stepProps} />}
       {status.step === 'scenario' && <ScenarioStep status={status} save={save} />}
       {status.step === 'node' && <NodeStep status={status} {...stepProps} />}

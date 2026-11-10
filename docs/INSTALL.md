@@ -16,8 +16,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/main/script
 面板地址: https://1.2.3.4:23456/k3m9x2p7q1ab/
 用户名:   admin-7fq2
 密码:     xxxxxxxxxxxxxxxx
-提示: 浏览器提示"不安全"是因为使用了自签证书，点击"高级 → 继续访问"即可。
-请确认云服务商安全组已放行 TCP 23456。
+面板证书: ACME 证书（若申请未完成或失败，则明确显示自签证书和下一步提示）
+请确认云服务商安全组已放行 TCP 23456 和 TCP 80。
 ```
 
 ## 2. `scripts/install.sh` 行为
@@ -142,7 +142,7 @@ T6.1 的 `system` 子命令支持已有数据/证书/内核路径参数，仅在
   DB、证书与私钥为 `0600`。仅持久化业务设置，覆盖的文件路径由每次命令参数/环境变量提供。
 - 普通 `serve` 必须先初始化，从 DB 读取 `web_port`、`web_path`、`public_host`、`panel_tls_mode`；
   默认在所有接口提供 HTTPS（TLS 1.2+）。支持 `--listen-host IP` / `BOXPANEL_LISTEN_HOST`
-  限制监听地址。证书缺失或无效即拒绝启动，不自动降级 HTTP。
+  限制监听地址。无有效已保存材料且原证书文件缺失时拒绝启动；原证书过期或 SAN 不匹配时生成新的自签备用材料（T6.3），不自动降级 HTTP。
 - T0.2 的 `serve --port N --web-path p` 保留为本次启动覆盖项，不写回 DB。
   `--web-path` 接受不带斜杠的 `[a-z0-9]+` 或空字符串，端口范围 1–65535。
 - `--dev` 固定 HTTP、`127.0.0.1:2053`、空路径，覆盖监听地址、端口和路径选项。
@@ -309,7 +309,7 @@ make test                     # 工具存在时自动把 .tools/bin 加到 Go �
 
 `serve` 在 SPA 之前挂载独立的订阅 handler。管理 API 修改面板端口/路径时预先检查并绑定新监听，
 持久化成功后 2 秒切换，原监听优雅关闭；进程、数据库连接与订阅限速状态保留。
-新端口须在本机防火墙及云安全组放行；public_host 修改不自动签发新面板证书。
+新端口须在本机防火墙及云安全组放行；T6.3 的 acme 模式在 public_host 修改后自动重新签发。
 `serve --dev` 仍固定 127.0.0.1:2053/根路径；开发创建的 Hysteria2 无生效证书，导出返回明确的 409。
 这些接口不实现 CLI `set`、安装脚本、ACME、引导流程或内核升级。
 
@@ -369,3 +369,30 @@ CI/release 都锁定其完整 commit SHA（详见工作流注释）：
 
 原 CI 的 pnpm/action-setup v6.1.1 发布于 2026-11-03，尚未满 7 天，因此使用 v6.1.0；
 `web/package.json`、锁文件与 pnpm 冷静期策略均不修改。
+
+
+## 6. T6.3 ACME 安装与运行
+
+- 新 `init` 默认策略是 acme，同时准备原有自签备用证书；不在 init 中调用 CA。
+  安装器在初始化后启动 serve，由服务后台自动申请，HTTPS 及 `system ready` 不等待 CA。
+  `info` 和安装完成输出显示当前实际证书类型及已记录的失败提示；未完成时明确显示自签备用。
+  原自签安装升级后不强制切换，可在设置点击“申请 / 重新申请可信证书”。
+- `serve --acme-directory URL` / `BOXPANEL_ACME_DIRECTORY` 指定 CA，默认
+  `https://acme-v02.api.letsencrypt.org/directory`。测试部署请使用
+  `https://acme-staging-v02.api.letsencrypt.org/directory`，此 CA 的证书不受客户端信任。
+  参数优先于环境变量。该覆盖不是 DB 设置；`singbox install --acme-directory URL` 将值写入
+  panel systemd 单元的 serve 参数；安装脚本保留环境变量并通过该流程传递，更新/重启继续使用同一值。
+  单元新增显式 `--data-dir`，即使独立覆盖 DB 或原自签文件位置，ACME 材料仍在 `<data-dir>/certs/`。
+- 仅允许 HTTPS directory；离线测试额外允许回环 IP 的 HTTP 假服务器，无 insecure 选项。
+  `serve --dev` 始终不签发、不生成证书、不开放端口，证书 API 返回开发状态及可操作的 409。
+- 请持续在云安全组放行 TCP 80（包括域名使用的 IPv4/IPv6），域名 A/AAAA 应指向本机并关闭 CDN。
+  本机通过现有防火墙适配器放行并登记端口；80 有其他服务占用时不会强行关闭该服务，
+  申请立即失败并给出提示。:80 仅在签发/续期期间监听，其余时间 TCP 自连失败是正常现象。
+- 单次申请最多 2 分钟；首次失败回退自签，续期失败保留有效可信证书。按实际寿命一半续期，
+  5 分钟起指数退避至最多 6 小时；证书热替换不重启面板，不改变 Hysteria2 自签/指纹。
+  设置改回 self_signed 后停止续期；原自签文件及历史 bundle/账号均保留。
+- `system ready` 读取 `panel_certificate` 指向的当前 PEM bundle（旧实例无状态则使用原 cert-file），
+  仍只连接 127.0.0.1，不走外部网络/代理，使用安装材料作为本机信任锚并校验 SAN、有效期及 TLS 链，
+  不用 insecure；因此能检查自签、正式或 staging 证书，**就绪成功不等于 staging 获得公开信任**。
+- Go 最低版本为 1.26（x/crypto v0.58.0 profiles 支持的要求），开发/CI 使用 Go 1.27。
+  依赖理由和证书存储/恢复细节见 SPEC.md §13。单测假 CA/假接口；本任务不调用 LE 正式签发。

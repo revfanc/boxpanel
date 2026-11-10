@@ -46,6 +46,7 @@ func (p singboxPaths) resolve(paths *pathFlags, dev bool) singboxPaths {
 }
 
 type singboxOptions struct {
+	acmeDirectory                          string
 	command, version, unitDir, panelBinary string
 	dev                                    bool
 	preserveVersion                        bool
@@ -69,6 +70,7 @@ func parseSingboxOptions(args []string, output io.Writer) (singboxOptions, error
 	core := addSingboxPaths(flags)
 	flags.BoolVar(&opts.dev, "dev", false, "mock sing-box management without downloads, file writes or systemctl")
 	if opts.command == "install" {
+		paths.addACME(flags)
 		flags.StringVar(&opts.version, "version", singbox.PinnedVersion, "stable version published more than seven days ago")
 		flags.BoolVar(&opts.preserveVersion, "preserve-version", false, "restore the database-recorded core version when present (installer/reinstall)")
 		flags.StringVar(&opts.unitDir, "unit-dir", os.Getenv("BOXPANEL_UNIT_DIR"), "systemd unit directory (BOXPANEL_UNIT_DIR; default /etc/systemd/system)")
@@ -101,6 +103,7 @@ func parseSingboxOptions(args []string, output io.Writer) (singboxOptions, error
 		return opts, err
 	}
 	opts.core = core.resolve(paths, opts.dev)
+	opts.acmeDirectory = paths.acmeDirectory
 	if opts.unitDir == "" {
 		opts.unitDir = singbox.DefaultUnitDir
 	}
@@ -192,7 +195,15 @@ func singboxCommand(ctx context.Context, opts singboxOptions, deps singboxDepend
 			return fmt.Errorf("installation path conflicts with a systemd unit")
 		}
 	}
-	units, err := singbox.GenerateUnits(singbox.UnitPaths{PanelBinary: opts.panelBinary, Binary: opts.core.binary, Config: opts.core.config, Database: opts.paths.Database, CertFile: opts.paths.CertFile, KeyFile: opts.paths.KeyFile})
+	dataDir := opts.paths.DataDir
+	if dataDir == "" {
+		dataDir = filepath.Dir(opts.paths.Database)
+	}
+	dataDir, err := filepath.Abs(dataDir)
+	if err != nil {
+		return fmt.Errorf("resolve certificate data directory: %w", err)
+	}
+	units, err := singbox.GenerateUnits(singbox.UnitPaths{DataDir: dataDir, ACMEDirectory: opts.acmeDirectory, PanelBinary: opts.panelBinary, Binary: opts.core.binary, Config: opts.core.config, Database: opts.paths.Database, CertFile: opts.paths.CertFile, KeyFile: opts.paths.KeyFile})
 	if err != nil {
 		return err
 	}

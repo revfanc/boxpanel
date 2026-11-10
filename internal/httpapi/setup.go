@@ -173,6 +173,9 @@ func (a *api) setupPut(w http.ResponseWriter, r *http.Request) {
 		a.resourceError(w, fmt.Errorf("save setup: %w", err))
 		return
 	}
+	if publicHost != "" && a.opts.Certificates != nil {
+		a.opts.Certificates.Changed()
+	}
 	writeJSON(w, 200, s)
 }
 

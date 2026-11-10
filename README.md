@@ -18,8 +18,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/main/script
 
 ## 开发
 
-需要 Go 1.23+、Node 24+、pnpm（`web/package.json` 固定版本，当前为 12.18.0）。
-当前完成 T1.2：SQLite 初始化、HTTPS、管理员认证与会话；前端仍提供概览、用户列表、用户详情三个占位页，登录页在 T4.1 实现。
+需要 Go 1.26+（开发/CI 使用 Go 1.27）、Node 24+、pnpm（`web/package.json` 固定版本，当前为 12.18.0）。
+开发进度和逐项验收记录见 [TASKS.md](docs/TASKS.md)。
 
 ```bash
 pnpm --dir web install --frozen-lockfile
@@ -49,6 +49,8 @@ bin/boxpanel serve --data-dir "$DATA_DIR" --listen-host 127.0.0.1
 
 T1.2 新增 `golang.org/x/crypto v0.41.0` 实现 Argon2id，保持 Go 1.23 最低版本与纯 Go 构建；
 密码哈希参数和限流约定见 [SPEC.md](docs/SPEC.md#t12-认证实现约定)。
+T6.3 为 ACME IP 证书的 profiles 支持升级至 `x/crypto v0.58.0`，最低 Go 版本随之升至 1.26；
+证书申请、续期与 staging 配置见 [INSTALL.md](docs/INSTALL.md#6-t63-acme-安装与运行)。
 
 T0.2 新增 `react-router` 依赖，用于规格要求的 `createBrowserRouter` history 路由、
 运行时 basename 和站内 `Link` 导航；版本由 `web/package.json` 与 lockfile 固定。

@@ -288,10 +288,68 @@ T6.1/T6.2 通用验证：
 规格补齐：非交互卸载 --yes/--purge、dry-run 边界、重试/保留数据重装、面板端口持久重放、
 下载强制 SHA-256、update 的正常启动生效与二进制回退边界，均见 INSTALL.md；新增设置键见 SPEC.md §12。
 
+### T6.3 可信证书（Let's Encrypt）+ 引导体验修复
+
+**背景**：面板与订阅目前只有自签 HTTPS，sing-box / mihomo 客户端拉取订阅会因证书不受信而失败——这是 MVP 阻断问题。
+Let's Encrypt 自 2026-01-15 起正式签发 IP 地址证书（必须使用 `shortlived` profile，有效期约 160 小时），
+见 <https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability>。
+
+**证书（必须）**
+1. 新增 `internal/acme`：为 public_host 申请证书。public_host 为 IP → 请求 IP 标识符 + `shortlived` profile；
+   为域名 → 默认 profile（`classic`）。仅用 **HTTP-01**（80 端口；443 常被 Reality 占用，不用 TLS-ALPN-01）。
+   挑战监听器只在签发/续期期间临时监听 :80，结束即关闭；80 被占用时直接失败并给出下一步提示。
+2. 依赖选择：先查 `golang.org/x/crypto/acme` 当前版本是否支持 ACME Profiles 与 IP 标识符；支持则用它（已是依赖），
+   不支持再引入 `github.com/go-acme/lego/v4`（遵守冷静期，PR 描述写明理由）。不得手写 JWS。
+3. `panel_tls_mode` 取值扩展为 `self_signed | acme`。新安装默认尝试 `acme`；签发失败**自动回退自签**并记录原因，
+   不阻断安装/启动。ACME 账号密钥与证书保存在 `<data-dir>/certs/`（0600），切换不覆盖原自签证书文件。
+4. 续期：后台定时任务，按实际证书有效期计算已用寿命 ≥ 1/2（160 小时证书为 80 小时，90 天证书为 45 天）时续期，失败指数退避重试
+   （上限 6 小时），连续失败且证书剩余 < 24h 时在面板显著提示。证书通过 `tls.Config.GetCertificate` 热替换，**不重启进程**。
+5. 面板设置页：显示当前证书类型、签发者、到期时间、上次续期结果；提供「申请/重新申请可信证书」与「改回自签」操作；
+   API 见 API.md（新增 `GET /api/cert`、`POST /api/cert/issue`、更新 settings 的 panel_tls_mode 校验），全部走现有认证/CSRF。
+6. 防火墙/引导：acme 模式下本机防火墙放行 TCP 80，引导防火墙步骤与云安全组提示列出 80；完成页根据证书类型
+   决定是否显示「浏览器警告」说明。public_host 变更后自动重新签发。
+7. 安装脚本：`boxpanel init` 之后（服务启动前或启动后由服务自行）尝试签发；安装结束输出里说明证书类型；
+   `system ready` 本机检查必须同时适配 LE 证书与自签证书（不得用 insecure）。
+8. 测试：ACME 客户端可注入 directory URL 与时钟；单测用假 ACME 服务器/接口注入，不访问外网；
+   若 PATH 中有 `pebble` 可加集成测试，否则 `t.Skip`。生产默认 directory 为 LE 正式环境，支持
+   `--acme-directory` / `BOXPANEL_ACME_DIRECTORY` 覆盖为 staging。`serve --dev` 不签发。
+9. Hysteria2 证书保持自签+指纹（本任务不改）。
+
+**体验修复（一起做）**
+10. `/api/inbounds/suggest`：Reality 目标检测全部失败时不要整体 409——仍返回推荐端口等其余字段，
+    `server_name` 置空并带 `hint`，前端预填端口、让用户手填 server_name。
+11. 引导「节点」步骤同一错误显示了两个错误框，去重为一个。
+12. 「同时创建 Hysteria2」复选框的可访问名称是 `on`，修正为与可见文案一致（用 label/htmlFor 或 aria-labelledby）。
+13. 防火墙步骤的云厂商指引：把占位文案「图文教程链接待补充」换成常见厂商**官方文档**中安全组/防火墙入站规则页面链接
+    （至少：阿里云、腾讯云、AWS、Google Cloud、Azure、Oracle Cloud、Vultr、DigitalOcean、Linode/Akamai、搬瓦工），
+    链接必须逐个核实可访问且为官方域名；无法核实的厂商不要列。
+
+- **验收**：
+  - [ ] make lint test build 通过；新增单测覆盖签发成功、80 被占用、签发失败回退自签、续期时机、热替换、域名/IP 两种 profile。
+  - [x] 面板设置页可见证书状态与操作；acme 失败时有可执行的下一步提示。
+  - [x] suggest 在检测失败时返回端口；节点步骤单一错误框；复选框可访问名正确；厂商链接均为官方且可访问。
+  - [x] SPEC/API/INSTALL/FRONTEND 文档同步更新。
+
+**T6.3 实现与验证记录（2026-11-09）**：
+- 复用 x/crypto/acme，升级至 v0.58.0 获得 profiles 支持，最低 Go 版本随上游升至 1.26；
+  未引入 lego、前端新依赖或改变 pnpm 冷静期。IP shortlived、域名默认 profile，仅 HTTP-01。
+- 实现异步首次签发、自签回退、实际半寿命续期、持久化指数退避、临期告警与 TLS 热替换；
+  认证/CSRF API、设置/引导、CLI/systemd、TCP 80 管理及本机验证 readiness 已接入。
+  主机/策略改变取消旧订单，激活前复核；手动请求与后台共享互斥，避免重复签发。
+- 假 CA/注入测试覆盖签发、DNS/IPv4/IPv6 profile/SAN、80 占用、失败回退、半寿命、退避上限、
+  重启恢复、设置变更与取消、证书热替换、TLS 验证、权限与敏感信息保护；未访问 LE 正式环境。
+- `make lint`、`make build` 通过；`make test` 已实际执行，安装脚本测试和其余 Go 包通过，
+  仅 `internal/e2e.TestLoopback` 因 macOS 沙箱 DNS 通知 `status 9` 失败，未修改或跳过该测试。
+  因该失败导致 make 提前停止，已单独执行前端 typecheck、lint、vitest：17 文件 / 99 测试通过。
+  第一项总验收保留未勾选，需在允许运行 sing-box 的环境复验完整 `make test`。
+- 十家官方链接已逐页核实；搬瓦工没有找到独立云安全组教程，使用官方 iptables 排障并明确标注，
+  具体链接及规格缺口见 FRONTEND.md §7。更正原“classic 约 30 天”半寿命示例，统一按实际有效期计算。
+- 本次仅 T6.3，Hysteria2 仍自签+指纹；未提前实现 M7。
+
 ## M7 后续增强（MVP 之后，按需排期）
 
 - T7.1 每用户流量统计（评估 v2ray_api 统计是否在官方构建中可用；否则基于 clash_api 连接统计近似）、超额/到期自动禁用（定时任务 + 生效流程）
-- T7.2 ACME 证书（域名场景），面板与 hy2 共用；新增 Trojan/VLESS-WS+TLS（可套 CDN）
+- T7.2 hy2 复用 ACME 证书（基础 ACME 已在 T6.3）；新增 Trojan/VLESS-WS+TLS（可套 CDN）
 - T7.3 更多协议：TUIC v5、AnyTLS、ShadowTLS
 - T7.4 TOTP 两步验证
 - T7.5 备份/恢复

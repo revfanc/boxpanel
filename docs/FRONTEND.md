@@ -90,15 +90,15 @@ createBrowserRouter(routes, { basename: BASE || "/" });
 
 进度条显示 7 步，每步可返回；进度存后端 `/setup/status`，关闭浏览器后能续上。
 
-1. **welcome**：一句话说明会做什么（大约 2 分钟），提示「浏览器提示不安全是因为自签证书，属正常」。按钮：开始。
+1. **welcome**：一句话说明会做什么（大约 2 分钟）；根据实际证书类型说明自签警告或可信证书状态，开发 HTTP 不显示自签警告。按钮：开始。
 2. **check**：调用 `/system/check`，渲染检查清单（✅/⚠️/❌）。BBR 未开时给「一键开启」按钮。存在 error 级项时禁止下一步并给出修复说明。
 3. **scenario**：两张大卡片——
    - 「我没有域名（推荐）」→ VLESS + Reality
-   - 「我有域名」→ 输入域名，校验全部 A/AAAA 记录指向本机公网 IP 后，MVP 仍用 Reality，并把域名设为 `public_host`（ACME 证书后期再接）
+   - 「我有域名」→ 输入域名，校验全部 A/AAAA 记录指向本机公网 IP 后，MVP 仍用 Reality，并把域名设为 `public_host`（acme 模式自动重新签发面板证书）
    - 额外复选：「同时创建 Hysteria2（网络不稳定时更快，需 UDP）」默认勾选
 4. **node**：调用 `/inbounds/suggest` 预填端口、伪装目标（显示检测出的推荐列表与延迟），用户可直接下一步；点「创建」时调用 `POST /inbounds`。
 5. **user**：输入使用者名字（默认 `me`），可选流量上限/到期时间（默认不限）。
-6. **firewall**：列出需要放行的端口与协议（如 `443/TCP`、`8443/UDP`、面板端口/TCP），说明「本机防火墙已自动放行；**云服务商的安全组需要你手动放行**」，并按常见厂商（阿里云、腾讯云、AWS、GCP、Oracle、Vultr…）给出折叠的图文步骤链接占位。提供「我已放行，测试一下」按钮：后端从本机连接自身公网端口做 TCP 探测（UDP 只提示无法自动检测）。
+6. **firewall**：列出需要放行的端口与协议（如 `443/TCP`、`8443/UDP`、面板端口/TCP），说明「本机防火墙已自动放行；**云服务商的安全组需要你手动放行**」，并按常见厂商（阿里云、腾讯云、AWS、GCP、Oracle、Vultr…）给出折叠的官方入站规则文档链接。提供「我已放行，测试一下」按钮：后端从本机连接自身公网端口做 TCP 探测（UDP 只提示无法自动检测）。
 7. **finish**：大二维码（自动格式订阅）+ 复制按钮 + 按平台的 Tabs（Windows / macOS / Android / iOS / Linux），每个 Tab：推荐客户端名、下载链接、「一键导入」按钮（若支持）、三步导入说明。最后标记 `completed=true`，按钮：进入面板。
 
 客户端推荐清单放 `web/src/data/clients.ts`（名称、平台、下载地址、支持的订阅格式、导入深链模板），方便后续维护。
@@ -122,7 +122,7 @@ createBrowserRouter(routes, { basename: BASE || "/" });
   已保存节点显示端口摘要；取消 Hysteria2 勾选不会删除已有节点，需进入节点页管理。
   未提交的字段只在组件内，不跨刷新持久化；本阶段不引入草稿同步或多标签写入协调。
 - firewall 展示所有启用节点、面板 TCP 端口及 UDP 跳跃范围；厂商折叠区提供控制台操作步骤和
-  明确的图文链接占位，不编造教程 URL。生产说明自动放行及云安全组职责；dev 则明确没有改系统。
+  官方文档链接（T6.3），不编造教程 URL。生产说明自动放行及云安全组职责；dev 则明确没有改系统。
   按唯一 TCP 端口调用 port-probe，只报告自连结果与限制，不宣称安全组已验证；UDP 需外部客户端验证。
 - finish 使用专用 links 接口，本地生成大二维码和 CopyField，五个平台使用可键盘操作的 Tabs。
   提供项目官方入口、来源说明、对应格式链接、一键导入及三步说明；沿用 sing-box 1.14+ 提示。
@@ -208,7 +208,7 @@ jsdom 不计算实际布局，因此 375px 无横向滚动和生产 history 刷�
   `supported=false` 或 `409 system_unsupported` 显示环境提示，不把占位零值当成真实指标；
   顶栏同样将此 409 显示为状态不可用。已安装内核可经确认重启，并展示失败诊断。
   日志读取最近 200 行，默认每 5 秒刷新，可关闭自动刷新；409 时停止自动轮询，保留手动刷新。
-- 设置表单不提供修改 TLS 模式的入口。修改面板端口/路径或订阅路径前确认并列出拟保存值，
+- T6.3 在设置页独立证书卡片中提供申请与改回自签。修改面板端口/路径或订阅路径前确认并列出拟保存值，
   提示旧订阅链接失效、安全组与重新登录的影响。保存成功仅在 `restart_after>0` 时，等待
   返回的秒数加 500ms 缓冲，再整页跳转到后端的 `panel_url`，并提供可手动打开的新地址。
   `restart_after=0` 留在设置页刷新缓存。开发模式的固定端口/路径限制由真实 API 返回可操作提示。
@@ -271,3 +271,37 @@ web/
     layouts/{AppLayout.tsx, SetupLayout.tsx, AuthLayout.tsx}
     pages/{login, dashboard, inbounds, users, rules, settings, logs, setup, not-found}/
 ```
+
+
+## 7. T6.3 证书与引导修复
+
+- 设置页证书卡片读取 cert，展示实际类型、证书地址、签发者、到期时间、上次尝试/成功及失败提示。
+  支持申请/重新申请、改回自签，写入有 loading/错误；申请返回 202 后显示已受理，不冒充签发成功。
+  主布局与设置页共享查询，正常 30 秒刷新、申请中 2 秒刷新，离开受保护页面后停止；开发模式说明不签发。
+- cert.warning 在主布局顶部显示醒目提醒和设置入口；失败 hint 给出放行 TCP 80、DNS/CDN、权限等下一步。
+  welcome/finish 根据实际 type 显示自签警告或 ACME 说明，HTTP 开发模式不展示自签警告。
+  staging/custom CA 不被描述为必然受客户端信任；Hysteria2 的自签证书提示与指纹行为保持。
+- suggest 无 Reality 候选仍用返回端口预填，目标留空并显示一次 hint。创建失败时替换推荐提示，
+  节点表单统一展示当前操作的一个错误框，不重复展示同一失败。
+  “同时创建 Hysteria2”用显式 label/htmlFor 和 aria-labelledby 绑定可见文案。
+- acme 模式的 firewall 步骤列 TCP 80，说明云安全组必须放行、验证监听是临时的；
+  普通 TCP 自连不包含 ACME 80，避免空闲期间被误判为安全组配置失败。
+- 官方文档逐页打开核实（2026-11-09），下表采用重定向后的官方 URL；链接数据和文案集中在 zh-CN.ts。
+
+| 厂商 | 官方页面 |
+|---|---|
+| 阿里云 | [安全组及入站规则](https://help.aliyun.com/zh/ecs/user-guide/start-using-security-groups) |
+| 腾讯云 | [添加安全组规则](https://cloud.tencent.com/document/product/213/112614) |
+| AWS | [Configure security group rules](https://docs.aws.amazon.com/vpc/latest/userguide/working-with-security-group-rules.html) |
+| Google Cloud | [Use VPC firewall rules](https://docs.cloud.google.com/firewall/docs/using-firewalls) |
+| Azure | [Manage network security groups](https://learn.microsoft.com/en-us/azure/virtual-network/manage-network-security-group) |
+| Oracle Cloud | [Security list ingress rules](https://docs.oracle.com/en-us/iaas/Content/Network/Concepts/creating-securitylist.htm) |
+| Vultr | [Firewall rules](https://docs.vultr.com/products/network/firewall-groups/management/rules) |
+| DigitalOcean | [Configure firewall rules](https://docs.digitalocean.com/products/networking/firewalls/how-to/configure-rules/) |
+| Linode / Akamai | [Manage firewall rules](https://techdocs.akamai.com/cloud-computing/docs/manage-firewall-rules) |
+| 搬瓦工 | [官方 iptables 排障](https://bandwagonhost.com/kb.php?action=displayarticle&id=24) |
+
+规格缺口：搬瓦工未找到单独的云安全组入站教程；采用其官方网络连通性/iptables 规则说明，
+在 UI 明确这是 VPS 内防火墙排障、保留已有规则，不把它标成云安全组教程，不链接第三方文章。
+其余九家页面均包含安全组/防火墙入站规则配置。
+无前端依赖增加，未修改 shadcn 生成组件、pnpm 锁文件或供应链冷静期。

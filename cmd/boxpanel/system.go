@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/revfanc/boxpanel/internal/acme"
 	"github.com/revfanc/boxpanel/internal/app"
 	"github.com/revfanc/boxpanel/internal/firewall"
 	"github.com/revfanc/boxpanel/internal/singbox"
@@ -90,7 +91,11 @@ func systemCommand(ctx context.Context, args []string, deps systemDependencies, 
 				}
 				err = app.OpenPanelFirewall(ctx, conn, cfg.WebPort, true, deps.opener)
 			} else if err == nil && command == "ready" {
-				err = panelReady(ctx, cfg, resolved.CertFile)
+				var file string
+				file, err = acme.ActiveFile(ctx, conn, resolved.CertificateDir(), resolved.CertFile)
+				if err == nil {
+					err = panelReady(ctx, cfg, file)
+				}
 			} else if err == nil {
 				deps.apply.OS = deps.os
 				var manager *singbox.Manager

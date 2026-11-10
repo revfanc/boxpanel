@@ -1,19 +1,109 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
 	"net"
 	"net/http"
+	"net/netip"
+	"os"
+	"path/filepath"
 	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/revfanc/boxpanel/internal/app"
+	"github.com/revfanc/boxpanel/internal/certs"
 	"github.com/revfanc/boxpanel/internal/httpapi"
 )
+
+func TestLiveTLSHotReplacementAndReadiness(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	now := time.Now().Add(-time.Minute)
+	cert, key, err := certs.Panel(netip.MustParseAddr("127.0.0.1"), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := tls.X509KeyPair(cert, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var current atomic.Pointer[tls.Certificate]
+	current.Store(&first)
+	p := &livePanel{ctx: ctx, logger: slog.New(slog.NewTextHandler(io.Discard, nil)), getCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return current.Load(), nil }}
+	done := make(chan error, 1)
+	go func() {
+		done <- p.run(listener, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(401) }))
+	}()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	})
+	file := filepath.Join(t.TempDir(), "active.pem")
+	if err := os.WriteFile(file, cert, 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := app.Config{WebPort: listener.Addr().(*net.TCPAddr).Port}
+	if err := panelReady(ctx, cfg, file); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a CA-issued certificate chain, without contacting any CA.
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Offline CA"}, NotBefore: now, NotAfter: now.AddDate(1, 0, 0), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	caDER, err := x509.CreateCertificate(rand.Reader, ca, ca, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err = x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(2), IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}, NotBefore: now, NotAfter: now.Add(160 * time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leaf, ca, first.PrivateKey.(*ecdsa.PrivateKey).Public(), caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain := append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER}), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})...)
+	second, err := tls.X509KeyPair(chain, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Store(&second)
+	if err := panelReady(ctx, cfg, file); err == nil {
+		t.Fatal("readiness ignored changed trust anchor")
+	}
+	if err := os.WriteFile(file, append(chain, key...), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := panelReady(ctx, cfg, file); err != nil {
+		t.Fatal("readiness rejected issued chain", err)
+	}
+	if bytes.Equal(first.Certificate[0], second.Certificate[0]) {
+		t.Fatal("certificate did not change")
+	}
+}
 
 func TestListenerReservationActivationAndCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

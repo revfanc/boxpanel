@@ -20,8 +20,10 @@ type InboundFormProps = {
   onBusy?: (busy: boolean) => void
   submitLabel?: string
   initialTargets?: RealityTarget[]
+  suggestionError?: unknown
+  suggestionHint?: string
 }
-export function InboundForm({ protocol, source, onSaved, onBusy, submitLabel, initialTargets }: InboundFormProps) {
+export function InboundForm({ protocol, source, onSaved, onBusy, submitLabel, initialTargets, suggestionError, suggestionHint }: InboundFormProps) {
   const existing = source && 'id' in source ? source : undefined
   const form = useForm<InboundFormValues>({ resolver: zodResolver(inboundSchema), defaultValues: inboundDefaults(protocol, source) })
   const values = useWatch({ control: form.control })
@@ -34,6 +36,7 @@ export function InboundForm({ protocol, source, onSaved, onBusy, submitLabel, in
   const client = useQueryClient()
   const navigate = useNavigate()
   const checkingServer = values.handshake_server || values.server_name || ''
+  const displayError = save.error ?? check.error ?? recommend.error ?? (recommend.success ? null : suggestionError)
   const checkResult = checked?.server === checkingServer && checked.port === values.handshake_port ? checked.target : null
   return <Panel title={protocol === 'vless_reality' ? t.inbounds.reality : t.inbounds.hysteria2}>
     <form className="space-y-5" noValidate onSubmit={form.handleSubmit((data) => {
@@ -56,9 +59,7 @@ export function InboundForm({ protocol, source, onSaved, onBusy, submitLabel, in
               void check.run(() => api<RealityTarget>('/reality/check', { method: 'POST', body: { server, port } }), (target) => setChecked({ target, server, port }))
             }}>{check.pending ? t.inbounds.checking : t.inbounds.check}</Button>
           </div>
-          {recommend.error != null && <ErrorNotice error={recommend.error} />}
-          {check.error != null && <ErrorNotice error={check.error} />}
-          {targets?.length === 0 && <Empty>{t.inbounds.noTargets}</Empty>}
+          {targets?.length === 0 && ((!suggestionHint && !suggestionError) || recommend.success) && <Empty>{t.inbounds.noTargets}</Empty>}
           {targets && targets.length > 0 && <div className="flex flex-wrap gap-2">{targets.map((target) => <Button key={target.server} type="button" variant="outline" className="h-auto max-w-full whitespace-normal text-left" onClick={() => { form.setValue('server_name', target.server, { shouldDirty: true, shouldValidate: true }); form.setValue('handshake_server', target.server, { shouldDirty: true }); form.setValue('handshake_port', 443) }}>{target.server} · {target.latency_ms} ms</Button>)}</div>}
           {checkResult && <Notice>{checkResult.ok ? `${t.inbounds.checkOK} · ${checkResult.latency_ms} ms` : checkResult.hint || t.inbounds.checkFailed}</Notice>}
         </> : <Field label={t.inbounds.sni} {...form.register('sni')} error={errors.sni?.message} />}
@@ -85,7 +86,7 @@ export function InboundForm({ protocol, source, onSaved, onBusy, submitLabel, in
         </details>
         <Submit pending={save.pending} label={submitLabel ?? (existing ? t.common.save : t.common.create)} />
       </fieldset>
-      {save.error != null && <ErrorNotice error={save.error} />}
+      {displayError != null ? <ErrorNotice error={displayError} /> : !recommend.success && suggestionHint && <Notice>{suggestionHint}</Notice>}
     </form>
   </Panel>
 }
@@ -95,8 +96,7 @@ export function SuggestedForm({ protocol, autoRecommend = false, ...props }: Omi
   const targets = useQuery({ queryKey: ['reality', 'recommend'], queryFn: ({ signal }) => api<{ targets: RealityTarget[] }>('/reality/recommend', { signal }), enabled: autoRecommend && protocol === 'vless_reality', retry: false, refetchOnWindowFocus: false })
   return <>
     {suggestion.isPending || (autoRecommend && protocol === 'vless_reality' && targets.isPending) ? <Loading label={t.inbounds.suggesting} /> : <>
-      {suggestion.isError && <><ErrorNotice error={suggestion.error} /><Notice>{t.inbounds.suggestHint}</Notice></>}
-      <InboundForm protocol={protocol} source={suggestion.data} initialTargets={targets.data?.targets} {...props} />
+      <InboundForm protocol={protocol} source={suggestion.data} initialTargets={targets.data?.targets} suggestionError={suggestion.error} suggestionHint={suggestion.data?.hint} {...props} />
     </>}
   </>
 }

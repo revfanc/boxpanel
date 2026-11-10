@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"database/sql"
 	"errors"
 	"flag"
@@ -19,6 +18,7 @@ import (
 	"syscall"
 
 	"crypto/sha256"
+	"github.com/revfanc/boxpanel/internal/acme"
 	"github.com/revfanc/boxpanel/internal/app"
 	"github.com/revfanc/boxpanel/internal/auth"
 	"github.com/revfanc/boxpanel/internal/firewall"
@@ -32,14 +32,15 @@ import (
 )
 
 type serveOptions struct {
-	webPath    string
-	port       int
-	webPathSet bool
-	portSet    bool
-	dev        bool
-	paths      app.Paths
-	listenHost string
-	core       singboxPaths
+	webPath       string
+	port          int
+	webPathSet    bool
+	portSet       bool
+	dev           bool
+	paths         app.Paths
+	listenHost    string
+	core          singboxPaths
+	acmeDirectory string
 }
 
 func resolveServeConfig(ctx context.Context, conn *sql.DB, opts serveOptions) (app.Config, error) {
@@ -55,7 +56,7 @@ func resolveServeConfig(ctx context.Context, conn *sql.DB, opts serveOptions) (a
 	}
 	if opts.dev {
 		cfg.WebPort, cfg.WebPath, cfg.PublicHost, cfg.TLSMode = 2053, "", "127.0.0.1", "http"
-	} else if cfg.TLSMode != "self_signed" {
+	} else if cfg.TLSMode != "self_signed" && cfg.TLSMode != "acme" {
 		return cfg, fmt.Errorf("HTTP database requires serve --dev; initialize a separate data directory for HTTPS")
 	}
 	return cfg, nil
@@ -66,6 +67,7 @@ func parseServeOptions(args []string, output io.Writer) (serveOptions, error) {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(output)
 	paths := addPathFlags(flags)
+	paths.addACME(flags)
 	core := addSingboxPaths(flags)
 	flags.StringVar(&opts.webPath, "web-path", "", "override database web_path (lowercase letters and digits; empty mounts at /)")
 	flags.IntVar(&opts.port, "port", 0, "override database web_port (1-65535)")
@@ -105,6 +107,7 @@ func parseServeOptions(args []string, output io.Writer) (serveOptions, error) {
 		return opts, err
 	}
 	opts.core = core.resolve(paths, opts.dev)
+	opts.acmeDirectory = paths.acmeDirectory
 	return opts, nil
 }
 
@@ -168,8 +171,17 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	}}
 	limiter := &subscription.Limiter{}
 	panel := &livePanel{ctx: ctx, host: opts.listenHost, port: cfg.WebPort, dev: opts.dev, logger: logger, grace: 2 * time.Second}
+	certificates, err := acme.New(ctx, conn, acme.Options{Dir: opts.paths.CertificateDir(), CertFile: opts.paths.CertFile, KeyFile: opts.paths.KeyFile, Directory: opts.acmeDirectory, Dev: opts.dev, Logger: logger, OpenPort: func(ctx context.Context) error {
+		if runtime.GOOS != "linux" {
+			return nil
+		}
+		return app.OpenPanelFirewall(ctx, conn, 80, true, firewall.New(firewall.Options{}))
+	}})
+	if err != nil {
+		return fmt.Errorf("prepare panel certificates: %w", err)
+	}
 	panel.build = func(settings httpapi.PanelSettings) (http.Handler, error) {
-		api := httpapi.New(service, httpapi.Options{WebPath: settings.WebPath, Dev: opts.dev, Logger: logger, System: system, Singbox: manager, DB: conn, Applier: manager, PanelPort: settings.WebPort, Subscriptions: store, PreparePanel: panel.prepare})
+		api := httpapi.New(service, httpapi.Options{WebPath: settings.WebPath, Dev: opts.dev, Logger: logger, System: system, Singbox: manager, DB: conn, Applier: manager, PanelPort: settings.WebPort, Subscriptions: store, PreparePanel: panel.prepare, Certificates: certificates})
 		spaHandler, err := spa.New(web.Assets, spa.Options{WebPath: settings.WebPath, Version: version, API: api})
 		if err != nil {
 			return nil, fmt.Errorf("prepare HTTP server: %w", err)
@@ -181,10 +193,7 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 		return err
 	}
 	if !opts.dev {
-		panel.certificate, err = tls.LoadX509KeyPair(opts.paths.CertFile, opts.paths.KeyFile)
-		if err != nil {
-			return fmt.Errorf("load panel TLS certificate (check --cert-file and --key-file): %w", err)
-		}
+		panel.getCertificate = certificates.GetCertificate
 	}
 	address := net.JoinHostPort(opts.listenHost, strconv.Itoa(cfg.WebPort))
 	listener, err := net.Listen("tcp", address)
@@ -196,7 +205,16 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 			listener.Close()
 			return fmt.Errorf("restore panel firewall; run boxpanel system firewall-open and retry")
 		}
+		if cfg.TLSMode == "acme" {
+			if err := app.OpenPanelFirewall(ctx, conn, 80, true, firewall.New(firewall.Options{})); err != nil {
+				logger.Warn("无法放行 ACME TCP 80；面板继续使用当前证书，请检查本机防火墙权限，并在设置查看签发结果。")
+			}
+		}
 	}
 	logger.Info("panel listening", "url", cfg.URL(), "listen", address)
+	workerCtx, cancelWorker := context.WithCancel(ctx)
+	workerDone := make(chan struct{})
+	go func() { defer close(workerDone); certificates.Run(workerCtx) }()
+	defer func() { cancelWorker(); <-workerDone }()
 	return panel.run(listener, handler)
 }

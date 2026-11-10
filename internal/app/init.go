@@ -137,7 +137,7 @@ func Initialize(ctx context.Context, opts InitOptions) (InitResult, error) {
 			return result, err
 		}
 	}
-	mode := "self_signed"
+	mode := "acme"
 	if opts.Dev {
 		webPath, mode = "", "http"
 	}

@@ -121,8 +121,11 @@ func patchSettings(s PanelSettings, in settingsInput, dev bool) (PanelSettings, 
 	if in.BlockBittorrent != nil {
 		s.BlockBittorrent = *in.BlockBittorrent
 	}
-	if in.TLSMode != nil && *in.TLSMode != s.TLSMode {
-		return s, invalid("panel_tls_mode", "当前仅支持初始化时的 TLS 模式；ACME 留待后续版本。")
+	if in.TLSMode != nil {
+		if dev && *in.TLSMode != s.TLSMode || !dev && *in.TLSMode != "self_signed" && *in.TLSMode != "acme" {
+			return s, invalid("panel_tls_mode", "HTTPS 面板仅支持 self_signed 或 acme；开发模式保持 http，请在生产环境申请证书。")
+		}
+		s.TLSMode = *in.TLSMode
 	}
 	if !rules.ValidHost(s.PublicHost) {
 		return s, invalid("public_host", "请填写域名或裸 IPv4/IPv6 地址，不含协议、端口或路径。")
@@ -167,6 +170,10 @@ func (a *api) settingsPut(w http.ResponseWriter, r *http.Request) {
 	next, err := patchSettings(old, in, a.opts.Dev)
 	if err != nil {
 		a.resourceError(w, err)
+		return
+	}
+	if next.TLSMode != old.TLSMode && a.opts.Certificates == nil {
+		a.certUnavailable(w)
 		return
 	}
 	changeListener := next.WebPort != old.WebPort || next.WebPath != old.WebPath
@@ -225,6 +232,9 @@ func (a *api) settingsPut(w http.ResponseWriter, r *http.Request) {
 	}
 	if changeListener {
 		commit()
+	}
+	if (next.TLSMode != old.TLSMode || next.PublicHost != old.PublicHost) && a.opts.Certificates != nil {
+		a.opts.Certificates.Changed()
 	}
 	writeJSON(w, 200, struct {
 		PanelSettings

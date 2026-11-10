@@ -16,9 +16,17 @@ import (
 )
 
 type Paths struct {
+	DataDir  string
 	Database string
 	CertFile string
 	KeyFile  string
+}
+
+func (p Paths) CertificateDir() string {
+	if p.DataDir != "" {
+		return filepath.Join(p.DataDir, "certs")
+	}
+	return filepath.Join(filepath.Dir(p.Database), "certs")
 }
 
 func (p Paths) Validate() error {
@@ -33,6 +41,14 @@ func (p Paths) Validate() error {
 		}
 		if seen[abs] {
 			return fmt.Errorf("configure paths: database, certificate and key must use different files")
+		}
+		certDir, err := filepath.Abs(p.CertificateDir())
+		if err != nil {
+			return fmt.Errorf("resolve certificate directory: %w", err)
+		}
+		base := filepath.Base(abs)
+		if filepath.Dir(abs) == certDir && (strings.HasPrefix(base, "account-") || strings.HasPrefix(base, "panel-") && strings.HasSuffix(base, ".pem")) {
+			return fmt.Errorf("configure paths: account-* and panel-*.pem in certs are reserved for managed certificates; choose another file")
 		}
 		seen[abs] = true
 	}
@@ -79,8 +95,8 @@ func LoadConfig(ctx context.Context, conn *sql.DB) (Config, error) {
 	if err := spa.ValidateWebPath(cfg.WebPath); err != nil {
 		return cfg, err
 	}
-	if cfg.TLSMode != "self_signed" && cfg.TLSMode != "http" {
-		return cfg, fmt.Errorf("read panel_tls_mode: restore self_signed, or use a separate dev database")
+	if cfg.TLSMode != "self_signed" && cfg.TLSMode != "acme" && cfg.TLSMode != "http" {
+		return cfg, fmt.Errorf("read panel_tls_mode: restore self_signed/acme, or use a separate dev database")
 	}
 	if cfg.PublicHost == "" || strings.ContainsAny(cfg.PublicHost, "/?#@\\ \t\r\n") {
 		return cfg, fmt.Errorf("read public_host: restore a hostname or IP without a URL scheme or path")

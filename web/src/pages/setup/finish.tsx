@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Notice, Panel } from '@/components/ResourceUI'
 import { CopyField } from '@/components/CopyField'
 import { ErrorNotice, Loading } from '@/components/Feedback'
+import { SetupCertificate } from '@/components/Certificate'
 import { api, APIError } from '@/lib/api'
 import { checkQuery, usersQuery } from '@/lib/resources'
 import { clients, platforms, clientImport } from '@/data/clients'
@@ -42,7 +43,7 @@ export function FinishStep({ complete }: { complete: () => void }) {
         </Panel>
       })}</Tabs.Content>)}
     </Tabs.Root>
-    <Notice>{sub.compatibility}</Notice><Notice>{t.setup.tlsHint}</Notice>
+    <Notice>{sub.compatibility}</Notice><SetupCertificate />
     <Button onClick={complete}>{t.setup.enter}</Button>
   </>
 }

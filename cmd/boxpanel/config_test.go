@@ -15,8 +15,32 @@ import (
 
 func clearEnvironment(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{"BOXPANEL_DATA_DIR", "BOXPANEL_DB_PATH", "BOXPANEL_CERT_FILE", "BOXPANEL_KEY_FILE", "BOXPANEL_PUBLIC_IP", "BOXPANEL_LISTEN_HOST", "BOXPANEL_SINGBOX_PATH", "BOXPANEL_SINGBOX_CONFIG", "BOXPANEL_UNIT_DIR", "BOXPANEL_BINARY"} {
+	for _, key := range []string{"BOXPANEL_DATA_DIR", "BOXPANEL_DB_PATH", "BOXPANEL_CERT_FILE", "BOXPANEL_KEY_FILE", "BOXPANEL_PUBLIC_IP", "BOXPANEL_LISTEN_HOST", "BOXPANEL_SINGBOX_PATH", "BOXPANEL_SINGBOX_CONFIG", "BOXPANEL_UNIT_DIR", "BOXPANEL_BINARY", "BOXPANEL_ACME_DIRECTORY"} {
 		t.Setenv(key, "")
+	}
+}
+
+func TestACMEDirectoryOverrides(t *testing.T) {
+	clearEnvironment(t)
+	const staging = "https://acme-staging-v02.api.letsencrypt.org/directory"
+	t.Setenv("BOXPANEL_ACME_DIRECTORY", staging)
+	serve, err := parseServeOptions(nil, io.Discard)
+	if err != nil || serve.acmeDirectory != staging {
+		t.Fatalf("serve directory = %q: %v", serve.acmeDirectory, err)
+	}
+	install, err := parseSingboxOptions([]string{"install"}, io.Discard)
+	if err != nil || install.acmeDirectory != staging {
+		t.Fatalf("install directory = %q: %v", install.acmeDirectory, err)
+	}
+	const local = "http://127.0.0.1:14000/dir"
+	serve, err = parseServeOptions([]string{"--acme-directory", local}, io.Discard)
+	if err != nil || serve.acmeDirectory != local {
+		t.Fatalf("flag directory = %q: %v", serve.acmeDirectory, err)
+	}
+	for _, invalid := range []string{"http://example.com/directory", "https://user:secret@example.com/dir", "invalid"} {
+		if _, err := parseServeOptions([]string{"--acme-directory", invalid}, io.Discard); err == nil {
+			t.Fatalf("accepted directory %q", invalid)
+		}
 	}
 }
 
@@ -52,7 +76,7 @@ func TestConfigCommandsAndOverrides(t *testing.T) {
 	}
 	defer conn.Close()
 	cfg, err := resolveServeConfig(context.Background(), conn, opts)
-	if err != nil || cfg.WebPort != 25432 || len(cfg.WebPath) != 12 || cfg.TLSMode != "self_signed" {
+	if err != nil || cfg.WebPort != 25432 || len(cfg.WebPath) != 12 || cfg.TLSMode != "acme" {
 		t.Fatalf("serve did not read DB: %+v %v", cfg, err)
 	}
 	opts, err = parseServeOptions([]string{"--port", "25433", "--web-path", "override", "--listen-host", "127.0.0.1"}, io.Discard)

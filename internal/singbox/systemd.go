@@ -155,12 +155,14 @@ func (s *systemd) State(ctx context.Context, unit string) (ServiceState, error) 
 }
 
 type UnitPaths struct {
-	PanelBinary string
-	Binary      string
-	Config      string
-	Database    string
-	CertFile    string
-	KeyFile     string
+	DataDir       string
+	ACMEDirectory string
+	PanelBinary   string
+	Binary        string
+	Config        string
+	Database      string
+	CertFile      string
+	KeyFile       string
 }
 
 // GenerateUnits is pure. Installation/enabling belongs to its caller; neither
@@ -182,6 +184,20 @@ func GenerateUnits(paths UnitPaths) (map[string][]byte, error) {
 		values[index] = value
 	}
 	panel := fmt.Sprintf("%s serve --db-path %s --cert-file %s --key-file %s --singbox-path %s --singbox-config %s", values[0], values[3], values[4], values[5], values[1], values[2])
+	if paths.DataDir != "" {
+		value, err := quote(paths.DataDir)
+		if err != nil {
+			return nil, err
+		}
+		panel += " --data-dir " + value
+	}
+	if paths.ACMEDirectory != "" {
+		if strings.ContainsAny(paths.ACMEDirectory, "\x00\r\n\t") {
+			return nil, fmt.Errorf("invalid ACME directory URL")
+		}
+		value := strings.NewReplacer("\\", "\\\\", "\"", "\\\"", "%", "%%", "$", "$$").Replace(paths.ACMEDirectory)
+		panel += " --acme-directory \"" + value + "\""
+	}
 	core := fmt.Sprintf("%s run -c %s", values[1], values[2])
 	template := "[Unit]\nDescription=%s\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nExecStart=%s\nRestart=on-failure\nRestartSec=3\nLimitNOFILE=%d\n%s\n[Install]\nWantedBy=multi-user.target\n"
 	return map[string][]byte{

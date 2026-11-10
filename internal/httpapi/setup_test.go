@@ -312,7 +312,7 @@ func TestSetupFreshDevLifecycle(t *testing.T) {
 	}
 	f.call(t, "PUT", "setup/status", `{"step":"scenario"}`, 200)
 	f.call(t, "PUT", "setup/status", `{"domain":"","hysteria2":true,"step":"node"}`, 200)
-	f.call(t, "POST", "inbounds/suggest", `{"protocol":"vless_reality"}`, 409)
+	f.call(t, "POST", "inbounds/suggest", `{"protocol":"vless_reality"}`, 200)
 	for _, body := range []string{`{"protocol":"vless_reality","options":{"server_name":"www.example.com"}}`, `{"protocol":"hysteria2"}`} {
 		w = f.call(t, "POST", "inbounds", body, 201)
 		if w.Header().Get("X-Boxpanel-Apply") != "dev-db-only" {

@@ -7,6 +7,7 @@ import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupLabel
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { ThemeSwitch } from '@/components/ThemeSwitch'
 import { ErrorNotice } from '@/components/Feedback'
+import { CertificateWarning } from '@/components/Certificate'
 import { api } from '@/lib/api'
 import { replaceSession, sessionQuery, settingsQuery, systemQuery } from '@/lib/query'
 import { cn } from '@/lib/utils'
@@ -115,6 +116,7 @@ export function AppLayout() {
       <main id="main-content" tabIndex={-1} className="mx-auto w-full min-w-0 max-w-6xl flex-1 p-4 outline-none sm:p-6 lg:p-8">
         {logout.isError && <div className="mb-5"><ErrorNotice error={logout.error} /></div>}
         {settings.isError && <div className="mb-5"><ErrorNotice error={settings.error} retry={() => { void settings.refetch() }} /></div>}
+        <CertificateWarning />
         <Outlet />
       </main>
     </div>

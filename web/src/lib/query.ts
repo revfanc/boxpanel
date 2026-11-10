@@ -1,12 +1,13 @@
 import { QueryClient, queryOptions } from '@tanstack/react-query'
 import { api, APIError, invalidResponse, advanceSession } from '@/lib/api'
 import { setupSteps } from '@/types/api'
-import type { Admin, PanelSettings, SetupStatus, SystemStatus } from '@/types/api'
+import type { Admin, PanelSettings, SetupStatus, SystemStatus, CertificateStatus } from '@/types/api'
 
 export const queryKeys = {
   auth: ['auth', 'me'] as const,
   setup: ['setup', 'status'] as const,
   settings: ['settings'] as const,
+  cert: ['cert'] as const,
   system: ['system', 'status'] as const,
   inbounds: ['inbounds'] as const,
   users: ['users'] as const,
@@ -60,6 +61,12 @@ export const settingsQuery = queryOptions({
 export const systemQuery = queryOptions({
   queryKey: queryKeys.system,
   queryFn: ({ signal }) => api<SystemStatus>('/system/status', { signal }),
+})
+export const certQuery = queryOptions({
+  queryKey: queryKeys.cert,
+  queryFn: ({ signal }) => api<CertificateStatus>('/cert', { signal }),
+  refetchInterval: (query) => query.state.data?.issuing ? 2000 : 30000,
+  staleTime: 0,
 })
 
 export function replaceSession(client: QueryClient, admin: Admin | null) {

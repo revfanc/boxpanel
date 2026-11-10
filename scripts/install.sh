@@ -257,7 +257,7 @@ install_panel() {
     rm -f -- "$marker"
     say 'boxpanel 安装完成。'
     "$BINARY" info
-    say '自签证书提示：核对地址后在浏览器选择“高级 → 继续访问”。请在云安全组放行面板地址中的 TCP 端口。'
+    say '证书类型见上方 info 输出。服务会自动尝试申请可信证书；若仍为自签，请到面板设置查看签发结果及修复建议。请在云安全组放行面板 TCP 端口及 ACME 验证所需的 TCP 80。'
 }
 
 update_panel() {

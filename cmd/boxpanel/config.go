@@ -9,14 +9,16 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/revfanc/boxpanel/internal/acme"
 	"github.com/revfanc/boxpanel/internal/app"
 )
 
 type pathFlags struct {
-	dataDir  string
-	database string
-	cert     string
-	key      string
+	dataDir       string
+	database      string
+	cert          string
+	key           string
+	acmeDirectory string
 }
 
 func addPathFlags(flags *flag.FlagSet) *pathFlags {
@@ -28,6 +30,10 @@ func addPathFlags(flags *flag.FlagSet) *pathFlags {
 	return p
 }
 
+func (p *pathFlags) addACME(flags *flag.FlagSet) {
+	flags.StringVar(&p.acmeDirectory, "acme-directory", os.Getenv("BOXPANEL_ACME_DIRECTORY"), "ACME directory URL (default Let's Encrypt production; use staging for trials)")
+}
+
 func (p pathFlags) resolve(dev bool) (app.Paths, error) {
 	dir := p.dataDir
 	dbName := "boxpanel.db"
@@ -37,7 +43,12 @@ func (p pathFlags) resolve(dev bool) (app.Paths, error) {
 			dir, dbName = ".", "dev.db"
 		}
 	}
-	paths := app.Paths{Database: p.database, CertFile: p.cert, KeyFile: p.key}
+	if p.acmeDirectory != "" {
+		if err := acme.ValidateDirectory(p.acmeDirectory); err != nil {
+			return app.Paths{}, err
+		}
+	}
+	paths := app.Paths{DataDir: dir, Database: p.database, CertFile: p.cert, KeyFile: p.key}
 	if paths.Database == "" {
 		paths.Database = filepath.Join(dir, dbName)
 	}
@@ -121,6 +132,23 @@ func configCommand(ctx context.Context, command string, opts app.InitOptions, st
 		return err
 	}
 	fmt.Fprintf(stdout, "面板地址: %s\n用户名:   %s\n", cfg.URL(), username)
+	if cfg.TLSMode != "http" {
+		status, err := acme.StoredStatus(ctx, conn)
+		if err != nil {
+			return err
+		}
+		certificateType := "自签证书（可信证书未生效；请到设置查看签发状态）"
+		if status.Type == "acme" {
+			certificateType = "ACME 证书（staging 证书不受公开信任）"
+		}
+		fmt.Fprintf(stdout, "面板证书: %s\n", certificateType)
+		if status.Hint != "" {
+			fmt.Fprintln(stdout, status.Hint)
+		}
+		if cfg.TLSMode == "acme" {
+			fmt.Fprintln(stdout, "服务会自动申请和续期；请持续放行云安全组 TCP 80，失败时到面板设置查看下一步提示。")
+		}
+	}
 	return nil
 }
 
@@ -135,5 +163,9 @@ func printInitialized(stdout io.Writer, result app.InitResult) {
 	if result.TLSMode == "self_signed" {
 		fmt.Fprintln(stdout, "提示: 浏览器提示不安全是因为使用了自签证书，请核对面板地址后选择高级 → 继续访问。")
 		fmt.Fprintf(stdout, "请确认云服务商安全组已放行 TCP %d。\n", result.WebPort)
+	}
+	if result.TLSMode == "acme" {
+		fmt.Fprintln(stdout, "面板证书: 已准备自签备用证书，服务启动后自动尝试申请 ACME 可信证书，失败不阻断启动。")
+		fmt.Fprintf(stdout, "请确认云服务商安全组已放行 TCP %d 和 TCP 80；证书状态及下一步提示见面板设置。\n", result.WebPort)
 	}
 }

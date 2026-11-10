@@ -22,6 +22,15 @@ func Panel(ip netip.Addr, now time.Time) (certificate, privateKey []byte, err er
 	return selfSigned("boxpanel", nil, []net.IP{net.IP(ip.AsSlice())}, now)
 }
 
+// PanelHost creates a fallback for a changed public_host without overwriting
+// the original installation certificate. The caller validates DNS names.
+func PanelHost(name string, now time.Time) (certificate, privateKey []byte, err error) {
+	if ip, err := netip.ParseAddr(name); err == nil {
+		return Panel(ip, now)
+	}
+	return selfSigned("boxpanel", []string{name}, nil, now)
+}
+
 func selfSigned(name string, dnsNames []string, ips []net.IP, now time.Time) (certificate, privateKey []byte, err error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {

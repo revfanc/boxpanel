@@ -18,22 +18,23 @@ import (
 
 type handlerSlot struct{ handler http.Handler }
 type livePanel struct {
-	mu          sync.Mutex
-	ctx         context.Context
-	host        string
-	port        int
-	dev         bool
-	certificate tls.Certificate
-	logger      *slog.Logger
-	build       func(httpapi.PanelSettings) (http.Handler, error)
-	handler     atomic.Pointer[handlerSlot]
-	server      *http.Server
-	pending     bool
-	closed      bool
-	reserved    net.Listener
-	timer       *time.Timer
-	failures    chan error
-	grace       time.Duration // production uses two seconds; injectable for tests
+	mu             sync.Mutex
+	ctx            context.Context
+	host           string
+	port           int
+	dev            bool
+	certificate    tls.Certificate
+	getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
+	logger         *slog.Logger
+	build          func(httpapi.PanelSettings) (http.Handler, error)
+	handler        atomic.Pointer[handlerSlot]
+	server         *http.Server
+	pending        bool
+	closed         bool
+	reserved       net.Listener
+	timer          *time.Timer
+	failures       chan error
+	grace          time.Duration // production uses two seconds; injectable for tests
 }
 
 func (p *livePanel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -41,6 +42,10 @@ func (p *livePanel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 func (p *livePanel) start(listener net.Listener) *http.Server {
 	s := &http.Server{Handler: p, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{p.certificate}}, ErrorLog: slog.NewLogLogger(p.logger.Handler(), slog.LevelWarn)}
+	if p.getCertificate != nil {
+		s.TLSConfig.Certificates = nil
+		s.TLSConfig.GetCertificate = p.getCertificate
+	}
 	go func() {
 		var err error
 		if p.dev {

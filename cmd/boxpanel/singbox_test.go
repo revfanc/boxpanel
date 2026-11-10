@@ -72,6 +72,7 @@ func cliFixture(t *testing.T) (singboxOptions, singboxDependencies, *cliInstalle
 
 func TestSingboxInstallCLIAndIdempotency(t *testing.T) {
 	opts, deps, installer, controller := cliFixture(t)
+	opts.acmeDirectory = "https://acme-staging-v02.api.letsencrypt.org/directory"
 	var out bytes.Buffer
 	for range 2 {
 		if err := singboxCommand(context.Background(), opts, deps, &out); err != nil {
@@ -86,6 +87,10 @@ func TestSingboxInstallCLIAndIdempotency(t *testing.T) {
 		if err != nil || info.Mode().Perm() != 0644 {
 			t.Fatalf("unit=%v %v", info, err)
 		}
+	}
+	unit, err := os.ReadFile(filepath.Join(opts.unitDir, singbox.PanelUnit))
+	if err != nil || !strings.Contains(string(unit), `--acme-directory "`+opts.acmeDirectory+`"`) || !strings.Contains(string(unit), `--data-dir "`+opts.paths.DataDir+`"`) {
+		t.Fatalf("panel unit lost certificate configuration: %s, %v", unit, err)
 	}
 	if _, err := os.Stat(opts.core.config); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("created sing-box config")

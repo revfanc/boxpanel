@@ -31,7 +31,9 @@
   boxpanel.db                          # SQLite
   sing-box.json                        # 当前生效的服务端配置（面板生成，用户勿手改）
   sing-box.json.bak                    # 上一份可用配置，用于回滚
-  certs/panel.{crt,key}                # 面板 HTTPS 证书（默认自签）
+  certs/panel.{crt,key}                # 初始化的自签备用证书（保留）
+  certs/panel-<sha256>.pem              # 当前/历史面板证书链与私钥，原子保存
+  certs/account-<directory-sha256>.key  # 按 CA directory 隔离的 ACME 账号
   certs/hy2.{crt,key}                  # Hysteria2 等需要 TLS 的入站证书
 /etc/systemd/system/boxpanel.service
 /etc/systemd/system/boxpanel-singbox.service
@@ -69,7 +71,8 @@ internal/
   share/                      # 单节点分享 URI（vless://、hysteria2:// ...）
   rules/                      # 规则预设、rule-set 源
   reality/                    # x25519 密钥、short_id、伪装目标检测
-  certs/                      # 自签证书；后期 ACME
+  certs/                      # 自签面板/Hysteria2 证书
+  acme/                       # 面板 ACME 签发、续期与 TLS 热替换
   sysinfo/                    # 环境自检、BBR、公网 IP 探测、端口占用
   firewall/                   # ufw / firewalld / nftables / iptables 适配
 web/                          # Vite + React 前端；web/embed.go 内嵌 dist
@@ -137,7 +140,7 @@ MVP 规则：**所有启用的用户加入所有启用的入站**。超额/过�
 
 - `internal/db.Open(ctx, path)` 接收文件路径（不接收 DSN 或内存库），父目录须已存在；
   自动连接并迁移，失败关闭连接，成功由调用者 `Close()`。本任务不接入 CLI/HTTP 启动流程。
-- 使用纯 Go 驱动 `modernc.org/sqlite v1.38.2`，保持 `go.mod` 的 Go 1.23 最低版本；
+- 使用纯 Go 驱动 `modernc.org/sqlite v1.38.2`；最低 Go 版本见 §13（T6.3 升至 1.26）；
   这是本任务唯一直接新增依赖，其余为驱动的间接依赖，无需 CGO。
 - 打开时启用持久化的 `journal_mode=WAL` 并检查返回值；新库并发切换 WAL 时可能立即遇到
   `SQLITE_BUSY`，仅对此错误重试，等待窗口为 5 秒且支持 context 取消。
@@ -236,7 +239,7 @@ MVP 规则：**所有启用的用户加入所有启用的入站**。超额/过�
 
 ## 8. 安全基线
 
-- 面板默认 HTTPS（安装时生成覆盖公网 IP 的自签证书），引导页解释浏览器警告。
+- 面板默认 HTTPS；新安装尝试 ACME，未签发成功时使用自签备用证书。引导按实际证书类型解释浏览器警告，详见 §13。
 - 会话 cookie：`HttpOnly; Secure; SameSite=Strict; Path=/{web_path}/`，有效期 7 天。
 - 登录限流：同 IP 5 次失败锁 15 分钟。
 - 管理 API 对写操作校验 `Origin`/`Sec-Fetch-Site`，防 CSRF。
@@ -345,3 +348,42 @@ Hysteria2=true 读取，首次保存时写入，不修改已发布迁移。setup
 无新迁移；成功安装实例的生产启动重放当前端口，卸载合并当前/未完成生效计划后清理规则。
 保留数据的卸载不清除配置恢复记录，重装只允许恢复 DB 记录的同版本内核，不推进 T7.6。
 生命周期、失败重试、非交互确认、路径/下载约束及 CI/release 产物契约详见 INSTALL.md §2/§3/§5。
+
+
+## 13. T6.3 面板可信证书
+
+- `panel_tls_mode` 是期望策略：生产 `acme | self_signed`，开发独有 `http`。
+  新 init 写入 `acme` 并生成原有自签备用证书，首次签发由 serve 后台执行；HTTPS 先就绪，
+  签发失败不阻断安装/启动。旧库保持原策略，由设置页主动申请。失败时期望策略仍为 acme，
+  实际证书类型在 `/cert.type` 显示 self_signed，避免停止自动重试或把自签误报为可信。
+- 新包 `internal/acme` 使用 `golang.org/x/crypto/acme v0.58.0`，复用依赖、不引入 lego、
+  不手写 JWS。原 v0.41.0 缺少 profiles；v0.58.0（2026-10-09，已超过 7 天）新增
+  [WithOrderIssuanceProfile](https://pkg.go.dev/golang.org/x/crypto/acme#WithOrderIssuanceProfile)
+  并支持 IPIDs。按其 [go.mod](https://github.com/golang/crypto/blob/v0.58.0/go.mod)
+  将项目最低 Go 版本从 1.23 提至 **1.26**，x/sys 随之更新为 v0.49.0；CI 继续用 Go 1.27，CGO=0。
+- IP 使用 `ip` 标识符、IP SAN 和强制 `shortlived` profile；域名使用 `dns` 标识符、DNS SAN，
+  不传 profile，采用 CA 默认（LE classic）。按 [LE 官方公告](https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability/)
+  IP 证书约 160 小时。续期统一按证书实际 NotBefore/NotAfter 的 **1/2 寿命**计算，
+  不硬编码“classic 30 天”（90 天证书的半寿命实际是 45 天）。
+- 仅 HTTP-01：每次签发/续期临时监听 TCP :80，其他路径空白 404，结束或取消关闭监听和在途连接；
+  80 占用立即失败，不借用 443、不停止其他服务。每次签发总窗口 2 分钟。
+  生产启动及签发前复用本机防火墙适配器放行 TCP 80，先登记 `panel_firewall_ports`，
+  可供卸载清理；不修改云安全组。改回自签停止签发和续期，保留已登记放行规则供卸载清理。
+- 账号按 directory 哈希隔离；材料在 `<data-dir>/certs/`，目录 0700、文件 0600。
+  每次证书链和私钥作为一个 PEM bundle，临时文件 → fsync → rename → 目录 fsync，
+  名称按内容 SHA-256 生成；原 `panel.crt/key` 不覆盖，历史材料不自动删除。
+  切换主机/原证书到期时，为当前主机另存自签备用材料，Hysteria2 的生成和指纹不变。
+- 可选 settings 键 `panel_certificate` 保存实际类型、主机、签发者、有效期、上次尝试/成功、
+  固定错误码及下一步提示、连续失败数、下次重试、内部 bundle 文件名及 directory；没有新迁移。
+  内部文件名和 directory 不出 API，私钥/账号/挑战 token/CA 原始错误不进日志或 API。
+  证书启用前验证公私钥匹配、SAN、有效期、非 CA 叶证书及 serverAuth 用途。
+- 后台每分钟检查一次；失败从 5 分钟指数退避，上限 6 小时，策略随重启保留。
+  续期失败保留仍有效的当前可信证书；过期则恢复有效自签备用证书并继续重试。
+  连续至少两次失败且当前证书剩余 <24 小时返回 warning，面板全局醒目显示下一步。
+  `tls.Config.GetCertificate` 从原子指针读取当前证书；新连接立即使用新证书，现有连接无需重启。
+- 设置提交后通知 worker；public_host 改变且策略为 acme 时自动重新申请；self_signed 保持自签。
+  设置变更取消在途订单，激活前在数据库事务内重新核对主机/策略，丢弃过时的签发结果。
+  签发、网络和防火墙操作不持有 settings/Apply 事务，不引入第二条 sing-box 配置写入路径。
+- 时钟、Issuer、HTTP client、directory、challenge listener 和放行端口均可注入。
+  测试使用临时 DB/文件、假 CA HTTP 服务器及本地 TLS 握手；不访问 LE 正式环境。
+  未引入 Pebble 依赖或额外真实 CA 测试。

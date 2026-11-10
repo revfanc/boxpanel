@@ -27,6 +27,7 @@ import (
 const CookieName = "boxpanel_session"
 
 type Options struct {
+	Certificates   Certificates
 	WebPath        string
 	Dev            bool
 	Logger         *slog.Logger
@@ -127,6 +128,8 @@ func New(service *auth.Service, opts Options) http.Handler {
 	register("GET", "/api/v1/setup/status", a.setupGet, true)
 	register("PUT", "/api/v1/setup/status", a.setupPut, true)
 	register("POST", "/api/v1/system/port-probe", a.portProbe, true)
+	register("GET", "/api/v1/cert", a.certGet, true)
+	register("POST", "/api/v1/cert/issue", a.certIssue, true)
 	a.registerResources(register)
 	a.registerSubscriptions(register)
 	mux.HandleFunc("/", notFound)

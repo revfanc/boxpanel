@@ -40,7 +40,7 @@ func TestInitializePersistentStateAndReset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !probeCalled || result.WebPort < 10000 || result.WebPort > 60000 || result.TLSMode != "self_signed" {
+	if !probeCalled || result.WebPort < 10000 || result.WebPort > 60000 || result.TLSMode != "acme" {
 		t.Fatal("invalid initialization defaults")
 	}
 	conn, err := OpenExisting(ctx, paths.Database)

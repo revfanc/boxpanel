@@ -7,7 +7,7 @@ import { routes } from '@/routes'
 import { ThemeProvider } from '@/components/ThemeProvider'
 import { createQueryClient } from '@/lib/query'
 import { advanceSession } from '@/lib/api'
-import { mockAPI, failure, deferred, inbound, proxyUser, links, status as systemStatus } from '@/test/resources'
+import { mockAPI, failure, deferred, inbound, proxyUser, links, settings, status as systemStatus } from '@/test/resources'
 import { setupSteps, type SetupStatus, type SystemCheck, type Inbound, type User } from '@/types/api'
 import { clients, platforms } from '@/data/clients'
 import { zhCN as t, subscriptionText as sub } from '@/i18n/zh-CN'
@@ -241,4 +241,43 @@ it('probes only TCP ports and includes UDP hopping in the security group checkli
   expect(await screen.findAllByText('Check externally too')).toHaveLength(2)
   const bodies = f.fetch.mock.calls.filter(([url]) => url.endsWith('/system/port-probe')).map(([, init]) => JSON.parse(String(init?.body)))
   expect(bodies).toEqual([{ port: 2053 }, { port: 443 }])
+})
+
+
+it('keeps the suggested port on failed Reality detection and shows only one error after a failed create', async () => {
+  fixture({ step: 'node', hysteria2: false }, {
+    '/inbounds': () => Response.json([]),
+    '/inbounds/suggest': () => Response.json({ protocol: 'vless_reality', port: 23456, options: { ...inbound.options, server_name: '', handshake_server: '' }, hint: 'Enter a Reality target manually' }),
+    '/reality/recommend': () => Response.json({ targets: [] }),
+    'POST /inbounds': () => failure(422),
+  })
+  const { user } = mount()
+  await user.type(await screen.findByLabelText(t.inbounds.target), 'manual.example.com')
+  expect(screen.getByLabelText(t.inbounds.port)).toHaveValue(23456)
+  expect(screen.getByText('Enter a Reality target manually')).toBeVisible()
+  await user.click(screen.getByRole('button', { name: t.setup.createNext }))
+  await screen.findByText('Try again')
+  expect(screen.getAllByRole('alert')).toHaveLength(1)
+  expect(screen.queryByText('Enter a Reality target manually')).not.toBeInTheDocument()
+})
+
+it('lists ACME TCP 80 and verified official documentation without probing the temporary listener', async () => {
+  const requested: number[] = []
+  fixture({ step: 'firewall' }, {
+    '/settings': () => Response.json({ ...settings, panel_tls_mode: 'acme' }),
+    '/system/port-probe': (init) => { const port = JSON.parse(String(init.body)).port; requested.push(port); return Response.json({ port, results: [], hint: 'Local only' }) },
+  })
+  const { user } = mount()
+  expect(await screen.findByText('80/TCP')).toBeVisible()
+  expect(screen.getByText(t.cert.portHint)).toBeVisible()
+  for (const provider of t.setup.providers) {
+    await user.click(screen.getByText(provider.name))
+    const link = screen.getByText(provider.name).parentElement?.querySelector('a')
+    expect(link).toHaveAttribute('href', provider.url)
+    expect(link).toHaveAttribute('rel', 'noreferrer')
+  }
+  await user.click(screen.getByRole('button', { name: t.setup.probe }))
+  await waitFor(() => expect(requested.length).toBeGreaterThan(0))
+  expect(requested).not.toContain(80)
+  expect(requested).toEqual(expect.arrayContaining([2053, 443]))
 })

@@ -11,8 +11,8 @@ import (
 
 func TestServeOptions(t *testing.T) {
 	clearEnvironment(t)
-	production := app.Paths{Database: "/etc/boxpanel/boxpanel.db", CertFile: "/etc/boxpanel/certs/panel.crt", KeyFile: "/etc/boxpanel/certs/panel.key"}
-	development := app.Paths{Database: "dev.db", CertFile: "certs/panel.crt", KeyFile: "certs/panel.key"}
+	production := app.Paths{DataDir: "/etc/boxpanel", Database: "/etc/boxpanel/boxpanel.db", CertFile: "/etc/boxpanel/certs/panel.crt", KeyFile: "/etc/boxpanel/certs/panel.key"}
+	development := app.Paths{DataDir: ".", Database: "dev.db", CertFile: "certs/panel.crt", KeyFile: "certs/panel.key"}
 	for _, tt := range []struct {
 		name string
 		args []string

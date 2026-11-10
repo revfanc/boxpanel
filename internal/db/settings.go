@@ -30,6 +30,7 @@ var (
 	ClashAPISecret        = SettingKey[string]{"clash_api_secret"}
 	AppliedFirewall       = SettingKey[json.RawMessage]{"applied_firewall"}
 	PanelFirewallPorts    = SettingKey[[]int]{"panel_firewall_ports"}
+	PanelCertificate      = SettingKey[json.RawMessage]{"panel_certificate"}
 	Hysteria2Fingerprints = SettingKey[map[string]string]{"hysteria2_fingerprints"}
 )
 

@@ -86,7 +86,7 @@ CSRF、8 KiB 严格 JSON 和统一错误契约。GET 支持 HEAD。前端不再�
 - 验证成功后在同一 SQLite 事务内写 domain、public_host 及其余进度字段，任一步失败全部回滚。
   从已保存域名改回空字符串时重新探测并恢复公网 IP（IPv4 优先），探测失败不修改设置。
   初次无域名保留初始化的 public_host；--dev 的初始回环地址可用于界面演示。
-  域名仅影响订阅地址，不生成 ACME 证书，也不自动更新面板证书 SAN。
+  T6.3：事务提交后通知证书管理器；acme 模式自动为新 public_host 签发，失败使用匹配新地址的自签备用证书。
 - setup/public_host 是引导及客户端元数据，沿用 `/settings` 的普通事务约定，不重启内核、
   不写配置、不返回 Apply 生效标记。节点和用户仍调用原 CRUD → Manager.Apply，保持
   check/生效/回滚及 dev-db-only 响应；引导没有第二条写配置路径。
@@ -299,6 +299,8 @@ JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未�
   保持原端口的已启用入站视为自身监听。检查失败返回 500 并提示安装 iproute2/检查权限。
   快照不预留端口；之后被抢占仍由 Apply 重启/存活检查发现并回滚。
 - suggest 接收 `{protocol}`，返回可直接作为 POST body 的 `{protocol,port,options}`。
+  T6.3：Reality 探测全部失败仍返回 200 和推荐端口；options.server_name/handshake_server 为空，
+  附可操作的顶层 hint。创建仍要求手填目标，调用方不要把 hint 作为创建字段回传。
   原文“密钥…”与凭证不出 API 的规则冲突：最小修正为 suggest **不返回私钥，也不返回
   无法复用的临时公钥**；创建时在服务端生成新密钥并返回公钥。suggest 不落库、不预留端口。
 
@@ -380,14 +382,14 @@ JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未�
   public_host 接受 ASCII 域名或裸 IPv4/IPv6，不接受 URL/端口；panel_name 为 1–128 字节、无换行。
   web_path 为空或 1–64 位小写字母数字，sub_path 为 1–64 位小写字母数字，二者不能相同；
   sub_path 保留 api/assets/index。端口 1–65535，不得与任何入站或 Clash 控制端口冲突（409）。
-  panel_tls_mode 当前只能保持原值，ACME 留在 T7.2，不允许 API 降级 HTTPS。
+  T6.3：生产 panel_tls_mode 接受 self_signed / acme，禁止降级 http；开发环境只能保持 http。
 - 客户端/面板元数据仅在 SQLite 事务中保存；block_bittorrent **实际改变**时，整个 settings
   更新必须通过 Manager.Apply，失败全部回滚（包括同时提交的地址和名称）。开发替身保持 T3.1 标记。
   更新前后的比较防止并发覆盖；冲突为 `409 settings_changed`，要求刷新后重试。
 - 改端口/面板路径时，先构造新 handler、预绑定新 TCP 监听，再持久化；占用/切换未结束时返回 409。
   事务失败释放预留监听；成功后延迟 2 秒启用新监听/路由，旧监听优雅关闭，同端口仅替换 handler。
   新 handler 同步更新 cookie Path、SPA basename 与 API 前缀。跨路径需重新登录，不重启整个进程。
-  不自动更新云安全组或现有面板证书 SAN；更换 public_host 时请使用证书覆盖的主机名/地址。
+  不自动更新云安全组；T6.3 在提交 public_host/TLS 策略变化后异步调整面板证书，详见证书接口。
   `--dev` 固定 2053/根路径，拒绝修改这两项；其他设置可正常编辑。
 - sub_path 更新立即用于路由判断，旧路径失效；规则、名称、public_host 修改立即影响下一次订阅。
   正在处理的请求仍使用开始时的一致快照。此次不增加流量采样或定时封禁。
@@ -417,3 +419,39 @@ JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未�
 |---|---|---|
 | GET | `/backup` | 下载 `boxpanel-backup-<date>.json`（DB 全量 + 证书） |
 | POST | `/restore` | 上传备份并重新生效 |
+
+
+## T6.3 面板证书
+
+路径仍在 `/{web_path}/api/v1` 下（任务中的 `/api/cert` 为简称）。全部需认证、no-store，
+写操作走现有 CSRF；GET 支持 HEAD，错误仍使用统一格式，不提供证书/私钥下载。
+
+| 方法 | 路径 | 请求与成功响应 |
+|---|---|---|
+| GET | `/cert` | 下列公开状态，200 |
+| POST | `/cert/issue` | 空 body；将期望策略设为 acme，提交异步签发，202 `{accepted:true}` |
+| PUT | `/settings` | `{panel_tls_mode:"self_signed"}` 改回自签；`acme` 启动自动维护；原 settings 响应不变 |
+
+```json
+{
+  "mode":"acme", "type":"self_signed", "host":"203.0.113.8",
+  "issuer":"CN=boxpanel", "not_before":1790000000, "not_after":1821536000,
+  "last_attempt":1790000300, "last_success":0,
+  "last_error":"acme_port_unavailable", "hint":"TCP 80 被占用或无法绑定。请停止占用服务并检查权限，再重新申请。",
+  "failures":1, "next_attempt":1790000600, "issuing":false, "warning":false
+}
+```
+
+- mode 是期望策略，type 是当前实际证书类型：self_signed / acme，开发模式二者为 http。
+  时间为 Unix 秒，0 表示尚无记录；last_error/hint 为空表示没有当前失败记录。
+  issuing 表示排队或正在签发；warning 为连续至少两次失败且实际证书剩余 <24 小时。
+  staging 仍是 acme 类型，面板明确提醒其不受公开信任，不保证任意自定义 CA 被客户端信任。
+- issue 不接受任意域名、端口、目录或凭证参数；只使用已保存的 public_host 和启动时配置。
+  申请进行中返回 `409 acme_busy`；开发模式或未装配服务返回 `409 acme_unavailable`。
+  返回 202 仅表示任务已受理，前端轮询 cert 获取结果。签发失败不把已保存的设置回滚，
+  不终止 HTTPS；保留仍有效的原证书，缺少有效可信证书时用自签备用证书。
+- 错误码仅 `acme_port_unavailable`、`acme_invalid_host`、`acme_issue_failed`，并带可执行 hint；
+  不透传 CA/网络/命令错误或挑战 token。手动申请可立即重试，后台失败按 SPEC.md §13 退避。
+- public_host 或 panel_tls_mode 更新成功后异步通知 worker，不重启监听；restart_after 仍只表示
+  原面板端口/路径切换。合并 block_bittorrent 的更新仍完整经过 Apply，失败不通知证书管理器。
+  setup 的域名校验及普通事务规则保持，只有提交后才通知；旧订单不能覆盖新的主机或策略。

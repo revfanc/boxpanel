@@ -6,6 +6,7 @@ import type { z } from 'zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Page, Panel, Field, Toggle, Submit, Notice, Confirm } from '@/components/ResourceUI'
 import { ErrorNotice, Loading } from '@/components/Feedback'
+import { CertificatePanel } from '@/components/Certificate'
 import { settingsQuery, replaceSession, sessionQuery, queryKeys } from '@/lib/query'
 import { refreshResources } from '@/lib/resources'
 import { api } from '@/lib/api'
@@ -85,6 +86,6 @@ function AccountForms() {
 export function SettingsPage() {
   const settings = useQuery(settingsQuery)
   return <Page title={t.pages.settings} description={t.settings.description}>
-    {settings.isPending ? <Loading /> : settings.isError ? <ErrorNotice error={settings.error} retry={() => { void settings.refetch() }} /> : <><PanelForm settings={settings.data} /><AccountForms /></>}
+    {settings.isPending ? <Loading /> : settings.isError ? <ErrorNotice error={settings.error} retry={() => { void settings.refetch() }} /> : <><PanelForm settings={settings.data} /><CertificatePanel /><AccountForms /></>}
   </Page>
 }
