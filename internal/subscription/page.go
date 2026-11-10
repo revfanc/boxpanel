@@ -2,26 +2,41 @@ package subscription
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/base64"
 	"fmt"
 	"html/template"
+	"math"
+	"strings"
 	"time"
 
 	"github.com/revfanc/boxpanel/web"
 	qrcode "github.com/skip2/go-qrcode"
 )
 
-// UI text comes from web/src/i18n/zh-CN.ts, also embedded by the web package.
+// UI text and the client catalog are embedded from the same sources as the SPA.
 // No external scripts, QR services or resources receive the subscription token.
-var page = template.Must(template.New("subscription").Parse(`<!doctype html>
-<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Name}}</title>
-<style>body{font-family:system-ui,sans-serif;max-width:42rem;margin:3rem auto;padding:0 1rem;line-height:1.7;background:#f8fafc;color:#172033}a{color:#1753b5;overflow-wrap:anywhere}img{max-width:100%;height:auto}li{margin:.7rem 0}</style>
-<h1>{{.Name}}</h1><p>{{.Text.scan}}</p><img width="256" height="256" alt="{{.Text.qr}}" src="{{.QR}}">
-<p><a href="{{.Auto}}">{{.Auto}}</a></p><ul><li><a href="{{.SingboxImport}}">{{.Text.singboxImport}}</a> · <a href="{{.Singbox}}">{{.Text.singbox}}</a></li><li><a href="{{.ClashImport}}">{{.Text.clashImport}}</a> · <a href="{{.Clash}}">{{.Text.clash}}</a></li><li><a href="{{.Base64}}">{{.Text.base64}}</a></li></ul>
-<p>{{.Text.upload}}：{{.Up}} {{.Text.bytes}}；{{.Text.download}}：{{.Down}} {{.Text.bytes}}；{{.Text.total}}：{{.Total}}；{{.Text.expiry}}：{{.Expire}}</p>
-<p>{{.Text.compatibility}}</p><p>{{.Text.privacy}}</p></html>`))
+//
+//go:embed page.html
+var pageSource string
 
-func Page(d Data) ([]byte, error) {
+var page = template.Must(template.New("subscription").Funcs(template.FuncMap{"join": strings.Join}).Parse(pageSource))
+
+type pageAddress struct{ ID, Label, URL string }
+type pageData struct {
+	Text                                   map[string]string
+	Name, User, Nonce                      string
+	QR, SingboxImport, ClashImport         template.URL
+	Auto                                   pageAddress
+	Formats                                []pageAddress
+	Clients                                []web.SubscriptionClient
+	Used, Total, Expire, Remaining, Status string
+	Progress                               float64
+}
+
+// Page takes the response nonce and clock explicitly so golden output is stable.
+// The public handler still rejects inactive users before rendering any page.
+func Page(d Data, nonce string, now time.Time) ([]byte, error) {
 	l, err := MakeLinks(d)
 	if err != nil {
 		return nil, err
@@ -31,26 +46,57 @@ func Page(d Data) ([]byte, error) {
 		return nil, fmt.Errorf("encode subscription QR: %w", err)
 	}
 	text := web.SubscriptionText()
-	total, expire := fmt.Sprint(d.User.TrafficLimit), time.Unix(d.User.ExpireAt, 0).UTC().Format(time.RFC3339)
-	if d.User.TrafficLimit == 0 {
-		total = text["unlimited"]
+	// Each counter fits int64, but their sum need not. uint64 holds both.
+	used := uint64(max(0, d.User.TrafficUp)) + uint64(max(0, d.User.TrafficDown))
+	v := pageData{
+		Text: text, Name: d.PanelName, User: d.User.Name, Nonce: nonce,
+		QR: template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(png)),
+		// These are locally constructed, known-scheme URLs, never arbitrary input.
+		SingboxImport: template.URL(l.Import["singbox"]), ClashImport: template.URL(l.Import["clash"]),
+		Auto:    pageAddress{"auto", text["subscription"], l.Subscription["auto"]},
+		Clients: web.SubscriptionClients(), Used: pageBytes(used), Total: text["unlimited"],
+		Expire: text["never"], Status: "active",
 	}
-	if d.User.ExpireAt == 0 {
-		expire = text["never"]
+	for _, format := range []string{"singbox", "clash", "base64"} {
+		v.Formats = append(v.Formats, pageAddress{format, text[format], l.Subscription[format]})
 	}
-	// Only locally constructed, known-scheme URLs are trusted for template URL
-	// contexts; all names and other content keep html/template escaping.
-	v := struct {
-		Text                                 map[string]string
-		Name                                 string
-		QR, Auto, SingboxImport, ClashImport template.URL
-		Singbox, Clash, Base64               string
-		Up, Down                             int64
-		Total, Expire                        string
-	}{text, d.PanelName, template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(png)), template.URL(l.Subscription["auto"]), template.URL(l.Import["singbox"]), template.URL(l.Import["clash"]), l.Subscription["singbox"], l.Subscription["clash"], l.Subscription["base64"], d.User.TrafficUp, d.User.TrafficDown, total, expire}
+	if d.User.TrafficLimit > 0 {
+		v.Total = pageBytes(uint64(d.User.TrafficLimit))
+		v.Progress = math.Min(100, float64(used)/float64(d.User.TrafficLimit)*100)
+	}
+	if d.User.ExpireAt > 0 {
+		v.Expire = fmt.Sprintf(text["expiresOn"], time.Unix(d.User.ExpireAt, 0).UTC().Format("2006-01-02"))
+		seconds := max(int64(0), d.User.ExpireAt-now.Unix())
+		days := seconds / 86400
+		if seconds%86400 > 0 {
+			days++
+		}
+		v.Remaining = fmt.Sprintf(text["remainingDays"], days)
+	}
+	switch {
+	case !d.User.Enabled:
+		v.Status = "disabled"
+	case d.User.ExpireAt > 0 && d.User.ExpireAt <= now.Unix():
+		v.Status = "expired"
+	case d.User.TrafficLimit > 0 && used >= uint64(d.User.TrafficLimit):
+		v.Status = "exhausted"
+	}
 	var b bytes.Buffer
 	if err := page.Execute(&b, v); err != nil {
 		return nil, fmt.Errorf("render subscription page: %w", err)
 	}
 	return b.Bytes(), nil
+}
+
+func pageBytes(n uint64) string {
+	units := [...]string{"B", "KB", "MB", "GB", "TB"}
+	value, unit := float64(n), 0
+	for value >= 1024 && unit < len(units)-1 {
+		value /= 1024
+		unit++
+	}
+	if unit == 0 {
+		return fmt.Sprintf("%d B", n) // whole bytes: "0 B", not "0.00 B"
+	}
+	return fmt.Sprintf("%.2f %s", value, units[unit])
 }

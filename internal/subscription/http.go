@@ -1,7 +1,9 @@
 package subscription
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -119,8 +121,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body []byte
+	var nonce string
 	if f == HTML {
-		body, err = Page(d)
+		var random [32]byte
+		if _, err = rand.Read(random[:]); err == nil {
+			nonce = base64.RawURLEncoding.EncodeToString(random[:])
+			body, err = Page(d, nonce, h.Store.now())
+		}
 	} else {
 		body, err = Render(d.Snapshot, f)
 	}
@@ -144,7 +151,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if f == HTML {
 		contentType = "text/html; charset=utf-8"
 		w.Header().Del("Content-Disposition")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'nonce-"+nonce+"'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 	}
 	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(200)

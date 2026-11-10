@@ -1,8 +1,9 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { createMemoryRouter, RouterProvider } from 'react-router'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
+import * as location from '@/lib/location'
 import { routes } from '@/routes'
 import { ThemeProvider } from '@/components/ThemeProvider'
 import { createQueryClient } from '@/lib/query'
@@ -295,4 +296,61 @@ it('lists ACME TCP 80 and verified official documentation without probing the te
   await waitFor(() => expect(requested.length).toBeGreaterThan(0))
   expect(requested).not.toContain(80)
   expect(requested).toEqual(expect.arrayContaining([2053, 443]))
+})
+
+it.each(['acme', 'http'] as const)('keeps the address dialog across the scenario-to-node transition in %s mode', async (mode) => {
+  const visit = vi.spyOn(location, 'visitPanel').mockImplementation(() => {})
+  const panelURL = `${mode === 'http' ? 'http' : 'https'}://node.example.com:2443/randompanel/`
+  let saved = { ...baseStatus, step: 'scenario' }
+  fixture({ step: 'scenario' }, {
+    '/setup/status': (init) => {
+      if (init.method === 'PUT') {
+        saved = { ...saved, ...JSON.parse(String(init.body)) }
+        return Response.json({ ...saved, panel_url: panelURL, panel_tls_mode: mode })
+      }
+      return Response.json(saved)
+    },
+  })
+  const { user, router } = mount()
+  const clipboard = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue()
+  await step('scenario')
+  await user.click(screen.getByRole('radio', { name: new RegExp(t.setup.hasDomain) }))
+  await user.type(screen.getByLabelText(t.setup.domain), 'node.example.com')
+  await user.click(screen.getByRole('button', { name: t.setup.next }))
+  expect(await screen.findByRole('dialog')).toHaveTextContent(t.addressChange.title)
+  await waitFor(() => expect(router.state.location.pathname).toBe('/setup/node'))
+  expect(screen.getByLabelText(t.addressChange.url)).toHaveValue(panelURL)
+  await user.click(screen.getByRole('button', { name: `${t.common.copy} ${t.addressChange.url}` }))
+  expect(clipboard).toHaveBeenCalledWith(panelURL)
+  expect(visit).not.toHaveBeenCalled()
+  if (mode === 'http') {
+    expect(screen.queryByRole('button', { name: t.addressChange.go })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: t.addressChange.continue }))
+    await step('node')
+    expect(visit).not.toHaveBeenCalled()
+  } else {
+    expect(screen.getByText(t.addressChange.hint)).toBeVisible()
+    await user.click(screen.getByRole('button', { name: t.addressChange.go }))
+    expect(visit).toHaveBeenCalledWith(panelURL)
+  }
+})
+
+it('preserves the saved address even if the old certificate makes session refresh fail', async () => {
+  let disconnected = false
+  const panelURL = 'https://node.example.com:2443/randompanel/'
+  fixture({ step: 'scenario' }, {
+    '/auth/me': () => disconnected ? failure() : Response.json({ username: 'admin' }),
+    'PUT /setup/status': (init) => Response.json({ ...baseStatus, ...JSON.parse(String(init.body)), panel_url: panelURL, panel_tls_mode: 'acme' }),
+  })
+  const { user, client } = mount()
+  await step('scenario')
+  await user.click(screen.getByRole('radio', { name: new RegExp(t.setup.hasDomain) }))
+  await user.type(screen.getByLabelText(t.setup.domain), 'node.example.com')
+  await user.click(screen.getByRole('button', { name: t.setup.next }))
+  await screen.findByRole('dialog')
+  disconnected = true
+  await act(async () => { await client.invalidateQueries({ queryKey: ['auth', 'me'] }) })
+  expect(screen.getByRole('dialog')).toHaveTextContent(t.addressChange.hint)
+  expect(screen.getByLabelText(t.addressChange.url)).toHaveValue(panelURL)
+  expect(screen.getByRole('button', { name: t.addressChange.go })).toBeEnabled()
 })

@@ -266,7 +266,7 @@ T6.1 本次实现与核对（按用户要求与 T6.2 一并交付）：
 - [x] 生产启动重放已登记面板端口；卸载清理当前及 pending 中的规则，不绕过校验写配置，不提前做内核升级。
 - [x] macOS Bash 离线测试覆盖安装/升级/卸载、重试、坏下载/摘要/包、平台/参数、就绪失败和 BBR/互斥锁；已接入 make test。
 - [x] 本机官方 ShellCheck 0.11.0（下载经官方资产 SHA-256 校验）检查全部 scripts/*.sh 无警告；Linux CI 强制检查。
-- [ ] Debian 12 / Ubuntu 24.04 上真实 systemd 安装、浏览器引导和外部客户端连通验收：本机是 macOS，无 systemd/Docker，需审查者在 VPS 或对应 CI 环境执行。
+- [x] （审查者真机验收）Ubuntu 22.04 双栈 VPS（207.57.124.128）：一键安装、systemd、Let's Encrypt IP/域名证书、浏览器引导、iPhone mihomo 1.19.33 连通（Google/YouTube）与 ipleak 无 DNS 泄漏均通过；发现的问题已在 T6.4/T6.5 修复。
 
 ### T6.2 发布流水线
 - `release.yml`（INSTALL.md §5）。
@@ -277,7 +277,7 @@ T6.1 本次实现与核对（按用户要求与 T6.2 一并交付）：
 - [x] Action 使用发布超过 7 天的稳定版本并锁定完整 SHA；原 pnpm/action-setup v6.1.1 未满 7 天，改用 v6.1.0，来源/日期见 INSTALL.md。
 - [x] 本机执行发布打包脚本（v0.1.0-rc.1），两架构静态 ELF、tar 清单及摘要核对通过；ci.yml/release.yml 通过 actionlint。
 - [x] CI/release 增加 Ubuntu 24.04 容器 dry-run、离线脚本测试和真实 Linux CLI init/info；本机未执行容器步骤，不将其当作 systemd 实机验收。
-- [ ] 实际推 tag 创建 Release 并从 GitHub 安装：按要求未执行 commit/push/切分支，需审查者发布后验收。
+- [x] （审查者）v0.1.0-rc.2～rc.4 由 tag 构建 Release，并在 VPS 上用一键命令安装/升级成功；rc.1 因 ShellCheck 版本失败，已修复。
 
 T6.1/T6.2 通用验证：
 - [x] make lint、make build 通过；新增 Go 测试及其余 Go 包通过，前端 typecheck/lint/vitest 通过（16 文件、94 测试）。
@@ -325,7 +325,7 @@ Let's Encrypt 自 2026-01-15 起正式签发 IP 地址证书（必须使用 `sho
     链接必须逐个核实可访问且为官方域名；无法核实的厂商不要列。
 
 - **验收**：
-  - [ ] make lint test build 通过；新增单测覆盖签发成功、80 被占用、签发失败回退自签、续期时机、热替换、域名/IP 两种 profile。
+  - [x] make lint test build 通过（审查者沙箱外复跑，含 e2e）；新增单测覆盖签发成功、80 被占用、签发失败回退自签、续期时机、热替换、域名/IP 两种 profile。
   - [x] 面板设置页可见证书状态与操作；acme 失败时有可执行的下一步提示。
   - [x] suggest 在检测失败时返回端口；节点步骤单一错误框；复选框可访问名正确；厂商链接均为官方且可访问。
   - [x] SPEC/API/INSTALL/FRONTEND 文档同步更新。
@@ -365,7 +365,7 @@ Let's Encrypt 自 2026-01-15 起正式签发 IP 地址证书（必须使用 `sho
      失败时只提示不报错退出）。完成后打印新的面板地址。INSTALL.md 记录用法；install.sh 结尾提示里说明地址不对时可用该命令。
 
 - **验收**：
-  - [ ] make lint test build 通过；新增单测覆盖上述三项。
+  - [x] make lint test build 通过（审查者沙箱外复跑，含 e2e）；新增单测覆盖上述三项。
   - [x] 文档同步（INSTALL.md CLI 一节、API.md 如涉及）。
 
 **T6.4 实现与验证记录（2026-11-09）**：
@@ -383,7 +383,7 @@ Let's Encrypt 自 2026-01-15 起正式签发 IP 地址证书（必须使用 `sho
   超时预算、签发来源缺失与跨进程通知缺口的最小处理已在对应规格中说明。
 - [x] make lint（含 ShellCheck）、make build 通过；前端 typecheck/lint/vitest 通过（17 文件 / 103 测试）。
   构建后二进制用全新临时 DB 离线验证 init → set-host（IPv4/域名）→ info，地址持久化及参数位置正常。
-- [ ] 完整 make test：已执行，安装脚本及其余 Go 包通过；仅既有 internal/e2e.TestLoopback
+- [x] （审查者沙箱外复跑通过）完整 make test：已执行，安装脚本及其余 Go 包通过；仅既有 internal/e2e.TestLoopback
   被 macOS 沙箱的 `watch DNS configuration: register DNS configuration notification: status 9` 阻断。
   未修改或跳过该测试，总验收保持未勾选，需普通终端/CI 复验；本机未做 Linux/systemd VPS 实测。
 - [x] 仅 T6.4，无新依赖，无配置生成/Apply 流程改动；未修改内核回环测试、pnpm 冷静期或锁文件，
@@ -424,7 +424,7 @@ Let's Encrypt 自 2026-01-15 起正式签发 IP 地址证书（必须使用 `sho
 10. CONFIG.md §4.4 示例与说明同步，并附 mihomo DNS 文档链接。
 
 - **验收**：
-  - [ ] make lint test build 通过；golden 与新单测覆盖上述各项。
+  - [x] make lint test build 通过（审查者沙箱外复跑，含 e2e）；golden 与新单测覆盖上述各项。
   - [x] 文档同步。
 
 **T6.5 实现与验证记录（2026-11-09）**：
@@ -444,10 +444,67 @@ Let's Encrypt 自 2026-01-15 起正式签发 IP 地址证书（必须使用 `sho
   解析测试覆盖三预设、默认/选项/自定义 DNS/IPv6 DNS/共享 DNS/空节点，以及 IP no-resolve、YAML provider 和 DNS 出站。
 - [x] 10：CONFIG §4.4 示例、规则源表和官方依据同步；API 日志契约、SPEC 规则格式、FRONTEND 开关说明同步。
 - [x] make lint、make build 通过；安装脚本及除 e2e 外全部 Go 包通过；前端 typecheck/lint/vitest 通过（17 文件 / 103 测试）。
-- [ ] 完整 make test 已运行，唯一失败为既有 internal/e2e.TestLoopback 的
+- [x] （审查者沙箱外复跑通过）完整 make test 已运行，唯一失败为既有 internal/e2e.TestLoopback 的
   `watch DNS configuration: register DNS configuration notification: status 9`；未修改或跳过该测试。
   需普通终端/CI 复验，并在反馈问题的 iOS 客户端更新订阅后复验；本机没有该 App 的实机验证结果。
 - [x] 仅 T6.5，无新依赖、无供应链设置变动、无服务端 Apply 改动，未执行 commit/push/切换分支。
+
+### T6.6 订阅分享页美化 + 地址变更提示（v0.1.0 发布前）
+
+真机验收已通过（iPhone mihomo 1.19.33：Google/YouTube 可用，ipleak 无 DNS 泄漏）。发布正式版前最后两项。
+
+**A. 订阅分享页（浏览器打开订阅链接时的 HTML，`internal/subscription/page.go`）**
+目标：视觉与面板一致（shadcn/ui 风格，neutral 色板），手机优先（多数用户在手机上打开），亮/暗色跟随系统。
+1. 仍由 Go `html/template` 服务端渲染，**不加载 SPA、外部字体、外部脚本或任何第三方资源**（token 在 URL 中）。
+   CSS 内联，设计变量（颜色、圆角、边框、阴影）取自 `web/src/index.css` 的 `:root` 与 `.dark` token（oklch 值原样复制），
+   `@media (prefers-color-scheme: dark)` 切换；系统字体栈；最大宽度约 28–32rem 居中，16px 左右留白，375px 无横向滚动。
+2. 布局（自上而下，卡片式，样式对应 shadcn Card/Button/Badge/Progress/Separator）：
+   - 头部：面板名称 + 用户名；状态 Badge（正常 / 已停用 / 已过期 / 流量用尽，按现有数据判断）。
+   - 用量卡：已用流量（上传+下载，自动换算 B/KB/MB/GB/TB，保留 1–2 位小数）/ 总量（无限显示「不限」），进度条；
+     到期日期（`YYYY-MM-DD`，UTC 标注）与剩余天数；永不过期显示「长期有效」。不再显示原始字节数。
+   - 订阅卡：二维码（白底、圆角、留白，暗色下仍为白底保证可扫）；订阅地址只读输入框 + 「复制」按钮。
+   - 一键导入：主按钮「导入到 sing-box」「导入到 Clash / mihomo」；下方各平台推荐客户端及官方下载链接，
+     复用面板订阅中心已核实的客户端列表数据（同一份数据源，不要复制两份，必要时抽到可被 Go 嵌入的 JSON 或在 i18n 中集中）。
+   - 「其他格式」折叠区（`<details>`）：sing-box / Clash / 通用 base64 三个地址，各带复制按钮。
+   - 页脚：兼容性与隐私提示（现有文案），小号 muted 文字。
+3. 复制按钮需要少量 JS：内联 `<script>` 使用每次响应随机的 CSP nonce（crypto/rand），CSP 改为
+   `script-src 'nonce-…'`，其余指令保持现状（default-src 'none'、img-src data:、style-src 'unsafe-inline'…）。
+   无 JS 时页面仍完整可用（地址可长按选择、链接可点）。复制成功后按钮文字短暂变为「已复制」。
+4. 文案全部放 i18n（现有 SubscriptionText 机制），组件内不写死中文。
+5. 测试：页面 golden（固定 nonce 注入）；断言无外部 URL 资源引用（除客户端下载链接 `<a href>`）、CSP 含 nonce 且与脚本一致、
+   流量换算与到期显示、停用/过期状态。
+
+**B. 节点地址改为域名后的提示**
+6. 引导「使用场景」选择域名、或设置页修改 public_host 后，若面板访问地址随之变化（证书将切换到新地址），
+   保存成功后弹出对话框：显示新的面板地址（可复制），说明「旧地址将因证书不匹配而无法访问，请收藏新地址」，
+   按钮「前往新地址」直接跳转。开发模式下不跳转仅提示。前端测试覆盖。
+
+- **验收**：
+  - [x] make lint test build 通过（审查者沙箱外复跑，含 e2e）；页面 golden 与新增测试通过。
+  - [x] 375px 与桌面宽度、亮/暗色下页面美观无溢出（审查者浏览器验证；另补复制的 execCommand 兜底与「0 B」显示）。
+
+
+**T6.6 实现与验证记录（2026-11-09）**：
+- [x] A1：Go html/template + 内联 CSS/脚本，系统字体、32rem 居中及手机留白；
+  neutral oklch/圆角/边框 token 与 index.css 一致并有测试。index.css 无阴影 token，按最小方案仅用边框。
+- [x] A2：面板名/用户名/状态、换算用量/限额/进度、UTC 日期及剩余天数、白底二维码、
+  只读地址/复制、两种导入按钮、官方客户端入口和原生 details 格式区；客户端唯一数据源 clients.json。
+- [x] A3：每个 HTML GET/HEAD 独立 crypto/rand 32 字节 nonce，CSP 与脚本匹配；
+  复制成功两秒反馈、失败选中地址并提示手动复制；无 JS 仍保留内容/手动选择/导入及下载。
+- [x] A4：所有新增中文在 zh-CN.ts，分享页沿用 SubscriptionText；未手改 shadcn 生成组件。
+- [x] A5：固定 nonce/时间的 page.golden；外部资源、转义、nonce 随机性/响应头、流量单位/溢出、
+  UTC 日期/剩余天数、四状态与优先级测试；浏览器失效订阅仍空白 404，冲突处理详见 FRONTEND §9。
+- [x] B6：引导/设置主机变更后显示可复制的新地址和证书提示，生产点击跳转、dev 仅提示。
+  覆盖无变化/失败/当前 origin、同时切端口路径的等待，以及引导换步/旧证书导致认证刷新失败时保留对话框。
+  引导 PUT 的最小响应补充与有效端口/路径约定已同步 API.md，完整交互见 FRONTEND §9。
+- [x] make lint（含 ShellCheck）、make build 通过；页面 golden 和新增测试通过。
+  安装脚本及其余 Go 包通过；前端 typecheck/lint/vitest 通过（18 文件 / 115 测试）。
+- [x] （审查者沙箱外复跑通过）完整 make test 已执行，唯一失败为既有 internal/e2e.TestLoopback 的
+  `watch DNS configuration: register DNS configuration notification: status 9`；
+  未修改或跳过该测试，需普通终端/CI 复跑，总验收第一项仍保持未勾选。
+- [x] （审查者已在浏览器验收）375px/桌面及亮暗色视觉验收：浏览器工具返回 host unavailable，未取得真实截图/布局测量，
+  jsdom 测试不能替代此项，仍需审查者浏览器验证。
+- [x] 仅 T6.6，无新依赖/锁文件/供应链策略变动，无内核配置/Apply 改动，未执行 commit/push/切换分支。
 
 ## M7 后续增强（MVP 之后，按需排期）
 

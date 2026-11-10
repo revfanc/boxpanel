@@ -25,6 +25,12 @@ type setupStatus struct {
 	db.SetupChoices
 }
 
+type setupResult struct {
+	setupStatus
+	PanelURL string `json:"panel_url,omitempty"`
+	TLSMode  string `json:"panel_tls_mode,omitempty"`
+}
+
 func validSetupStep(step string) bool {
 	switch step {
 	case "welcome", "check", "scenario", "node", "user", "firewall", "finish":
@@ -163,7 +169,18 @@ func (a *api) setupPut(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	result := setupResult{setupStatus: s}
 	if publicHost != "" {
+		settings, err := readSettings(r.Context(), tx)
+		if err != nil {
+			a.resourceError(w, err)
+			return
+		}
+		if settings.PublicHost != publicHost {
+			settings.PublicHost = publicHost
+			result.PanelURL = a.currentPanelURL(settings)
+			result.TLSMode = settings.TLSMode
+		}
 		if err = db.SetSetting(r.Context(), tx, db.PublicHost, publicHost); err != nil {
 			a.resourceError(w, err)
 			return
@@ -176,7 +193,7 @@ func (a *api) setupPut(w http.ResponseWriter, r *http.Request) {
 	if publicHost != "" && a.opts.Certificates != nil {
 		a.opts.Certificates.Changed()
 	}
-	writeJSON(w, 200, s)
+	writeJSON(w, 200, result)
 }
 
 // The source is the server's IP discovery, never request input, DNS for

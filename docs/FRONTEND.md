@@ -101,7 +101,7 @@ createBrowserRouter(routes, { basename: BASE || "/" });
 6. **firewall**：列出需要放行的端口与协议（如 `443/TCP`、`8443/UDP`、面板端口/TCP），说明「本机防火墙已自动放行；**云服务商的安全组需要你手动放行**」，并按常见厂商（阿里云、腾讯云、AWS、GCP、Oracle、Vultr…）给出折叠的官方入站规则文档链接。提供「我已放行，测试一下」按钮：后端从本机连接自身公网端口做 TCP 探测（UDP 只提示无法自动检测）。
 7. **finish**：大二维码（自动格式订阅）+ 复制按钮 + 按平台的 Tabs（Windows / macOS / Android / iOS / Linux），每个 Tab：推荐客户端名、下载链接、「一键导入」按钮（若支持）、三步导入说明。最后标记 `completed=true`，按钮：进入面板。
 
-客户端推荐清单放 `web/src/data/clients.ts`（名称、平台、下载地址、支持的订阅格式、导入深链模板），方便后续维护。
+客户端推荐清单放 `web/src/data/clients.json`，由 `clients.ts` 校验并导出（名称、平台、下载地址、支持的订阅格式、导入深链模板），方便后续维护。
 
 ### T5.1 实现与边界
 
@@ -267,7 +267,7 @@ web/
     i18n/zh-CN.ts
     types/api.ts
     schemas/
-    data/clients.ts
+    data/{clients.ts,clients.json}
     components/ui/           # shadcn 生成
     components/              # 业务通用组件（QRCard、CopyField、StatusDot、ProtocolBadge…）
     layouts/{AppLayout.tsx, SetupLayout.tsx, AuthLayout.tsx}
@@ -313,3 +313,33 @@ web/
 引导环境检查展示本次探测到的 IPv4、IPv6，IPv4 排在前并标注优先；缺失的地址族不显示，
 两者均无结果时保留原检查项/错误提示，不伪造地址。展示不覆盖已保存的 `public_host`。
 地址使用可换行文本适配窄屏，新增文案集中在 zh-CN.ts；组件测试覆盖双栈、单栈和无地址。
+
+
+## 9. T6.6 订阅分享页与地址变更提示
+
+- 浏览器订阅页由 Go `html/template` 渲染 `internal/subscription/page.html`，CSS/复制脚本均内联，
+  不加载 SPA、字体、图标或第三方资源；二维码为本地 PNG。内容宽度 32rem，左右 16px 留白，
+  手机按钮触控高度至少 44px。亮/暗色通过 prefers-color-scheme 跟随系统，neutral token 原样取自
+  index.css 并测试核对；当前 index.css 没有阴影 token，使用现有边框及圆角，不另造阴影变量。
+- 展示面板名、用户名、状态、上传下载合计、总限额、进度及 UTC 到期日期。单位按 1024 进位到
+  B/KB/MB/GB/TB，保留两位小数；无上限进度为 0 并标「不限」，有限进度限制为 0–100%。
+  剩余天数按剩余秒数向上取整，过期为 0，永不过期为「长期有效」；加总不发生 int64 溢出。
+- 状态优先级仍为停用 → 过期 → 流量用尽 → 正常。与原安全契约的冲突按最小方案处理：
+  渲染器支持四种状态并有测试，公开 handler 对停用/过期/超额用户仍返回相同空白 404，
+  不暴露用户是否存在或提供失效订阅页面。
+- 各格式放原生 details；地址为只读输入框，无 JS 仍可手动选择，导入和官方下载链接仍可点击。
+  Clipboard 成功显示「已复制」两秒，失败选中输入并提示手动复制。每个 HTML GET/HEAD 都以
+  crypto/rand 生成独立 32 字节 nonce，响应 CSP 与唯一脚本一致，保留 no-store/no-referrer 等保护。
+- 客户端名称、平台、下载入口、来源、格式和深链模板唯一保存在 clients.json；React 的 clients.ts
+  使用已有 zod 校验/导出，Go embed 读取同一份 JSON。沿用 T5.1 已核实清单，不添加客户端或资源请求。
+  所有页面文案仍在 zh-CN.ts 的 SubscriptionText 标记 JSON；页面 golden 固定 nonce/时间。
+- 引导 domain 实际改变 public_host 时，PUT 响应提供新 panel_url 和 panel_tls_mode（API.md）；
+  设置页复用既有响应。主机实际修改且目标 origin 与当前访问地址不同时，成功后展示共同对话框，
+  可复制地址并提示收藏、证书切换及可能重新登录。对话框挂在路由/会话守卫之外，
+  提示不因引导进入下一步或旧证书导致后台认证请求失败而消失。
+  生产点击「前往新地址」才整页跳转；开发 http 只提示并提供继续按钮，不跳转。
+  无变化、已通过新 origin 访问或保存失败不弹出此框。域名改回 IP 同样处理。
+- 同时修改主机和端口/路径时保持对话框，等待 restart_after 秒加 500ms 后启用跳转按钮；
+  单独端口/路径变更继续沿用 T4.2 的确认和自动延迟跳转。新地址由服务端生成，
+  主机单独改变时保留实际监听端口及运行时路径，包括 CLI 覆盖，不从浏览器猜测。
+- 无新增依赖，未修改 shadcn 生成组件、供应链保护或 sing-box 配置生效流程；不实现 M7。

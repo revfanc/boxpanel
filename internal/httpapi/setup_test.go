@@ -39,6 +39,9 @@ func newSetup(t *testing.T, configure func(*Options)) *resourceFixture {
 	t.Helper()
 	f := newResources(t, true)
 	ctx := context.Background()
+	if err := saveSettings(ctx, f.conn, PanelSettings{PublicHost: "203.0.113.1", WebPort: 2053, SubPath: "subscription", TLSMode: "http", PanelName: "boxpanel", BlockBittorrent: true}); err != nil {
+		t.Fatal(err)
+	}
 	for _, err := range []error{db.SetSetting(ctx, f.conn, db.SetupCompleted, false), db.SetSetting(ctx, f.conn, db.SetupStep, "welcome"), db.SetSetting(ctx, f.conn, db.PublicHost, "203.0.113.1")} {
 		if err != nil {
 			t.Fatal(err)
@@ -352,5 +355,47 @@ func TestSetupDevDomainDoesNotQueryDNS(t *testing.T) {
 	f.call(t, "POST", "system/port-probe", `{"port":443}`, 409)
 	if s := decodeResult[setupStatus](t, f.call(t, "GET", "setup/status", "", 200)); s.Step != "welcome" || s.Domain != "" {
 		t.Fatal("unsupported check changed setup")
+	}
+}
+
+func TestSetupHostChangeReturnsPanelAddress(t *testing.T) {
+	for _, mode := range []string{"acme", "self_signed", "http"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newSetup(t, func(opts *Options) {
+				opts.PanelPort = 2443
+				opts.WebPath = "randompanel"
+				opts.LookupIP = func(context.Context, string) ([]netip.Addr, error) {
+					return []netip.Addr{netip.MustParseAddr("203.0.113.1")}, nil
+				}
+			})
+			if err := db.SetSetting(context.Background(), f.conn, db.PanelTLSMode, mode); err != nil {
+				t.Fatal(err)
+			}
+			call := func(body string) setupResult {
+				w := request(t, f.h, "PUT", "https://example.test/api/v1/setup/status", body, f.cookie, nil)
+				requireStatus(t, w, 200)
+				return decodeResult[setupResult](t, w)
+			}
+			got := call(`{"domain":"NODE.example.com","step":"node"}`)
+			scheme := "https"
+			if mode == "http" {
+				scheme = "http"
+			}
+			if got.PanelURL != scheme+"://node.example.com:2443/randompanel/" || got.TLSMode != mode || got.Step != "node" {
+				t.Fatal(got)
+			}
+			if same := call(`{"domain":"node.example.com"}`); same.PanelURL != "" || same.TLSMode != "" {
+				t.Fatal("unchanged host prompted", same)
+			}
+			if progress := call(`{"step":"user"}`); progress.PanelURL != "" {
+				t.Fatal("progress prompted", progress)
+			}
+			if back := call(`{"domain":""}`); back.PanelURL != scheme+"://203.0.113.1:2443/randompanel/" {
+				t.Fatal(back)
+			}
+			if f.apply.calls != 0 {
+				t.Fatal("host change applied sing-box")
+			}
+		})
 	}
 }

@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{{.Name}} · {{.Text.title}}</title>
+<style>
+/* Neutral tokens from web/src/index.css; kept verbatim and checked by tests. */
+:root {
+  color-scheme: light;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --radius: 0.625rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--background); color: var(--foreground); font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; line-height: 1.6; -webkit-text-size-adjust: 100%; }
+main { max-width: 32rem; margin: 0 auto; padding: 32px 16px; overflow-wrap: anywhere; }
+h1,h2,p { margin: 0; }
+h1 { font-size: 24px; font-weight: 600; letter-spacing: -.025em; }
+h2 { font-size: 16px; font-weight: 600; }
+header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 24px; }
+header > div { min-width: 0; }
+.eyebrow { font-size: 12px; margin-bottom: 6px; }
+.muted,footer { color: var(--muted-foreground); }
+.badge { flex-shrink: 0; padding: 3px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--muted); font-size: 12px; font-weight: 500; }
+.card { min-width: 0; margin-top: 16px; padding: 20px; border: 1px solid var(--border); border-radius: calc(var(--radius) * 1.4); background: var(--card); color: var(--card-foreground); }
+.usage { margin: 16px 0 12px; font-variant-numeric: tabular-nums; }
+.usage strong { font-size: 28px; line-height: 1.3; font-weight: 600; letter-spacing: -.025em; }
+progress { display: block; appearance: none; width: 100%; height: 8px; overflow: hidden; border: 0; border-radius: 999px; background: var(--muted); color: var(--primary); }
+progress::-webkit-progress-bar { background: var(--muted); border-radius: 999px; }
+progress::-webkit-progress-value { background: var(--primary); border-radius: 999px; }
+progress::-moz-progress-bar { background: var(--primary); border-radius: 999px; }
+.expiry { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); font-size: 13px; }
+.qr { width: fit-content; max-width: 100%; margin: 20px auto; padding: 12px; border-radius: var(--radius); background: #fff; }
+.qr img { display: block; width: 232px; max-width: 100%; height: auto; }
+label { display: block; margin-bottom: 6px; font-weight: 500; }
+.copy-row { display: flex; min-width: 0; gap: 8px; }
+input { min-width: 0; width: 100%; flex: 1; border: 1px solid var(--input); border-radius: var(--radius); padding: 10px 12px; background: var(--background); color: var(--foreground); font: inherit; font-size: 16px; }
+button,.button { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius); color: var(--foreground); background: var(--card); font: inherit; font-weight: 500; text-decoration: none; cursor: pointer; }
+button { flex-shrink: 0; }
+button:hover,.button:hover { filter: brightness(.92); }
+button:focus-visible,a:focus-visible,input:focus-visible,summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
+button:disabled { opacity: .6; cursor: wait; }
+.primary { background: var(--primary); color: var(--primary-foreground); border-color: transparent; }
+.imports { display: grid; gap: 10px; margin: 16px 0 24px; }
+.clients { padding: 0; margin: 12px 0 0; list-style: none; }
+.clients li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
+.clients li > div { min-width: 0; }
+.clients small { display: block; color: var(--muted-foreground); }
+.clients a { flex-shrink: 0; color: var(--foreground); font-size: 12px; text-underline-offset: 4px; padding: 8px 0; }
+summary { cursor: pointer; font-weight: 500; }
+.format { margin-top: 20px; }
+.hint { margin-top: 10px; font-size: 12px; }
+.feedback:empty { display: none; }
+footer { padding: 24px 4px 0; font-size: 12px; line-height: 1.8; }
+footer p + p { margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div><p class="eyebrow muted">{{.Text.title}}</p><h1>{{.Name}}</h1><p class="muted">{{.User}}</p></div>
+    <span class="badge">{{index .Text .Status}}</span>
+  </header>
+  <section class="card" aria-labelledby="usage-title">
+    <h2 id="usage-title">{{.Text.usage}}</h2>
+    <p class="usage"><strong>{{.Used}}</strong> <span class="muted">/ {{.Total}}</span></p>
+    <progress max="100" value="{{.Progress}}" aria-label="{{.Text.used}}" aria-valuetext="{{.Used}} / {{.Total}}"></progress>
+    <div class="expiry"><div><p class="muted">{{.Text.expiry}}</p><p>{{.Expire}}</p></div>{{if .Remaining}}<p class="muted">{{.Remaining}}</p>{{end}}</div>
+  </section>
+  <section class="card" aria-labelledby="subscription-title">
+    <h2 id="subscription-title">{{.Text.subscription}}</h2><p class="muted hint">{{.Text.scan}}</p>
+    <div class="qr"><img width="256" height="256" alt="{{.Text.qr}}" src="{{.QR}}"></div>
+    <label for="auto">{{.Auto.Label}}</label>
+    <div class="copy-row"><input id="auto" type="text" readonly value="{{.Auto.URL}}" spellcheck="false" autocomplete="off"><button type="button" data-copy="auto" aria-label="{{.Text.copy}} {{.Auto.Label}}">{{.Text.copy}}</button></div>
+    <p class="hint muted">{{.Text.manualCopy}}</p>
+  </section>
+  <section class="card" aria-labelledby="import-title">
+    <h2 id="import-title">{{.Text.import}}</h2>
+    <div class="imports"><a class="button primary" href="{{.SingboxImport}}" rel="noreferrer">{{.Text.singboxImport}}</a><a class="button primary" href="{{.ClashImport}}" rel="noreferrer">{{.Text.clashImport}}</a></div>
+    <h2>{{.Text.clients}}</h2>
+    <ul class="clients">{{range .Clients}}
+      <li><div><strong>{{.Name}}</strong><small>{{join .Platforms " / "}}</small></div><a href="{{.Download}}" target="_blank" rel="noopener noreferrer" aria-label="{{$.Text.officialDownload}} {{.Name}}">{{$.Text.officialDownload}}</a></li>{{end}}
+    </ul>
+  </section>
+  <details class="card"><summary>{{.Text.otherFormats}}</summary>{{range .Formats}}
+    <div class="format"><label for="{{.ID}}">{{.Label}}</label><div class="copy-row"><input id="{{.ID}}" type="text" readonly value="{{.URL}}" spellcheck="false" autocomplete="off"><button type="button" data-copy="{{.ID}}" aria-label="{{$.Text.copy}} {{.Label}}">{{$.Text.copy}}</button></div></div>{{end}}
+  </details>
+  <p id="copy-feedback" class="feedback hint" role="status" aria-live="polite"></p>
+  <footer><p>{{.Text.compatibility}}</p><p>{{.Text.privacy}}</p></footer>
+</main>
+<script nonce="{{.Nonce}}">
+(() => {
+  const copied = {{.Text.copied}};
+  const failed = {{.Text.copyFailed}};
+  const feedback = document.getElementById('copy-feedback');
+  document.querySelectorAll('[data-copy]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const input = document.getElementById(button.dataset.copy);
+      const original = button.textContent;
+      button.disabled = true;
+      try {
+        try {
+          await navigator.clipboard.writeText(input.value);
+        } catch {
+          // In-app browsers (e.g. WeChat) may lack the async clipboard API.
+          input.focus();
+          input.select();
+          if (!document.execCommand('copy')) throw new Error('copy');
+        }
+        button.textContent = copied;
+        feedback.textContent = copied;
+        window.setTimeout(() => { button.textContent = original; button.disabled = false; }, 2000);
+      } catch {
+        button.disabled = false;
+        input.focus();
+        input.select();
+        feedback.textContent = failed;
+      }
+    });
+  });
+})();
+</script>
+</body>
+</html>

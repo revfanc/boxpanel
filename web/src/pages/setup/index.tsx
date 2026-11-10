@@ -5,10 +5,12 @@ import { SetupLayout } from '@/layouts/SetupLayout'
 import { Button } from '@/components/ui/button'
 import { ErrorNotice, Loading } from '@/components/Feedback'
 import { SetupCertificate } from '@/components/Certificate'
+import { usePanelAddress } from '@/lib/panel-address'
 import { useOperation } from '@/hooks/use-operation'
 import { api } from '@/lib/api'
+import { panelAddressDiffers } from '@/lib/location'
 import { setupQuery, queryKeys } from '@/lib/query'
-import { setupSteps, type SetupStatus, type SetupStep } from '@/types/api'
+import { setupSteps, type SetupStatus, type SetupResult, type SetupStep } from '@/types/api'
 import { CheckStep, ScenarioStep, NodeStep, UserStep } from './steps'
 import { FirewallStep } from './firewall'
 import { FinishStep } from './finish'
@@ -25,13 +27,17 @@ export function SetupPage() {
 }
 
 function Wizard({ status }: { status: SetupStatus }) {
+  const showAddress = usePanelAddress()
   const operation = useOperation()
   const [childBusy, setChildBusy] = useState(false)
   const client = useQueryClient()
   const navigate = useNavigate()
   const busy = operation.pending || childBusy
   async function save(patch: Partial<SetupStatus>, leave = false) {
-    await operation.run(() => api<SetupStatus>('/setup/status', { method: 'PUT', body: patch }), async (saved) => {
+    await operation.run(() => api<SetupResult>('/setup/status', { method: 'PUT', body: patch }), async (saved) => {
+      if (saved.panel_url && panelAddressDiffers(saved.panel_url)) {
+        showAddress({ url: saved.panel_url, dev: saved.panel_tls_mode === 'http', readyAt: Date.now() })
+      }
       await client.cancelQueries({ queryKey: queryKeys.setup })
       client.setQueryData(queryKeys.setup, saved)
       void client.invalidateQueries({ queryKey: queryKeys.settings })

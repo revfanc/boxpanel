@@ -87,6 +87,11 @@ CSRF、8 KiB 严格 JSON 和统一错误契约。GET 支持 HEAD。前端不再�
   从已保存域名改回空字符串时重新探测并恢复公网 IP（IPv4 优先），探测失败不修改设置。
   初次无域名保留初始化的 public_host；--dev 的初始回环地址可用于界面演示。
   T6.3：事务提交后通知证书管理器；acme 模式自动为新 public_host 签发，失败使用匹配新地址的自签备用证书。
+- T6.6：PUT 实际改变 public_host 时，成功响应额外包含 `panel_url`、`panel_tls_mode`，例如
+  `{"completed":false,"step":"node","domain":"node.example.com","hysteria2":true,"panel_url":"https://node.example.com:2053/panel/","panel_tls_mode":"acme"}`。
+  URL 只由已保存主机、TLS 模式及实际监听端口/路径构造（含 CLI 覆盖），不信任请求 Host/代理头；
+  在事务内计算、提交成功才返回。主机未改变、普通进度保存及 GET 不带这两个字段。
+  域名改回 IP 也返回新地址；开发 http 返回供提示，前端不跳转。原错误/回滚/认证契约保持。
 - setup/public_host 是引导及客户端元数据，沿用 `/settings` 的普通事务约定，不重启内核、
   不写配置、不返回 Apply 生效标记。节点和用户仍调用原 CRUD → Manager.Apply，保持
   check/生效/回滚及 dev-db-only 响应；引导没有第二条写配置路径。
@@ -382,6 +387,8 @@ JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未�
   提示先在 Linux 生效配置；开发模式不生成临时证书、不用 insecure 兜底。
 - `/settings` PUT 为部分更新，省略字段保持。成功 200 返回原 GET 字段加
   `{panel_url,restart_after}`，restart_after 为 0 或 2（秒）。
+  T6.6：未切换监听时 panel_url 保留实际监听端口/运行时路径（包括 CLI 覆盖）；
+  主机修改后前端显示新地址提示框，不用 restart_after=0 推断无需提醒。
   public_host 接受 ASCII 域名或裸 IPv4/IPv6，不接受 URL/端口；panel_name 为 1–128 字节、无换行。
   web_path 为空或 1–64 位小写字母数字，sub_path 为 1–64 位小写字母数字，二者不能相同；
   sub_path 保留 api/assets/index。端口 1–65535，不得与任何入站或 Clash 控制端口冲突（409）。
@@ -410,7 +417,11 @@ JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未�
   无法生成时返回无敏感细节的 503 与下一步建议，不透传 DB/证书错误。
 - 浏览器 HTML 以 text/html 内联显示（不发 attachment），仍带流量/更新头；二维码在本地生成 PNG，
   页面使用 no-store、no-referrer、CSP、HTML 转义，无外部脚本、字体、QR 服务或请求日志中的 token。
-  显示各格式链接、sing-box/Clash 导入按钮、流量与 UTC 到期时间，提示客户端版本与 URI 规则限制。
+  T6.6：采用跟随系统亮暗色的卡片布局，显示状态、换算后的流量及 UTC 到期日期/剩余天数、
+  二维码、只读订阅地址/复制、sing-box/Clash 导入、共享客户端清单及其他格式折叠区。
+  每次 HTML 响应（包括 HEAD）生成 crypto/rand 32 字节 base64url nonce，
+  CSP 增加 `script-src 'nonce-…'`，与唯一内联复制脚本一致，其余指令不变。
+  无 JS 时可手动选择地址。禁用/过期/超额仍保持空白 404，不因渲染器支持状态展示而放开。
 - T6.5：成功 GET/HEAD 写响应后记录一条 `INFO subscription served`，业务字段仅
   `format`、`user_agent`、`user_id`。format 为 singbox/clash/uri（base64 记作 uri）；
   规格未列浏览器页面，补充为 html，避免误报客户端格式。格式取实际生成结果，显式参数仍优先。

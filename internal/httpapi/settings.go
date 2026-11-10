@@ -37,6 +37,15 @@ func (s PanelSettings) URL() string {
 	return scheme + "://" + net.JoinHostPort(s.PublicHost, strconv.Itoa(s.WebPort)) + path
 }
 
+// Host-only changes retain the active listener, including CLI overrides.
+func (a *api) currentPanelURL(s PanelSettings) string {
+	if a.opts.PanelPort > 0 {
+		s.WebPort = a.opts.PanelPort
+	}
+	s.WebPath = a.opts.WebPath
+	return s.URL()
+}
+
 func readSettings(ctx context.Context, q db.SettingsDB) (PanelSettings, error) {
 	var s PanelSettings
 	var err error
@@ -236,11 +245,15 @@ func (a *api) settingsPut(w http.ResponseWriter, r *http.Request) {
 	if (next.TLSMode != old.TLSMode || next.PublicHost != old.PublicHost) && a.opts.Certificates != nil {
 		a.opts.Certificates.Changed()
 	}
+	panelURL := next.URL()
+	if !changeListener {
+		panelURL = a.currentPanelURL(next)
+	}
 	writeJSON(w, 200, struct {
 		PanelSettings
 		PanelURL     string `json:"panel_url"`
 		RestartAfter int    `json:"restart_after"`
-	}{next, next.URL(), func() int {
+	}{next, panelURL, func() int {
 		if changeListener {
 			return 2
 		}

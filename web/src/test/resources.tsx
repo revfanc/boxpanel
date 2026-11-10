@@ -1,3 +1,4 @@
+import { PanelAddressProvider } from '@/components/PanelAddressDialog'
 import type { ReactNode } from 'react'
 import { render, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -35,7 +36,7 @@ export function mountPage(element: ReactNode, path = '/', pattern = path) {
   const client = createQueryClient()
   client.setDefaultOptions({ queries: { retry: false, staleTime: 30000 }, mutations: { retry: false } })
   const router = createMemoryRouter([{ path: pattern, element }, { path: '*', element: <div data-testid="destination" /> }], { initialEntries: [path] })
-  render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>)
+  render(<QueryClientProvider client={client}><PanelAddressProvider><RouterProvider router={router} /></PanelAddressProvider></QueryClientProvider>)
   disposers.push(() => { router.dispose(); client.clear() })
   return { client, router, user: userEvent.setup() }
 }

@@ -60,3 +60,72 @@ it('keeps a wrong current password local and clears caches after a successful ac
     expect(client.getQueryData(['users', 'links'])).toBeUndefined()
   } finally { off() }
 })
+
+it.each(['acme', 'self_signed', 'http'] as const)('shows the saved host address with copy and %s navigation behavior', async (mode) => {
+  const visit = vi.spyOn(location, 'visitPanel').mockImplementation(() => {})
+  let saved = { ...settings, panel_tls_mode: mode, web_path: 'randompath' }
+  const panelURL = `${mode === 'http' ? 'http' : 'https'}://new.example.com:2053/randompath/`
+  mockAPI({
+    'GET /settings': () => Response.json(saved),
+    'PUT /settings': (init) => { saved = { ...saved, ...JSON.parse(String(init.body)) }; return Response.json({ ...saved, panel_url: panelURL, restart_after: 0 }) },
+  })
+  const { user } = mountPage(<SettingsPage />)
+  const clipboard = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue()
+  await user.clear(await screen.findByLabelText(t.settings.publicHost))
+  await user.type(screen.getByLabelText(t.settings.publicHost), 'new.example.com')
+  await user.click(screen.getByRole('button', { name: t.common.save }))
+  expect(await screen.findByRole('dialog')).toHaveTextContent(t.addressChange.title)
+  expect(screen.getByLabelText(t.addressChange.url)).toHaveValue(panelURL)
+  expect(visit).not.toHaveBeenCalled()
+  await user.click(screen.getByRole('button', { name: `${t.common.copy} ${t.addressChange.url}` }))
+  expect(clipboard).toHaveBeenCalledWith(panelURL)
+  if (mode === 'http') {
+    expect(screen.getByText(t.addressChange.dev)).toBeVisible()
+    expect(screen.queryByRole('button', { name: t.addressChange.go })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: t.addressChange.continue }))
+    expect(visit).not.toHaveBeenCalled()
+  } else {
+    expect(screen.getByText(t.addressChange.hint)).toBeVisible()
+    await user.click(screen.getByRole('button', { name: t.addressChange.go }))
+    expect(visit).toHaveBeenCalledWith(panelURL)
+  }
+})
+
+it('does not prompt on failed, unchanged, or already-current host saves', async () => {
+  let fail = true
+  let panelURL = 'https://new.example.com:2053/'
+  mockAPI({ 'PUT /settings': (init) => fail ? failure() : Response.json({ ...settings, ...JSON.parse(String(init.body)), panel_url: panelURL, restart_after: 0 }) })
+  const { user } = mountPage(<SettingsPage />)
+  await screen.findByLabelText(t.settings.publicHost)
+  await user.click(screen.getByRole('button', { name: t.common.save }))
+  await screen.findByText('Try again')
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  fail = false
+  await user.click(screen.getByRole('button', { name: t.common.save }))
+  await screen.findByText(t.common.saved)
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  panelURL = `${window.location.origin}/`
+  await user.clear(screen.getByLabelText(t.settings.publicHost))
+  await user.type(screen.getByLabelText(t.settings.publicHost), window.location.hostname)
+  await user.click(screen.getByRole('button', { name: t.common.save }))
+  await screen.findByText(t.common.saved)
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+})
+
+it('keeps a combined host and listener change dialog open until the user chooses to navigate', async () => {
+  const visit = vi.spyOn(location, 'visitPanel').mockImplementation(() => {})
+  const panelURL = 'https://new.example.com:2443/randompath/'
+  mockAPI({ 'PUT /settings': (init) => Response.json({ ...settings, ...JSON.parse(String(init.body)), panel_tls_mode: 'acme', panel_url: panelURL, restart_after: 2 }) })
+  const { user } = mountPage(<SettingsPage />)
+  await user.clear(await screen.findByLabelText(t.settings.publicHost))
+  await user.type(screen.getByLabelText(t.settings.publicHost), 'new.example.com')
+  await user.type(screen.getByLabelText(t.settings.webPath), 'randompath')
+  await user.click(screen.getByRole('button', { name: t.common.save }))
+  await user.click(screen.getByRole('button', { name: t.common.confirm }))
+  const go = await screen.findByRole('button', { name: t.addressChange.go })
+  expect(go).toBeDisabled()
+  await waitFor(() => expect(go).toBeEnabled(), { timeout: 4000 })
+  expect(visit).not.toHaveBeenCalled()
+  await user.click(go)
+  expect(visit).toHaveBeenCalledWith(panelURL)
+})

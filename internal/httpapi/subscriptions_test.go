@@ -181,3 +181,34 @@ func TestMissingCertificateFailsClosed(t *testing.T) {
 	f.call(t, "GET", "users/1/links", "", 409)
 	f.call(t, "GET", "rules/preview", "", 409)
 }
+
+func TestSettingsHostChangeKeepsEffectiveListener(t *testing.T) {
+	f, _, _, _ := newSubscriptionAPI(t)
+	service, err := auth.New(f.conn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.h = New(service, Options{DB: f.conn, Applier: f.apply, PanelPort: 2443, WebPath: "runtimepath"})
+	for _, tt := range []struct{ host, authority string }{
+		{"node.example.com", "node.example.com"}, {"2001:db8::9", "[2001:db8::9]"},
+	} {
+		w := f.call(t, "PUT", "settings", `{"public_host":"`+tt.host+`"}`, 200)
+		var got struct {
+			PanelURL     string `json:"panel_url"`
+			RestartAfter int    `json:"restart_after"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.PanelURL != "https://"+tt.authority+":2443/runtimepath/" || got.RestartAfter != 0 {
+			t.Fatal(got)
+		}
+		stored, err := readSettings(context.Background(), f.conn)
+		if err != nil || stored.WebPort != 2053 || stored.WebPath != "panel" {
+			t.Fatal("runtime overrides were persisted", stored, err)
+		}
+	}
+	if f.apply.calls != 0 {
+		t.Fatal("metadata restarted sing-box")
+	}
+}

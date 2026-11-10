@@ -7,10 +7,11 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Page, Panel, Field, Toggle, Submit, Notice, Confirm } from '@/components/ResourceUI'
 import { ErrorNotice, Loading } from '@/components/Feedback'
 import { CertificatePanel } from '@/components/Certificate'
+import { usePanelAddress } from '@/lib/panel-address'
 import { settingsQuery, replaceSession, sessionQuery, queryKeys } from '@/lib/query'
 import { refreshResources } from '@/lib/resources'
 import { api } from '@/lib/api'
-import { visitPanel } from '@/lib/location'
+import { panelAddressDiffers, visitPanel } from '@/lib/location'
 import { useOperation } from '@/hooks/use-operation'
 import { settingsSchema, usernameSchema, passwordSchema } from '@/schemas/settings'
 import type { PanelSettings, SettingsResult, PasswordInput } from '@/types/api'
@@ -24,6 +25,7 @@ function PanelForm({ settings }: { settings: PanelSettings }) {
   const client = useQueryClient()
   const [confirmation, setConfirmation] = useState<SettingsForm | null>(null)
   const [redirect, setRedirect] = useState<SettingsResult | null>(null)
+  const showAddress = usePanelAddress()
   useEffect(() => {
     if (!redirect) return
     const timer = window.setTimeout(() => visitPanel(redirect.panel_url), redirect.restart_after * 1000 + 500)
@@ -34,6 +36,11 @@ function PanelForm({ settings }: { settings: PanelSettings }) {
       setConfirmation(null)
       form.reset(result)
       client.setQueryData(queryKeys.settings, result)
+      if (result.public_host !== settings.public_host && panelAddressDiffers(result.panel_url)) {
+        showAddress({ url: result.panel_url, dev: result.panel_tls_mode === 'http', readyAt: Date.now() + (result.restart_after > 0 ? result.restart_after * 1000 + 500 : 0) })
+        await refreshResources(client)
+        return
+      }
       if (result.restart_after > 0) { setRedirect(result); return }
       await refreshResources(client)
     })
@@ -45,7 +52,7 @@ function PanelForm({ settings }: { settings: PanelSettings }) {
       if (values.web_port !== settings.web_port || values.web_path !== settings.web_path || values.sub_path !== settings.sub_path) setConfirmation(values)
       else save(values)
     })}>
-      <fieldset disabled={operation.pending || !!redirect} className="min-w-0 space-y-5">
+      <fieldset disabled={operation.pending || !!redirect } className="min-w-0 space-y-5">
         <Field label={t.settings.panelName} {...form.register('panel_name')} error={errors.panel_name?.message} />
         <Field label={t.settings.publicHost} hint={t.settings.hostHint} {...form.register('public_host')} error={errors.public_host?.message} />
         <div className="grid min-w-0 gap-4 sm:grid-cols-2"><Field label={t.settings.port} type="number" {...form.register('web_port', { valueAsNumber: true })} error={errors.web_port?.message} /><Field label={t.settings.webPath} hint={t.settings.pathHint} {...form.register('web_path')} error={errors.web_path?.message} /></div>

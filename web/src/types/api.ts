@@ -13,6 +13,7 @@ export interface PasswordInput { old_password: string; new_password: string }
 export const setupSteps = ['welcome', 'check', 'scenario', 'node', 'user', 'firewall', 'finish'] as const
 export type SetupStep = typeof setupSteps[number]
 export interface SetupStatus { completed: boolean; step: SetupStep; domain: string; hysteria2: boolean }
+export interface SetupResult extends SetupStatus { panel_url?: string; panel_tls_mode?: PanelSettings['panel_tls_mode'] }
 export interface PortProbe { port: number; results: { ip: string; ok: boolean }[]; hint: string }
 
 export interface SingboxStatus {
