@@ -1,0 +1,11 @@
+add table inet boxpanel_traffic
+add chain inet boxpanel_traffic output { type filter hook output priority mangle; policy accept; }
+add chain inet boxpanel_traffic input { type filter hook input priority mangle; policy accept; }
+add counter inet boxpanel_traffic up_u1
+add counter inet boxpanel_traffic down_u1
+add rule inet boxpanel_traffic output meta l4proto { tcp, udp } meta mark 0xb7000001 ct mark set meta mark counter name up_u1
+add rule inet boxpanel_traffic input meta l4proto { tcp, udp } ct direction reply ct mark 0xb7000001 counter name down_u1
+add counter inet boxpanel_traffic up_u2
+add counter inet boxpanel_traffic down_u2
+add rule inet boxpanel_traffic output meta l4proto { tcp, udp } meta mark 0xb7000002 ct mark set meta mark counter name up_u2
+add rule inet boxpanel_traffic input meta l4proto { tcp, udp } ct direction reply ct mark 0xb7000002 counter name down_u2

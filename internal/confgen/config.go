@@ -73,8 +73,9 @@ type handshakeConfig struct {
 }
 
 type outboundConfig struct {
-	Type string `json:"type"`
-	Tag  string `json:"tag"`
+	RoutingMark uint32 `json:"routing_mark,omitempty"`
+	Type        string `json:"type"`
+	Tag         string `json:"tag"`
 }
 
 type routeConfig struct {

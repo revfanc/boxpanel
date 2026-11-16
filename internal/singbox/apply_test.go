@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -45,6 +46,31 @@ func (r *applyRunner) Run(ctx context.Context, name string, args ...string) ([]b
 			return []byte("invalid configuration: alice-password-secret, subscription-token-secret"), errors.New("check failed")
 		}
 		if r.realCheck {
+			// Production is Linux-only. The macOS binary rejects SO_MARK at
+			// construction, so validate a temporary host-compatible copy.
+			// Never change the staged file that Apply will activate.
+			if runtime.GOOS != "linux" {
+				raw, err := os.ReadFile(args[2])
+				if err != nil {
+					return nil, err
+				}
+				var cfg map[string]any
+				if err := json.Unmarshal(raw, &cfg); err != nil {
+					return nil, err
+				}
+				for _, value := range cfg["outbounds"].([]any) {
+					delete(value.(map[string]any), "routing_mark")
+				}
+				raw, err = json.Marshal(cfg)
+				if err != nil {
+					return nil, err
+				}
+				path := filepath.Join(r.t.TempDir(), "host-check.json")
+				if err := os.WriteFile(path, raw, 0600); err != nil {
+					return nil, err
+				}
+				args = []string{"check", "-c", path}
+			}
 			return (host.Native{}).Run(ctx, name, args...)
 		}
 		return nil, nil
@@ -383,7 +409,7 @@ func TestApplyHysteriaCertificatesAndPortPlan(t *testing.T) {
 	if err != nil || len(fingerprints["1"]) != 64 {
 		t.Fatal("fingerprint not saved")
 	}
-	if got := f.fw.calls[0].desired; !reflect.DeepEqual(got, firewall.Plan{Ports: []firewall.Port{{Port: 8443, Proto: "udp"}}, Hops: []firewall.Hop{{Start: 20000, End: 30000, Port: 8443}}}) {
+	if got := f.fw.calls[0].desired; !reflect.DeepEqual(got, firewall.Plan{Ports: []firewall.Port{{Port: 8443, Proto: "udp"}}, Hops: []firewall.Hop{{Start: 20000, End: 30000, Port: 8443}}, TrafficUsers: []int64{1}}) {
 		t.Fatalf("wrong plan: %+v", got)
 	}
 	if err := f.m.Startup(context.Background()); err != nil {
@@ -565,7 +591,7 @@ func TestStartupRecoversInterruptedApplyBeforeNewCheck(t *testing.T) {
 	}
 	original := readFile(t, f.path)
 	// Crash after replacement and partial firewall sync, before DB commit.
-	p := pendingApply{ID: "uncommitted", HadConfig: true, Next: firewall.Plan{Ports: []firewall.Port{{Port: 8443, Proto: "udp"}}, Hops: []firewall.Hop{{Start: 20000, End: 30000, Port: 8443}}}}
+	p := pendingApply{ID: "uncommitted", HadConfig: true, Next: firewall.Plan{Ports: []firewall.Port{{Port: 8443, Proto: "udp"}}, Hops: []firewall.Hop{{Start: 20000, End: 30000, Port: 8443}}, TrafficUsers: []int64{1}}}
 	raw, _ := json.Marshal(p)
 	for path, data := range map[string][]byte{f.path + ".bak": original, f.path: []byte(`{"crashed":true}`), f.path + ".pending": raw} {
 		if err := os.WriteFile(path, data, 0600); err != nil {

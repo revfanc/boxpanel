@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -61,6 +62,30 @@ func checkGolden(t *testing.T, golden []byte) {
 		from, _ := json.Marshal(old)
 		to, _ := json.Marshal(path)
 		golden = bytes.ReplaceAll(golden, from, to)
+	}
+	// The pinned macOS core deliberately rejects Linux socket marks during
+	// check. Assert that restriction, then check all remaining generated fields
+	// on this host. Linux checks the original marked golden without rewriting.
+	if runtime.GOOS != "linux" && bytes.Contains(golden, []byte(`"routing_mark"`)) {
+		marked := filepath.Join(dir, "marked.json")
+		if err := os.WriteFile(marked, golden, 0600); err != nil {
+			t.Fatal(err)
+		}
+		output, err := exec.CommandContext(ctx, binary, "check", "-c", marked).CombinedOutput()
+		if err == nil || !bytes.Contains(output, []byte("`routing_mark` is only supported on Linux")) {
+			t.Fatalf("expected Linux mark restriction: %v %s", err, output)
+		}
+		var cfg map[string]any
+		if err := json.Unmarshal(golden, &cfg); err != nil {
+			t.Fatal(err)
+		}
+		for _, value := range cfg["outbounds"].([]any) {
+			delete(value.(map[string]any), "routing_mark")
+		}
+		golden, err = json.Marshal(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	configPath := filepath.Join(dir, "sing-box.json")
 	if err := os.WriteFile(configPath, golden, 0600); err != nil {

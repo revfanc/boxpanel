@@ -4,21 +4,16 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"math"
-	"net"
-	"net/http"
-	"net/http/httptest"
 	"path/filepath"
-	"strconv"
 	"testing"
 	"time"
 
 	"github.com/revfanc/boxpanel/internal/confgen"
 	"github.com/revfanc/boxpanel/internal/db"
+	"github.com/revfanc/boxpanel/internal/firewall"
 	"github.com/revfanc/boxpanel/internal/singbox"
 )
 
@@ -64,35 +59,45 @@ func must(t *testing.T, err error) {
 		t.Fatal(err)
 	}
 }
-func conn(id, start string, user int64, up, down int64) Connection {
-	return Connection{ID: id, Start: start, Chains: []string{confgen.UserOutboundTag(user)}, Upload: up, Download: down}
+func counter(user, up, down int64) firewall.Counter {
+	return firewall.Counter{UserID: user, Upload: up, Download: down}
 }
-func TestCollectorDeltasClosedRestartUnknown(t *testing.T) {
+
+// Model a panel that established its initial empty baseline before traffic.
+func runningCollector(t *testing.T, w, r *sql.DB, fetch FetchFunc) *Collector {
+	t.Helper()
+	c := NewCollector(w, r, func(context.Context) ([]firewall.Counter, error) { return nil, nil })
+	must(t, c.Poll(context.Background()))
+	c.fetch = fetch
+	return c
+}
+func TestCollectorDeltasRecreationUnknownAndDelete(t *testing.T) {
 	w, r := fixture(t)
 	ctx := context.Background()
-	response := []Connection{conn("a", "first", 1, 10, 20), conn("b", "first", 2, 30, 40), conn("x", "first", 99, 500, 500)}
+	response := []firewall.Counter{counter(1, 1000, 2000), counter(2, 30, 40), counter(99, 500, 500)}
 	fail := false
-	c := NewCollector(w, r, func(context.Context, int, string) ([]Connection, error) {
+	c := NewCollector(w, r, func(context.Context) ([]firewall.Counter, error) {
 		if fail {
 			return nil, errors.New("offline")
 		}
 		return response, nil
 	})
-	must(t, c.Poll(ctx))
+	must(t, c.Poll(ctx)) // baseline only, including existing counters
 	must(t, c.Flush(ctx))
-	response = []Connection{conn("a", "first", 1, 15, 35)} // b closed: its unsampled tail is intentionally lost
+	if got := usage(t, w, 1); got != (amount{}) {
+		t.Fatal(got)
+	}
+	response = []firewall.Counter{counter(1, 1015, 2035), counter(2, 35, 50)}
 	must(t, c.Poll(ctx))
 	must(t, c.Poll(ctx))
 	must(t, c.Flush(ctx))
 	if got := usage(t, w, 1); got != (amount{15, 35}) {
 		t.Fatal(got)
 	}
-	if got := usage(t, w, 2); got != (amount{30, 40}) {
-		t.Fatal(got)
-	}
-	response = []Connection{conn("a", "new-process", 1, 5, 8)} // ID reused with a fresh start, lower counters
+	// Recreated upload counter, unchanged download counter: independent deltas.
+	response = []firewall.Counter{counter(1, 5, 2043)}
 	must(t, c.Poll(ctx))
-	response = []Connection{conn("a", "new-process", 1, 8, 10)}
+	response = []firewall.Counter{counter(1, 8, 2050)}
 	fail = true
 	if c.Poll(ctx) == nil {
 		t.Fatal("expected fetch error")
@@ -100,26 +105,24 @@ func TestCollectorDeltasClosedRestartUnknown(t *testing.T) {
 	fail = false
 	must(t, c.Poll(ctx))
 	must(t, c.Flush(ctx))
-	if got := usage(t, w, 1); got != (amount{23, 45}) {
+	if got := usage(t, w, 1); got != (amount{23, 50}) {
 		t.Fatal(got)
 	}
-	response = []Connection{conn("a", "new-process", 1, 1, 2)} // defensive counter rollback without start changing
+	exec(t, w, "DELETE FROM users WHERE id=1")
 	must(t, c.Poll(ctx))
 	must(t, c.Flush(ctx))
-	if got := usage(t, w, 1); got != (amount{24, 47}) {
-		t.Fatal(got)
-	}
-	response = nil
-	must(t, c.Poll(ctx))
 	if len(c.previous) != 0 {
-		t.Fatal("closed baselines retained")
+		t.Fatal("deleted/removed user baselines retained")
+	}
+	if got := usage(t, w, 2); got != (amount{5, 10}) {
+		t.Fatal(got)
 	}
 }
 func TestCollectorBatchFailureRetryResetAndOverflow(t *testing.T) {
 	w, r := fixture(t)
 	ctx := context.Background()
-	response := []Connection{conn("a", "one", 1, 10, 20), conn("b", "two", 2, 30, 40)}
-	c := NewCollector(w, r, func(context.Context, int, string) ([]Connection, error) { return response, nil })
+	response := []firewall.Counter{counter(1, 10, 20), counter(2, 30, 40)}
+	c := runningCollector(t, w, r, func(context.Context) ([]firewall.Counter, error) { return response, nil })
 	must(t, c.Poll(ctx))
 	exec(t, w, `CREATE TRIGGER fail_usage BEFORE UPDATE OF traffic_up ON users WHEN NEW.id=2 BEGIN SELECT RAISE(ABORT,'disk failure'); END`)
 	if c.Flush(ctx) == nil {
@@ -134,31 +137,31 @@ func TestCollectorBatchFailureRetryResetAndOverflow(t *testing.T) {
 	if got := usage(t, w, 1); got != (amount{10, 20}) {
 		t.Fatal(got)
 	}
-	response = []Connection{conn("a", "one", 1, 50, 60)}
+	response = []firewall.Counter{counter(1, 50, 60)}
 	must(t, c.Poll(ctx))
 	// Two resets in one second are distinct epochs. Pending increments cannot undo either.
 	exec(t, w, "UPDATE users SET traffic_up=0,traffic_down=0,traffic_epoch=traffic_epoch+2,traffic_reset_at=100 WHERE id=1")
 	must(t, c.Flush(ctx))
-	response = []Connection{conn("a", "one", 1, 60, 70)}
+	response = []firewall.Counter{counter(1, 60, 70)}
 	must(t, c.Poll(ctx))
 	must(t, c.Flush(ctx))
 	if got := usage(t, w, 1); got != (amount{}) {
 		t.Fatalf("old epoch restored: %v", got)
 	}
-	response = []Connection{conn("c", "new", 1, 2, 3)}
+	response = []firewall.Counter{counter(1, 62, 73)}
 	must(t, c.Poll(ctx))
 	must(t, c.Flush(ctx))
 	if got := usage(t, w, 1); got != (amount{2, 3}) {
 		t.Fatal(got)
 	}
 	exec(t, w, "UPDATE users SET traffic_up=?,traffic_down=? WHERE id=1", int64(math.MaxInt64-1), int64(math.MaxInt64-1))
-	response = []Connection{conn("c", "new", 1, 10, 30)}
+	response = []firewall.Counter{counter(1, 70, 100)}
 	must(t, c.Poll(ctx))
 	must(t, c.Flush(ctx))
 	if got := usage(t, w, 1); got != (amount{math.MaxInt64, math.MaxInt64}) {
 		t.Fatalf("overflow: %v", got)
 	}
-	response = []Connection{conn("c", "new", 1, 20, 40)}
+	response = []firewall.Counter{counter(1, 80, 110)}
 	must(t, c.Poll(ctx))
 	exec(t, w, "DELETE FROM users WHERE id=1")
 	exec(t, w, `INSERT INTO users(id,name,uuid,password,sub_token,traffic_epoch,created_at) VALUES(1,'new','new-uuid','new-password','new-token',1000,1)`)
@@ -170,8 +173,8 @@ func TestCollectorBatchFailureRetryResetAndOverflow(t *testing.T) {
 func TestCollectorReadsDuringApplyAndRetainsOnWriteTimeout(t *testing.T) {
 	w, r := fixture(t)
 	ctx := context.Background()
-	c := NewCollector(w, r, func(context.Context, int, string) ([]Connection, error) {
-		return []Connection{conn("a", "one", 1, 10, 20)}, nil
+	c := runningCollector(t, w, r, func(context.Context) ([]firewall.Counter, error) {
+		return []firewall.Counter{counter(1, 10, 20)}, nil
 	})
 	tx, err := w.BeginTx(ctx, nil)
 	must(t, err)
@@ -191,40 +194,6 @@ func TestCollectorReadsDuringApplyAndRetainsOnWriteTimeout(t *testing.T) {
 	must(t, c.Flush(ctx))
 	if got := usage(t, r, 1); got != (amount{10, 20}) {
 		t.Fatal(got)
-	}
-}
-func TestClashHTTPAuthorizationAndBounds(t *testing.T) {
-	mode := "ok"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/connections" || r.Header.Get("Authorization") != "Bearer private-secret" {
-			t.Error("controller request mismatch")
-		}
-		switch mode {
-		case "redirect":
-			w.Header().Set("Location", "http://unreachable.invalid/")
-			w.WriteHeader(302)
-		case "error":
-			w.WriteHeader(403)
-		case "bad":
-			fmt.Fprint(w, "{private-secret")
-		default:
-			json.NewEncoder(w).Encode(map[string]any{"connections": []Connection{conn("a", "start", 1, 1, 2)}})
-		}
-	}))
-	defer server.Close()
-	_, portText, _ := net.SplitHostPort(server.Listener.Addr().String())
-	port, _ := strconv.Atoi(portText)
-	data, err := fetchConnections(context.Background(), port, "private-secret")
-	must(t, err)
-	if len(data) != 1 {
-		t.Fatal(data)
-	}
-	for _, m := range []string{"redirect", "error", "bad"} {
-		mode = m
-		_, err := fetchConnections(context.Background(), port, "private-secret")
-		if err == nil || bytes.Contains([]byte(err.Error()), []byte("private-secret")) {
-			t.Fatalf("unsafe error: %v", err)
-		}
 	}
 }
 
@@ -266,8 +235,8 @@ func (f *fakeApply) Apply(ctx context.Context, mutation singbox.Mutation) error 
 func schedulerFixture(t *testing.T) (*Scheduler, *fakeApply, *time.Time, *sql.DB) {
 	w, r := fixture(t)
 	now := time.Date(2026, 11, 15, 23, 59, 59, 0, time.UTC)
-	c := NewCollector(w, r, func(context.Context, int, string) ([]Connection, error) {
-		return []Connection{conn("live", "start", 2, 50, 60)}, nil
+	c := runningCollector(t, w, r, func(context.Context) ([]firewall.Counter, error) {
+		return []firewall.Counter{counter(2, 50, 60)}, nil
 	})
 	apply := &fakeApply{writer: w, now: &now}
 	s := NewScheduler(c, apply, func() time.Time { return now }, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
@@ -388,8 +357,8 @@ func TestRunFlushesOnNormalExit(t *testing.T) {
 func TestCollectorReconcilesCommittedBatchBeforeRetry(t *testing.T) {
 	w, r := fixture(t)
 	ctx := context.Background()
-	response := []Connection{conn("a", "one", 1, 10, 20)}
-	c := NewCollector(w, r, func(context.Context, int, string) ([]Connection, error) { return response, nil })
+	response := []firewall.Counter{counter(1, 10, 20)}
+	c := runningCollector(t, w, r, func(context.Context) ([]firewall.Counter, error) { return response, nil })
 	must(t, c.Poll(ctx))
 	// Simulate a COMMIT that reached SQLite but whose result was not known to
 	// the caller (also possible after Manager.Apply's generation read fails).
@@ -397,7 +366,7 @@ func TestCollectorReconcilesCommittedBatchBeforeRetry(t *testing.T) {
 	must(t, err)
 	must(t, c.writePending(ctx, tx))
 	must(t, tx.Commit())
-	response = []Connection{conn("a", "one", 1, 13, 27)}
+	response = []firewall.Counter{counter(1, 13, 27)}
 	must(t, c.Poll(ctx))
 	must(t, c.Flush(ctx))
 	if got := usage(t, w, 1); got != (amount{13, 27}) {
@@ -405,20 +374,24 @@ func TestCollectorReconcilesCommittedBatchBeforeRetry(t *testing.T) {
 	}
 }
 
-// A panel restart must not recount bytes of connections that outlived it.
+// Each process reads the retained kernel counters once without recounting.
 func TestCollectorPanelRestartDoesNotRecount(t *testing.T) {
 	w, r := fixture(t)
 	ctx := context.Background()
-	before := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
-	response := []Connection{conn("old", before, 1, 1000, 2000)}
-	c := NewCollector(w, r, func(context.Context, int, string) ([]Connection, error) { return response, nil })
-	after := time.Now().Add(time.Second).UTC().Format(time.RFC3339Nano)
-	response = append(response, conn("new", after, 1, 10, 20))
-	must(t, c.Poll(ctx)) // old: baseline only; new: counted in full
-	response = []Connection{conn("old", before, 1, 1100, 2300), conn("new", after, 1, 15, 25)}
+	response := []firewall.Counter{counter(1, 1000, 2000)}
+	fetch := func(context.Context) ([]firewall.Counter, error) { return response, nil }
+	c := NewCollector(w, r, fetch)
+	must(t, c.Poll(ctx))
+	response = []firewall.Counter{counter(1, 1100, 2300)}
 	must(t, c.Poll(ctx))
 	must(t, c.Flush(ctx))
-	if got := usage(t, w, 1); got != (amount{100 + 15, 300 + 25}) {
+	c = NewCollector(w, r, fetch)
+	must(t, c.Poll(ctx))
+	must(t, c.Flush(ctx))
+	response = []firewall.Counter{counter(1, 1115, 2325)}
+	must(t, c.Poll(ctx))
+	must(t, c.Flush(ctx))
+	if got := usage(t, w, 1); got != (amount{115, 325}) {
 		t.Fatal(got)
 	}
 }

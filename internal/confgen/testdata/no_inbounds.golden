@@ -19,10 +19,12 @@
       "tag": "direct"
     },
     {
+      "routing_mark": 3070230529,
       "type": "direct",
       "tag": "direct-u1"
     },
     {
+      "routing_mark": 3070230530,
       "type": "direct",
       "tag": "direct-u2"
     }

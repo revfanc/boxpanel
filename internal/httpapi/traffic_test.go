@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/revfanc/boxpanel/internal/db"
+	"github.com/revfanc/boxpanel/internal/firewall"
 	"github.com/revfanc/boxpanel/internal/subscription"
 	"github.com/revfanc/boxpanel/internal/traffic"
 	"github.com/revfanc/boxpanel/web"
@@ -31,8 +32,8 @@ func TestTrafficResetValidationApplyAndRecovery(t *testing.T) {
 	f.call(t, "POST", "users/999/reset-traffic", "", 404)
 	f.call(t, "GET", "users/1/reset-traffic", "", 405)
 	// Real collector + real Manager (system boundaries fake) enforce unflushed quota.
-	c := traffic.NewCollector(f.conn, f.conn, func(context.Context, int, string) ([]traffic.Connection, error) {
-		return []traffic.Connection{{ID: "live", Start: "one", Chains: []string{"direct-u1"}, Upload: 60, Download: 70}}, nil
+	c := runningTrafficCollector(t, f, func(context.Context) ([]firewall.Counter, error) {
+		return []firewall.Counter{{UserID: 1, Upload: 60, Download: 70}}, nil
 	})
 	s := traffic.NewScheduler(c, f.apply, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := c.Poll(context.Background()); err != nil {
@@ -111,8 +112,8 @@ func TestCollectedUsageReachesSubscriptionHeadersAndPage(t *testing.T) {
 	f, store, _, _ := newSubscriptionAPI(t)
 	f.write(t, "POST", "users", `{"name":"alice"}`, 201)
 	f.write(t, "POST", "inbounds", `{"protocol":"vless_reality","options":{"server_name":"www.example.com"}}`, 201)
-	c := traffic.NewCollector(f.conn, f.conn, func(context.Context, int, string) ([]traffic.Connection, error) {
-		return []traffic.Connection{{ID: "live", Start: "now", Chains: []string{"direct-u1"}, Upload: 1024, Download: 2048}}, nil
+	c := runningTrafficCollector(t, f, func(context.Context) ([]firewall.Counter, error) {
+		return []firewall.Counter{{UserID: 1, Upload: 1024, Download: 2048}}, nil
 	})
 	if err := c.Poll(context.Background()); err != nil {
 		t.Fatal(err)
@@ -146,7 +147,7 @@ func TestMonthlyResetWithEligibleUserDoesNotRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	c := traffic.NewCollector(f.conn, f.conn, func(context.Context, int, string) ([]traffic.Connection, error) { return nil, nil })
+	c := runningTrafficCollector(t, f, func(context.Context) ([]firewall.Counter, error) { return nil, nil })
 	s := traffic.NewScheduler(c, f.apply, func() time.Time { return now }, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	checks, restarts, fwCalls := f.runner.checks, f.runner.restarts, f.firewall.calls
 	f.runner.failCheck = true
@@ -164,4 +165,20 @@ func TestMonthlyResetWithEligibleUserDoesNotRestart(t *testing.T) {
 	if f.apply.calls != calls || f.runner.checks != checks || f.runner.restarts != restarts || f.firewall.calls != fwCalls {
 		t.Fatal("unchanged monthly reset restarted or repeated")
 	}
+}
+
+func runningTrafficCollector(t *testing.T, f *resourceFixture, fetch traffic.FetchFunc) *traffic.Collector {
+	t.Helper()
+	initial := true
+	c := traffic.NewCollector(f.conn, f.conn, func(ctx context.Context) ([]firewall.Counter, error) {
+		if initial {
+			initial = false
+			return nil, nil
+		}
+		return fetch(ctx)
+	})
+	if err := c.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return c
 }

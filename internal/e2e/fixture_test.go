@@ -32,7 +32,7 @@ type fixture struct {
 	secrets                                         []string
 }
 
-func newFixture(t *testing.T, handshake *httptest.Server) fixture {
+func newFixture(t *testing.T, handshake *httptest.Server, routingMarks ...bool) fixture {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -137,7 +137,7 @@ func newFixture(t *testing.T, handshake *httptest.Server) fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := confgen.Build(snapshot, confgen.Options{Now: now, ClashAPIPort: control.port(), ClashAPISecret: secret,
+	server, err := confgen.Build(snapshot, confgen.Options{UserRoutingMarks: len(routingMarks) > 0 && routingMarks[0], Now: now, ClashAPIPort: control.port(), ClashAPISecret: secret,
 		Hysteria2TLS: map[int64]confgen.CertificateFiles{2: files}})
 	if err != nil {
 		t.Fatal(err)

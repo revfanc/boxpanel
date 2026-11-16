@@ -167,7 +167,7 @@ func (s *Scheduler) Check(ctx context.Context) error {
 }
 
 func (s *Scheduler) Run(ctx context.Context) {
-	poll := time.NewTicker(5 * time.Second)
+	poll := time.NewTicker(10 * time.Second)
 	defer poll.Stop()
 	flush := time.NewTicker(60 * time.Second)
 	defer flush.Stop()
@@ -175,9 +175,10 @@ func (s *Scheduler) Run(ctx context.Context) {
 	defer check.Stop()
 	report := func(err error) {
 		if err != nil && ctx.Err() == nil {
-			s.logger.Warn("流量任务未完成；将自动重试，请检查内核运行状态和数据库权限。")
+			s.logger.Warn("流量任务未完成；将自动重试，请检查nftables 权限、内核运行状态和数据库权限。")
 		}
 	}
+	report(s.collector.Poll(ctx))
 	report(s.Check(ctx))
 	for {
 		select {
@@ -188,7 +189,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 			cancel()
 			final, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 			if err := s.collector.Flush(final); err != nil {
-				s.logger.Warn("退出时流量落库失败；尚未保存的近似用量会丢失，请检查数据库权限和磁盘空间。")
+				s.logger.Warn("退出时流量落库失败；尚未保存的用量会丢失，请检查数据库权限和磁盘空间。")
 			}
 			cancel()
 			return

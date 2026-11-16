@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/revfanc/boxpanel/internal/fwmark"
 	"github.com/revfanc/boxpanel/internal/reality"
 )
 
@@ -49,7 +50,15 @@ func Build(snapshot Snapshot, opts Options) ([]byte, error) {
 	)
 	for _, user := range users {
 		tag := UserOutboundTag(user.ID)
-		cfg.Outbounds = append(cfg.Outbounds, outboundConfig{Type: "direct", Tag: tag})
+		outbound := outboundConfig{Type: "direct", Tag: tag}
+		if opts.UserRoutingMarks {
+			mark, err := fwmark.User(user.ID)
+			if err != nil {
+				return nil, fmt.Errorf("build config: user %d: %w", user.ID, err)
+			}
+			outbound.RoutingMark = mark
+		}
+		cfg.Outbounds = append(cfg.Outbounds, outbound)
 		cfg.Route.Rules = append(cfg.Route.Rules, routeRule{AuthUser: []string{user.Name}, Action: "route", Outbound: tag})
 	}
 	inbounds := slices.Clone(snapshot.Inbounds)

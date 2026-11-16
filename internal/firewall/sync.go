@@ -8,14 +8,16 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/revfanc/boxpanel/internal/fwmark"
 	"github.com/revfanc/boxpanel/internal/host"
 )
 
-// Plan contains only service ports and UDP redirects, never credentials.
+// Plan contains service ports, UDP redirects and traffic user IDs, never credentials.
 // Previous is the last successful plan (plus any interrupted attempt).
 type Plan struct {
-	Ports []Port `json:"ports"`
-	Hops  []Hop  `json:"hops"`
+	Ports        []Port  `json:"ports"`
+	Hops         []Hop   `json:"hops"`
+	TrafficUsers []int64 `json:"traffic_users,omitempty"`
 }
 type Port struct {
 	Port  int    `json:"port"`
@@ -28,6 +30,16 @@ type Hop struct {
 }
 
 func (p Plan) Validate() error {
+	seen := map[int64]bool{}
+	for _, id := range p.TrafficUsers {
+		if _, err := fwmark.User(id); err != nil {
+			return err
+		}
+		if seen[id] {
+			return fmt.Errorf("duplicate traffic user; restore the firewall plan before retrying")
+		}
+		seen[id] = true
+	}
 	for _, port := range p.Ports {
 		if port.Port < 1 || port.Port > 65535 || (port.Proto != "tcp" && port.Proto != "udp") {
 			return fmt.Errorf("invalid service port; use 1–65535 and tcp/udp")
@@ -60,7 +72,7 @@ func (m *Manager) Sync(ctx context.Context, previous, desired Plan) error {
 	}
 	// Previous may be a union of interrupted plans, so validate individual ports
 	// but not overlapping historical hopping ranges.
-	if err := (Plan{Ports: previous.Ports}).Validate(); err != nil {
+	if err := (Plan{Ports: previous.Ports, TrafficUsers: previous.TrafficUsers}).Validate(); err != nil {
 		return err
 	}
 	m.mu.Lock()
@@ -70,6 +82,11 @@ func (m *Manager) Sync(ctx context.Context, previous, desired Plan) error {
 	}
 	if err := m.syncHops(ctx, previous, desired); err != nil {
 		return fmt.Errorf("synchronize UDP hopping (check nftables/iptables privileges, then retry): %w", err)
+	}
+	if len(previous.TrafficUsers) > 0 || len(desired.TrafficUsers) > 0 {
+		if err := m.syncTraffic(ctx, desired.TrafficUsers); err != nil {
+			return fmt.Errorf("synchronize traffic counters (install nftables and check NET_ADMIN privileges, then retry): %w", err)
+		}
 	}
 	for _, port := range desired.Ports {
 		if err := m.changeLocked(ctx, port.Port, port.Proto, true); err != nil {

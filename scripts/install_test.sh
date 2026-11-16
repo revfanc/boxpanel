@@ -331,12 +331,48 @@ test_package_nonlock_error() {
     [[ $(grep -c '^apt-get ' "$FIXTURE/calls") == 1 ]] || fail 'non-lock failure retried'
 }
 
+test_nft_dependency() {
+    rm "$FIXTURE/bin/nft"
+    cp "$FIXTURE/bin/sleep" "$FIXTURE/bin/iptables"
+    cp "$FIXTURE/bin/sleep" "$FIXTURE/bin/ip6tables"
+    # Override discovery, independent of nft installed on the test host.
+    cat >"$FIXTURE/dependencies" <<'EOF_DEP'
+. "$INSTALL_SCRIPT"
+command() {
+    if [[ $* == '-v nft' ]]; then return 1; fi
+    builtin command "$@"
+}
+export PATH="$FIXTURE/bin:$PATH"
+PACKAGE_MANAGER=$1
+install_dependencies
+EOF_DEP
+    bash "$FIXTURE/dependencies" apt
+    contains "$FIXTURE/calls" 'nftables iproute2'
+    : >"$FIXTURE/calls"
+    bash "$FIXTURE/dependencies" dnf
+    contains "$FIXTURE/calls" 'nftables iproute'
+}
+
+test_update_nft_dependency() {
+    run_install --non-interactive --version v0.1.0
+    archive v0.2.0
+    # Force nft discovery to fail even if the host has it installed.
+    sed '/main "\$@"/i\
+command() { if [[ $* == "-v nft" ]]; then return 1; fi; builtin command "$@"; }\
+' "$FIXTURE/driver" >"$FIXTURE/driver.next"
+    mv "$FIXTURE/driver.next" "$FIXTURE/driver"
+    : >"$FIXTURE/calls"
+    run_install update --non-interactive --version v0.2.0
+    contains "$FIXTURE/calls" 'nftables iproute2'
+    absent "$FIXTURE/calls" 'singbox install'
+}
+
 if [[ ${1:-} == --case ]]; then
     fixture
     "test_$2"
     exit 0
 fi
-for scenario in install resume update uninstall rejections download_safety optional_bbr_and_lock piped_entry package_locks apt_install_lock package_lock_timeout dnf_locks dnf_lock_timeout package_permission_error package_nonlock_error; do
+for scenario in nft_dependency update_nft_dependency install resume update uninstall rejections download_safety optional_bbr_and_lock piped_entry package_locks apt_install_lock package_lock_timeout dnf_locks dnf_lock_timeout package_permission_error package_nonlock_error; do
     # A separate bash process preserves errexit in the installer under test.
     output=$(mktemp)
     if bash "$0" --case "$scenario" >"$output" 2>&1; then

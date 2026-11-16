@@ -250,7 +250,7 @@ func (r nftRuleset) inputs() []nftObject {
 	chains := []nftObject{}
 	for _, obj := range r.NFTables {
 		c := obj.Chain
-		if c != nil && c.Hook == "input" && c.Type == "filter" && (c.Family == "inet" || c.Family == "ip" || c.Family == "ip6") {
+		if c != nil && c.Table != TrafficTable && c.Hook == "input" && c.Type == "filter" && (c.Family == "inet" || c.Family == "ip" || c.Family == "ip6") {
 			chains = append(chains, *c)
 		}
 	}

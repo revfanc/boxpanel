@@ -31,7 +31,7 @@ install 流程：
 1. 必须 root；`set -euo pipefail`；所有步骤打印 `[1/8]` 形式的进度。
 2. 检测系统：Debian 11+/Ubuntu 20.04+/CentOS Stream 9/Rocky/Alma 8+/Alpine(后期)；架构 `amd64|arm64`（其他直接报错并说明）；需要 systemd。
 3. 安装依赖：`curl tar ca-certificates coreutils`、`iproute2`（RHEL 系为 `iproute`）、`kmod`；
-   没有 nft 且没有完整 iptables/ip6tables 时安装 `nftables`（端口跳跃用），不自动启用防火墙。
+   没有 nft 时必须安装 `nftables`（T7.1c 内核流量计数必需，即使已有 iptables/ip6tables），不自动启用防火墙。
 4. 从 GitHub Release 下载 `boxpanel-linux-{arch}.tar.gz` 与 `checksums.txt`，**sha256 校验**后安装到 `/usr/local/bin/boxpanel`。
 5. 调用 `boxpanel init --port <随机或指定>`：初始化 DB、生成 web_path/sub_path/管理员账号/自签证书、探测公网 IP。
 6. 调用 `boxpanel singbox install --preserve-version`：首次下载锁定版本，重装时保留 DB 已记录版本，必须通过官方校验文件或资产 API 的 SHA-256；
@@ -40,7 +40,7 @@ install 流程：
    enable 两个单元并 restart 面板；同时确认服务 active 与本机 HTTPS 就绪。
 8. 询问是否开启 BBR（非交互模式默认开启），输出 §1 的信息。
 
-update：下载新版 boxpanel → 校验 → 同目录原子替换 → `systemctl restart boxpanel` → 检查本机 HTTPS。
+update：先补齐 nftables 等系统依赖，再下载新版 boxpanel → 校验 → 同目录原子替换 → `systemctl restart boxpanel` → 检查本机 HTTPS。
 脚本不初始化/重置 DB、不安装/升级 sing-box；`serve` 仍按既有约定迁移 DB 并执行 Startup/Apply，
 因此“不动 DB 与 sing-box”不表示阻止正常启动时的重新生效。失败尝试恢复旧二进制并重启，
 不回退数据库迁移、不声称整机事务回滚；旧版也无法启动时提示检查数据库兼容性和 journal。
@@ -441,3 +441,17 @@ CI/release 都锁定其完整 commit SHA（详见工作流注释）：
   不用 insecure；因此能检查自签、正式或 staging 证书，**就绪成功不等于 staging 获得公开信任**。
 - Go 最低版本为 1.26（x/crypto v0.58.0 profiles 支持的要求），开发/CI 使用 Go 1.27。
   依赖理由和证书存储/恢复细节见 SPEC.md §13。单测假 CA/假接口；本任务不调用 LE 正式签发。
+
+
+## 7. T7.1c 内核计数部署与验证
+
+Linux 生产统计必须有 `nft` 及 NET_ADMIN 权限，安装/更新在缺失时安装系统 `nftables` 包
+（apt/dnf 同名），不自动启用 nftables 服务或清空系统规则。手动替换旧版二进制前请先安装此包。
+`boxpanel apply` 管理独立 `inet boxpanel_traffic`，失败进入原回滚，卸载一并清理；
+请为 `0xb7000001–0xb7ffffff` 预留 socket/conntrack mark，勿用于其他策略路由。
+
+`internal/firewall.TestKernelTrafficCounters` 仅 Linux root+nft+ip+unshare 且有 network namespace
+权限时执行，在隔离 namespace 验证 IPv4/IPv6 TCP/UDP 短连接、归属及保留计数器；其余环境 Skip。
+`TestTrafficLoopback` 同样隔离执行真实计数，缺条件只跳过计数子断言，仍测试两协议连通性。
+原 `TestLoopback`、原 Skip 条件不变；macOS status 9 仍需沙箱外复跑。平台专用 routing_mark
+在 macOS check 的明确限制及校验副本规则见 CONFIG §7。统计口径/重启和删除边界见 SPEC §14。

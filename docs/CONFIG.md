@@ -94,7 +94,7 @@
   ],
   "outbounds": [
     { "type": "direct", "tag": "direct" },
-    { "type": "direct", "tag": "direct-u1" }
+    { "type": "direct", "tag": "direct-u1", "routing_mark": 3070230529 }
   ],
   "route": {
     "rules": [
@@ -128,7 +128,7 @@
 
 `confgen.Build(snapshot, options) ([]byte, error)` 是纯生成函数：调用方提供一致 DB 快照中的
 `Inbounds/Users/BlockBittorrent`，以及 `Options.Now`、按入站 ID 索引的 `Hysteria2TLS`
-证书绝对路径、`ClashAPIPort/ClashAPISecret`。这些运行时参数必须明确提供；生成器不读取 DB、
+证书绝对路径、`ClashAPIPort/ClashAPISecret` 和 Linux 生产的 `UserRoutingMarks=true`。这些运行时参数必须明确提供；生成器不读取 DB、
 时钟或证书文件，也不选择端口或生成随机值。Clash API 固定绑定 `127.0.0.1`，要求非空 secret，
 拒绝与 VLESS TCP 端口冲突。调用方在后续生效流程中一次性生成/保存控制端口和随机 secret，
 再在重新生成时复用；本任务不修改初始化设置或增加持久化键。
@@ -571,15 +571,21 @@ check 只校验格式，不启动 TUN、不连接节点、不下载 rule-set。
 停用/到期/超额的用户既不加入入站，也不生成其出站/用户路由；保留原 direct final。
 用户改名后按新 name 匹配，出站仍使用稳定 ID；客户端订阅的分组/出站无需改变。
 
-锁定版本的 [Clash JSON 序列化](https://github.com/SagerNet/sing-box/blob/v1.14.4/experimental/clashapi/connections.go#L80-L99)
-没有认证用户名，因此不能用 metadata.processPath 当作用户名；
-[连接 tracker](https://github.com/SagerNet/sing-box/blob/v1.14.4/common/trafficcontrol/tracker.go#L62-L77)
-将出站 tag 放到 chains；
-[auth_user 的锁定版本文档](https://github.com/SagerNet/sing-box/blob/v1.14.4/docs/configuration/route/rule.md#L218-L220)
-确认匹配入站认证用户名。先 sniff/BT reject/resolve/private reject，最后用户 route，避免安全规则被提前终结。
-所有服务端 golden 更新并执行锁定内核 check；新增测试显式断言安全规则顺序和每用户归属。
+T7.1c 在 Linux 生产每用户出站增加整数 `routing_mark=0xb7000000+ID`，ID 范围
+1–16777215，超出拒绝生成。默认 direct、DNS 和 Reality 握手不加 mark；开发/非 Linux 不启用。
+依据 [锁定 v1.14.4 Dial Fields](https://github.com/SagerNet/sing-box/blob/v1.14.4/docs/configuration/shared/dial.md#routing_mark)，
+字段支持整数/十六进制字符串且仅 Linux。安全路由顺序与客户端订阅输出不变。
 
-统计每 5 秒采集当前连接，漏计短连接及关闭尾段的限制、60 秒落库、30 秒自动停用与重置事务语义见 SPEC §14。
-`Subscription-Userinfo` 的 upload/download 继续使用同一 users 计数，单位字节，不作精确计费承诺。
-新增独立 `TestTrafficLoopback` 对两协议各传输 32 KiB 上传/64 KiB 下载，在连接仍打开时一次生产 Poll+Flush，
-要求 DB 用量在预期量级内（0.5–3 倍）；原 `TestLoopback` 执行条件和断言保持。
+`inet boxpanel_traffic` 的 TCP/UDP output 保存用户 meta mark 到 ct mark 并统计上传；
+input 按 ct mark + reply 方向统计下载；两条 filter 链的 mangle 优先级在 conntrack 之后，
+不使用只处理首包的 NAT 链。独立命名计数器在用户集合变化时保留交集、不清零；
+规则引用一次原子替换，启停/恢复/pending/卸载复用现有 Firewall.Sync。
+语法依据 [nftables 官方手册](https://www.netfilter.org/projects/nftables/manpage.html)。
+口径、重置基线、10 秒采集/60 秒落库及边界见 SPEC §14。
+
+服务端 golden 包含 Linux marks。macOS 的锁定内核连 check 也会拒绝 marks，
+测试先断言这个平台限制，再仅从临时校验副本去掉 routing_mark、校验其他字段；
+Linux 对带 mark 的原始 golden/check/apply 配置直接校验。生产 staged 文件始终不改写。
+Linux root+nft+ip+unshare 在私有 network namespace 做真实双栈 TCP/UDP 计数；
+`TestTrafficLoopback` 在同样条件下验证两协议传输结束后 Poll+Flush 的用量，
+缺条件时只跳过其计数子断言、保留连通性；原 `TestLoopback` 不改。

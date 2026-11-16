@@ -109,7 +109,7 @@ func storedPlan(ctx context.Context, tx *sql.Tx) (firewall.Plan, error) {
 }
 
 func (m *Manager) runtimeOptions(ctx context.Context, tx *sql.Tx, s confgen.Snapshot) (confgen.Options, error) {
-	opts := confgen.Options{Now: m.now(), Hysteria2TLS: map[int64]confgen.CertificateFiles{}}
+	opts := confgen.Options{UserRoutingMarks: !m.unsupported, Now: m.now(), Hysteria2TLS: map[int64]confgen.CertificateFiles{}}
 	port, err := db.GetSetting(ctx, tx, db.ClashAPIPort)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Select with crypto/rand, probe the loopback bind, then persist it.

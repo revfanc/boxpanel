@@ -263,6 +263,13 @@ func (m *Manager) Apply(ctx context.Context, mutate Mutation) (result error) {
 	if err != nil {
 		return &ApplyError{Code: "singbox_check_failed", cause: err}
 	}
+	if opts.UserRoutingMarks && len(desired.Ports) > 0 {
+		for _, u := range current.Users {
+			if confgen.UserEligible(u, opts.Now.Unix()) {
+				desired.TrafficUsers = append(desired.TrafficUsers, u.ID)
+			}
+		}
+	}
 	secrets = append(secrets, opts.ClashAPISecret)
 	config, err := confgen.Build(current, opts)
 	if err != nil {
@@ -511,7 +518,7 @@ func (m *Manager) removePending() error {
 	return err
 }
 func unionPlan(a, b firewall.Plan) firewall.Plan {
-	p := firewall.Plan{Ports: slices.Clone(a.Ports), Hops: slices.Clone(a.Hops)}
+	p := firewall.Plan{Ports: slices.Clone(a.Ports), Hops: slices.Clone(a.Hops), TrafficUsers: slices.Clone(a.TrafficUsers)}
 	for _, port := range b.Ports {
 		if !slices.Contains(p.Ports, port) {
 			p.Ports = append(p.Ports, port)
@@ -520,6 +527,11 @@ func unionPlan(a, b firewall.Plan) firewall.Plan {
 	for _, hop := range b.Hops {
 		if !slices.Contains(p.Hops, hop) {
 			p.Hops = append(p.Hops, hop)
+		}
+	}
+	for _, id := range b.TrafficUsers {
+		if !slices.Contains(p.TrafficUsers, id) {
+			p.TrafficUsers = append(p.TrafficUsers, id)
 		}
 	}
 	return p

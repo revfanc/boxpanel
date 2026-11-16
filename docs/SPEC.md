@@ -257,7 +257,7 @@ applied_firewall、applied_users 和新随机 apply_generation，再提交资源
   不伪装为已成功生效、不写配置或执行系统命令。T3.1 为 `serve --dev` 资源编辑增加显式
   `DevDBOnly` 开发替身：仅非 nil mutation 可通过同一 Apply 入口提交 DB，始终不生效，
   响应以 `X-Boxpanel-Apply: dev-db-only` 标明；restart/CLI 不使用此替身，详见 API.md。
-- `applied_firewall` 存储最近成功的 `{ports:[{port,proto}],hops:[{start,end,port}]}` JSON；
+- `applied_firewall` 存储最近成功的 `{ports:[{port,proto}],hops:[{start,end,port}],traffic_users:[ID...]}` JSON；
   `apply_generation` 是 32 字节 crypto/rand 的 base64url 值，仅用于中断恢复。
   Clash API 运行参数和 Hysteria2 证书约定见 CONFIG.md §2 的 T2.3 补充。
 - T2.3 单测以临时 DB/文件、fake runner/systemctl/firewall 覆盖成功、生成/check 失败、重启/存活失败、
@@ -449,36 +449,42 @@ Hysteria2=true 读取，首次保存时写入，不修改已发布迁移。setup
   未引入 Pebble 依赖或额外真实 CA 测试。
 
 
-## 14. T7.1 近似流量统计与自动停用
+## 14. T7.1c 内核流量统计与自动停用
 
-调研（锁定 tag v1.14.4）：
+T7.1 的 Clash `/connections` 快照在真机 20 MB 下载中只计到约 26%，已移除连接轮询，
+不提供近似退路。历史调研见 [T7.1.md](T7.1.md)，本节为当前契约。
 
-- [`connections.go` L80–99](https://github.com/SagerNet/sing-box/blob/v1.14.4/experimental/clashapi/connections.go#L80-L99)
-  手工序列化 metadata，**没有认证用户字段**；processPath 中的系统用户名不是代理认证用户。
-  顶层返回 upload/download、start、chains。
-- [`tracker.go` L62–77](https://github.com/SagerNet/sing-box/blob/v1.14.4/common/trafficcontrol/tracker.go#L62-L77)
-  将 OutboundChain 的 tag 反转后放入 Chain，并生成随机连接 UUID 和 CreatedAt。
-  [`connections.go` L29–43](https://github.com/SagerNet/sing-box/blob/v1.14.4/experimental/clashapi/connections.go#L29-L43)
-  读取当前连接；[Manager.Connections](https://github.com/SagerNet/sing-box/blob/v1.14.4/common/trafficcontrol/manager.go#L129-L136)
-  不含已经关闭的连接。
-- 使用每个合格用户的 `direct-u<数据库 ID>` 普通 direct 出站，以 `auth_user:[用户名]` 路由，
-  从 chains 确定用户。字段依据锁定 tag 的
-  [auth_user 文档](https://github.com/SagerNet/sing-box/blob/v1.14.4/docs/configuration/route/rule.md#L218-L220)。
-  规则追加在 sniff → 可选 BT reject → resolve → private reject 之后，安全语义不变。
-  不使用 v2ray_api、不替换官方内核或构建标签。
+- 每个合格用户仍使用 `auth_user` → `direct-u<ID>`，位于 sniff/BT reject/resolve/private reject
+  之后。Linux 生产配置增加整数 `routing_mark = 0xb7000000 + ID`，保留高字节 `0xb7` 的范围，
+  ID 必须在 1–16777215；超界拒绝生成并给修复建议，禁止截断/回绕。普通 direct、服务器 DNS
+  和 Reality 握手不加 mark。开发/非 Linux 不加 mark、不操作 nft、不运行采集调度。
+  字段依据 [锁定 v1.14.4 Dial Fields](https://github.com/SagerNet/sing-box/blob/v1.14.4/docs/configuration/shared/dial.md#routing_mark)：
+  支持整数和十六进制字符串，仅 Linux。必须为此预留 fwmark/ct mark 范围，避免管理员策略路由冲突。
+- 使用独立 `table inet boxpanel_traffic`，`output`、`input` 都是 filter 基链，priority mangle
+  （-150，在 conntrack -200 之后），policy accept，不改变系统准入策略。output 匹配用户 meta mark
+  及 TCP/UDP，执行 `ct mark set meta mark` 并累计 `up_u<ID>`；input 匹配用户 ct mark、
+  TCP/UDP 且 `ct direction reply`，累计 `down_u<ID>`。因此 TCP、UDP/QUIC 的每个包都计数，
+  不依赖连接是否仍存活；方向限制避免回环请求被算作下载。两地址族共用 inet 表。
+  [nftables 官方手册](https://www.netfilter.org/projects/nftables/manpage.html) 的 CHAIN、COUNTER、
+  CONNTRACK STATEMENT 为语法与优先级依据。
+- 表、规则和用户计数器纳入 `applied_firewall.traffic_users` 及 pending 前后计划；旧记录缺字段视为空。
+  完整 Apply 同步时原子 flush 本表两条链并重建规则引用，仅为新增用户创建命名计数器、删除离开用户的
+  计数器；原有用户的 counter 对象不重置。恢复/启动重放同样差量处理，卸载清理本表。
+  T7.1b 的配置/计划不变短路不触碰 nft。统计基链不参与“活动 INPUT 防火墙”的检测或端口放行。
+  nft 缺失/权限/语法失败不能静默降级；生效按原机制回滚，并提示安装 nftables/核对 NET_ADMIN 后重试。
+- 每 10 秒执行 `nft -j list counters table inet boxpanel_traffic`，不请求 Clash API。
+  每个面板进程第一次成功读取仅建立基线，避免重启重复计数；随后每用户、每方向累计非负差值。
+  某方向计数变小视为重建，以当前值计增量；新出现的用户以当前值计增量。未知用户忽略，
+  删除用户回收基线，读取失败保留基线和待写增量；非法 JSON/负数/重复/不完整计数对不推进基线。
+  uint64 超过 int64 时饱和处理。无生效用户时建立空基线，无需访问尚不存在的表。
+- 口径为**服务器与目标站点之间的 IP 层字节**：上传=服务器发出、下载=服务器收到，包含 IP/TCP/UDP
+  头、ACK 和重传，不含客户端到服务器的加密开销，也不含服务器自身 DNS 解析；与客户端显示可能相差
+  几个百分点，小包占比高/重传多时差异更大。既有历史计数保留，不追溯补算旧版漏计。
+  不是精确计费：面板停止期间至重启首次基线的用量不补算；系统重启/表被外部重建、用户计数器删除时
+  尚未采样的尾段无法恢复。正常存活计数器保留短连接完整累计值，采集暂时失败后可补差值。
 
-运行与一致性：
+运行与一致性（延续 T7.1/T7.1b）：
 
-- `internal/traffic` 共用一个调度循环，仅 Linux 生产 serve 启动；macOS/--dev 不采集、不自动生效。
-  每 5 秒请求持久化端口的 `http://127.0.0.1:<port>/connections`，Bearer secret 从读库取，
-  不通过环境代理、不跟随重定向，网络最多 3 秒、响应最多 16 MiB，不记录响应/凭证/连接目标。
-- 按连接 ID 与 start 保留当前存活连接的基线；首次观察到开始时间早于采集器启动的连接仅记基线，
-  防止面板进程重启后长连接重复计量；其余首次观察计入累计值，之后只计非负增量；
-  start 改变或计数回退视为新连接，避免重启后负数或尖峰；未知用户/非法计数忽略。
-  已关闭基线回收，采集失败保留基线与待写增量。流量加法按 int64 饱和，不转成 SQLite REAL。
-- **这是近似用量**：两次采集之间新建并关闭的短连接可能整个漏计，已观察连接关闭时的最后一段也会丢失；
-  实际重启会断开全部连接，无法从之后的快照补齐尾部；T7.1b 的配置不变写操作保留连接。采集不可用期间已关闭连接也会漏计。
-  不用于精确计费；面板/分享页提示「统计每 5 秒采集，可能略少于实际用量」。
 - 每 60 秒在同一个短写事务中批量 `traffic_up/down += 增量`，无网络、内核或防火墙操作；
   Flush 使用至多 1 秒 context（含写池排队），失败全部回滚、保留增量重试。
   SQLite BEGIN 的底层 busy timeout 仍沿用 §6；读请求继续走 T6.10 独立只读 WAL 池。
@@ -491,7 +497,7 @@ Hysteria2=true 读取，首次保存时写入，不修改已发布迁移。setup
 - 新迁移 `0002_user_traffic.sql` 追加 reset_day/reset_at/epoch 三列，旧用户默认 0、不自动重置，旧计数保留。
   epoch 为内部防重置竞争代号；新建用户用 crypto/rand 生成正初值，避免 SQLite 复用删除用户的 ID 后继承旧增量。
   手动/月度清零与 epoch+1 在同一 Apply 事务中提交。旧 epoch 增量落库时条件更新并丢弃，
-  同秒重复重置也不互相混淆。若极少数连接跨 epoch 存活，首次观察仅重建基线，不补记重置前字节。
+  同秒重复重置也不互相混淆。用户计数器跨 epoch 存续时，首次观察仅重建基线，不补记重置前字节。
 - Manager 每次成功 Apply 在同一事务保存 `settings.applied_users`（ID 数组，无启用入站时为空），
   与 apply_generation 一起提交/回滚，表示当前配置实际包含的用户。启动重新生效会补齐旧实例的此键。
   调度器每 30 秒检查到期/超额且仍在该数组中的用户，使用与 confgen 相同的 UserEligible 判定，
@@ -502,8 +508,8 @@ Hysteria2=true 读取，首次保存时写入，不修改已发布迁移。setup
 - `traffic_reset_day=1–28` 时，在 **UTC 本月该日 00:00 后**首次检查清零并生效，
   `traffic_reset_at >= 本月边界` 即不重复。0 关闭；停机跨月后只补本月已到的边界，不补每个错过月份。
   手动重置也更新 reset_at，因此当月边界后的手动清零会抑制当月再次自动清零。
-  月度清零在配置不变且内核运行时只提交 DB，不重启；可能跨 epoch 存活的连接按上述规则重建基线。
+  月度清零在配置不变且内核运行时只提交 DB，不重启；跨 epoch 存续的计数器按上述规则重建基线。
   月度清零不限 enabled，可能恢复仅因超额被移除的用户（恢复会改变配置，仍重启）；到期/手动禁用仍保持不可用。
   多用户清零、到期、超额共用一次 Apply；失败时计数、reset_at、epoch、applied_users 一起回滚。
 
-完整评审说明与验收记录见 [T7.1.md](T7.1.md) 和 [T7.1b.md](T7.1b.md)。无新依赖。
+完整评审说明与验收记录见 [T7.1c.md](T7.1c.md)；前序记录见 T7.1/T7.1b。无新依赖。

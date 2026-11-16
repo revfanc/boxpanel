@@ -38,10 +38,11 @@ type User struct {
 // Options supplies stable runtime inputs. Build never invents paths, secrets,
 // ports or a clock, and never reads certificates. File checks belong to apply.
 type Options struct {
-	Now            time.Time
-	Hysteria2TLS   map[int64]CertificateFiles // keyed by inbound ID
-	ClashAPIPort   int                        // binds only to 127.0.0.1
-	ClashAPISecret string
+	UserRoutingMarks bool // Linux production only; fixed per-user socket marks
+	Now              time.Time
+	Hysteria2TLS     map[int64]CertificateFiles // keyed by inbound ID
+	ClashAPIPort     int                        // binds only to 127.0.0.1
+	ClashAPISecret   string
 }
 
 type CertificateFiles struct {

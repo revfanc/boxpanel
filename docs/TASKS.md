@@ -756,9 +756,18 @@ sing-box 配置，已导入的设备可继续使用。本任务补齐两者，�
 - make lint test build 通过；审查者会在真机复测「下载 20 MB 应记账约 20 MB」。
 
 - **验收**：
-  - [ ] nft 规则、计数器同步与采集器实现及测试。
-  - [ ] 安装脚本与文档同步。
-  - [ ] make lint test build 通过。
+  - [x] nft 规则、计数器同步与采集器实现及测试（Linux 实际计数待具备条件的环境复跑）。
+  - [x] 安装脚本与文档同步。
+  - [ ] make lint test build 通过：lint/build、安装脚本 17 项、除 e2e 外全部 Go 包及前端 121 项通过；
+    完整 make test 已运行，两个回环仍因已知沙箱 DNS 通知 status 9 在内核启动时失败，未改动/跳过 TestLoopback。
+
+**T7.1c 实现与验证记录（2026-11-16）**：
+- 具体实现、官方 routing_mark/nftables 依据、规格补齐及验收结果见 [T7.1c.md](T7.1c.md)。
+- 独立 fwmark 范围与 nft 表，保留已有用户计数器、增删规则纳入原 Apply/pending/回滚/清理；
+  改为每 10 秒读取累计内核字节，保留 epoch/批次/调度及 T7.1b 不变短路。
+- macOS check 对 Linux marks 的限制明确验证；Linux 实测用例在隔离 network namespace 执行，
+  当前仅交叉编译通过，需 Linux root+nft 实测及审查者 20 MB 复验。
+- 无新依赖/迁移/供应链变更，未推进后续任务，未执行 commit/push/切换分支。
 
 ## M7 后续增强（MVP 之后，按需排期）
 
