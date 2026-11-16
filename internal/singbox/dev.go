@@ -11,7 +11,9 @@ import (
 // generate/check config, touch certificates/firewall/files, or restart services.
 // Restart, CLI apply and production never use this substitute.
 func (m *Manager) applyDevelopmentDBOnly(ctx context.Context, mutate Mutation) (result error) {
-	m.mu.Lock()
+	if err := m.lock(ctx); err != nil {
+		return err
+	}
 	defer m.mu.Unlock()
 	connection, err := m.db.Conn(ctx)
 	if err != nil {

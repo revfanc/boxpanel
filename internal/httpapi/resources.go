@@ -181,6 +181,13 @@ func noBody(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func (a *api) readDB() (*sql.DB, error) {
+	if a.opts.ReadDB != nil {
+		return a.opts.ReadDB, nil
+	}
+	return a.writeDB()
+}
+
+func (a *api) writeDB() (*sql.DB, error) {
 	if a.opts.DB == nil {
 		return nil, fmt.Errorf("resource database is unavailable; configure the database connection")
 	}

@@ -48,6 +48,7 @@ type savedState struct {
 }
 
 type Options struct {
+	ReadDB                            *sql.DB // independent reader for status requests
 	Dir, CertFile, KeyFile, Directory string
 	Dev                               bool
 	Now                               func() time.Time
@@ -311,7 +312,11 @@ func (m *Manager) Status(ctx context.Context) (Status, error) {
 	if m.opts.Dev {
 		return status, nil
 	}
-	mode, err := db.GetSetting(ctx, m.db, db.PanelTLSMode)
+	reader := m.opts.ReadDB
+	if reader == nil {
+		reader = m.db
+	}
+	mode, err := db.GetSetting(ctx, reader, db.PanelTLSMode)
 	if err != nil {
 		return status, err
 	}

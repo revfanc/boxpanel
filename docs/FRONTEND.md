@@ -85,6 +85,9 @@ createBrowserRouter(routes, { basename: BASE || "/" });
 - 二维码：`qrcode.react`。
 - 所有破坏性操作（删除节点/用户、重置 token）用 alert-dialog 二次确认，并说明后果。
 - 写操作期间按钮 loading；配置生效失败时展示 `error.message` + `hint`，`detail` 放在可展开区域。
+- T6.10：统一 ErrorNotice 对 `503 singbox_apply_timeout/singbox_applying` 显示「正在生效，请稍后刷新」，
+  提示核对用户与内核状态后重试，保留表单和限额输入；不显示网络错误、不自动重发写请求。
+  恢复失败的 500 继续显示服务端恢复建议；不把此状态描述为已恢复。
 
 ## 4. 引导流程（小白核心体验）
 

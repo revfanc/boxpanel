@@ -20,6 +20,7 @@
 | 409 | 端口被占用、名称重复 |
 | 422 | `sing-box check` 未通过（配置未生效，DB 已回滚） |
 | 429 | 限流（`rate_limited`）或哈希计算繁忙（`auth_busy`），带 Retry-After 秒数 |
+| 503 | 生效总预算耗尽（`singbox_apply_timeout`）或诊断忙（`singbox_applying`），带 Retry-After: 1；刷新核对后重试 |
 | 500 | 内部错误（`internal_error`）或 sing-box 生效失败；恢复失败有独立错误码，不声称已恢复 |
 
 时间统一为 unix 秒；流量统一为字节。
@@ -202,6 +203,13 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
   替换/事务收尾失败为 `500 singbox_apply_failed`。以上失败均不提交 DB，并尝试恢复文件、服务和规则。
   恢复本身失败统一为 `500 singbox_rollback_failed`，保留恢复记录并提示人工检查后再运行 apply。
   COMMIT 报错且无法重新读取 DB 核对时，明确提示数据库状态无法确认，不声称已回滚。
+- T6.10：Apply 正常工作（含锁排队）最多 12 秒，独立恢复最多 12 秒，入口起总预算 24 秒，
+  低于 HTTP 写超时 30 秒。超时且恢复成功/尚未换文件返回 `503 singbox_apply_timeout`，
+  `Retry-After: 1`；提示稍后刷新用户/内核状态，确认结果后再重试，禁止前端自动重发写操作。
+  恢复失败/DB 状态不确定仍返回 500，保留原错误码及恢复提示，不声称成功。
+  logs/config 在同进程生效时立即返回 `503 singbox_applying`；跨进程锁最多等待 100ms。
+  普通订阅、会话及面板数据读取走独立只读 WAL 池，生效中返回上一份已提交快照，提交后可见新值。
+  sing-box 1.14.4 SIGHUP 会关闭并重建实例，不能保持连接；用户变更仍按 SPEC §7 例外重启。
 - `error.detail` 只含脱敏后的 check 输出或失败时 journal 最近 30 行；日志和错误原因不直接透传。
   DB/存储等内部错误不返回原始内容。生成错误无内核输出时可为空 detail，仍有修复建议。
 - logs 的 lines 默认 200，必须为单个 1–1000 的整数，否则 400。使用固定受管 unit、

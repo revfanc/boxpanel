@@ -128,16 +128,48 @@ cleanup() {
     exit "$status"
 }
 
+# Retry only lock contention, including apt's lists/archive locks which are not
+# covered by DPkg::Lock::Timeout. Never remove locks or stop the owning process.
+package_command() {
+    local output status waited=0 started=$SECONDS elapsed delay
+    while :; do
+        if output=$(LC_ALL=C DEBIAN_FRONTEND=noninteractive "$@" 2>&1); then
+            [[ -z $output ]] || say "$output"
+            return
+        else
+            status=$?
+        fi
+        case "$output" in
+            *'Permission denied'*|*'Read-only file system'*)
+                say "$output" >&2
+                die '系统包目录权限不足；请检查 root 权限和文件系统状态后重试。' ;;
+            *'Could not get lock'*'Resource temporarily unavailable'*|*'Could not get lock'*'is held by process'*|*'Unable to acquire the dpkg frontend lock'*|*'Failed to obtain the transaction lock'*|*'Another app is currently holding the'*lock*|*'another copy is running'*|*' already locked by '[0-9]*|*'clean command already locked'*) ;;
+            *) say "$output" >&2; die "系统依赖安装失败（退出码 ${status}）；请检查软件源、网络和包管理器状态后重试。" ;;
+        esac
+        elapsed=$((SECONDS - started))
+        ((elapsed >= waited)) || elapsed=$waited
+        if ((elapsed >= 300)); then
+            say "$output" >&2
+            die '等待软件管理器锁已超过 5 分钟；请等待系统自动更新完成，检查 apt-daily/dnf 服务状态后重新运行安装命令。'
+        fi
+        say '系统正在自动更新软件，请稍候（最多等待 5 分钟）。'
+        delay=$((300 - elapsed))
+        ((delay <= 5)) || delay=5
+        sleep "$delay"
+        waited=$((elapsed + delay))
+    done
+}
+
 install_dependencies() {
     local packages=(curl tar ca-certificates)
     if ! command -v nft >/dev/null && ! { command -v iptables >/dev/null && command -v ip6tables >/dev/null; }; then
         packages+=(nftables)
     fi
     if [[ $PACKAGE_MANAGER == apt ]]; then
-        DEBIAN_FRONTEND=noninteractive apt-get update
-        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}" iproute2 kmod coreutils
+        package_command apt-get -o DPkg::Lock::Timeout=0 update
+        package_command apt-get -o DPkg::Lock::Timeout=0 install -y --no-install-recommends "${packages[@]}" iproute2 kmod coreutils
     else
-        dnf install -y "${packages[@]}" iproute kmod coreutils
+        package_command dnf --setopt=exit_on_lock=True install -y "${packages[@]}" iproute kmod coreutils
     fi
 }
 

@@ -111,7 +111,7 @@ func (a *api) setupPut(w http.ResponseWriter, r *http.Request) {
 			publicHost = domain
 		}
 	}
-	conn, err := a.readDB()
+	conn, err := a.writeDB()
 	if err != nil {
 		a.resourceError(w, err)
 		return

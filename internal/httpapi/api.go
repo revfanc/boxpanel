@@ -34,6 +34,7 @@ type Options struct {
 	System         System
 	Singbox        Singbox
 	DB             *sql.DB
+	ReadDB         *sql.DB // independent read-only WAL pool
 	Applier        Applier
 	RealityProbe   reality.Probe
 	ListeningPorts func(context.Context) (map[sysinfo.Socket]bool, error)

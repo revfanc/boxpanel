@@ -35,6 +35,7 @@ type Session struct {
 
 type Service struct {
 	db        *sql.DB
+	reader    *sql.DB
 	now       func() time.Time
 	limiter   *Limiter
 	dummyHash string
@@ -44,6 +45,11 @@ type Service struct {
 }
 
 func New(conn *sql.DB, now func() time.Time) (*Service, error) {
+	return NewWithReader(conn, conn, now)
+}
+
+// NewWithReader keeps session checks independent of long configuration writes.
+func NewWithReader(conn, reader *sql.DB, now func() time.Time) (*Service, error) {
 	if now == nil {
 		now = time.Now
 	}
@@ -55,7 +61,7 @@ func New(conn *sql.DB, now func() time.Time) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Service{db: conn, now: now, limiter: NewLimiter(now), dummyHash: hash, hashing: make(chan struct{}, 1)}, nil
+	return &Service{db: conn, reader: reader, now: now, limiter: NewLimiter(now), dummyHash: hash, hashing: make(chan struct{}, 1)}, nil
 }
 
 func (s *Service) Login(ctx context.Context, ip, username, password, previousToken string) (Session, error) {
@@ -122,7 +128,7 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Admin, error)
 		return Admin{}, ErrSession
 	}
 	var admin Admin
-	err = s.db.QueryRowContext(ctx, `SELECT a.id, a.username FROM sessions s JOIN admins a ON a.id = s.admin_id
+	err = s.reader.QueryRowContext(ctx, `SELECT a.id, a.username FROM sessions s JOIN admins a ON a.id = s.admin_id
 		WHERE s.id = ? AND s.expires_at > ?`, token, s.now().Unix()).Scan(&admin.ID, &admin.Username)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Admin{}, ErrSession

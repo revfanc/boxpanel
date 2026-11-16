@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func sensitiveKey(key string) bool {
@@ -100,14 +101,21 @@ func (m *Manager) Logs(ctx context.Context, lines int) ([]string, error) {
 	if lines < 1 || lines > 1000 {
 		return nil, fmt.Errorf("log lines must be between 1 and 1000")
 	}
-	m.mu.Lock()
+	if !m.mu.TryLock() {
+		return nil, ErrApplying
+	}
 	defer m.mu.Unlock()
-	unlock, err := lockApply(ctx, m.config+".lock")
+	lockCtx, stopLock := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer stopLock()
+	unlock, err := lockApply(lockCtx, m.config+".lock")
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, ErrApplying
+		}
 		return nil, err
 	}
 	defer unlock()
-	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := m.readDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, fmt.Errorf("read diagnostic credentials: %w", err)
 	}
@@ -141,10 +149,17 @@ func (m *Manager) Config(ctx context.Context) (json.RawMessage, error) {
 	if m.unsupported {
 		return nil, ErrUnsupported
 	}
-	m.mu.Lock()
+	if !m.mu.TryLock() {
+		return nil, ErrApplying
+	}
 	defer m.mu.Unlock()
-	unlock, err := lockApply(ctx, m.config+".lock")
+	lockCtx, stopLock := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer stopLock()
+	unlock, err := lockApply(lockCtx, m.config+".lock")
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, ErrApplying
+		}
 		return nil, err
 	}
 	defer unlock()
@@ -159,7 +174,7 @@ func (m *Manager) Config(ctx context.Context) (json.RawMessage, error) {
 	if json.Unmarshal(data, &value) != nil {
 		return nil, fmt.Errorf("decode current config; run boxpanel apply to regenerate it")
 	}
-	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := m.readDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, fmt.Errorf("read preview credentials: %w", err)
 	}

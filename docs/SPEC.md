@@ -145,7 +145,7 @@ MVP 规则：**所有启用的用户加入所有启用的入站**。超额/过�
 - 打开时启用持久化的 `journal_mode=WAL` 并检查返回值；新库并发切换 WAL 时可能立即遇到
   `SQLITE_BUSY`，仅对此错误重试，等待窗口为 5 秒且支持 context 取消。
   每个连接通过驱动的 DSN 参数设置 `foreign_keys=on`、`busy_timeout=5000`（毫秒），
-  连接池最多保留/打开一个连接。事务使用 `BEGIN IMMEDIATE`，
+  写连接池最多保留/打开一个连接；T6.10 的独立只读池见 §7 补充。写事务使用 `BEGIN IMMEDIATE`，
   在读取后续写操作依赖的数据前取得写锁；跨连接竞争等待至多 5 秒。
   参数语义见 [驱动文档](https://pkg.go.dev/modernc.org/sqlite@v1.38.2#Driver.Open) 和
   [SQLite PRAGMA 文档](https://www.sqlite.org/pragma.html)。
@@ -210,9 +210,9 @@ MVP 规则：**所有启用的用户加入所有启用的入站**。超额/过�
   `singbox_rollback_failed`，明确提示服务/防火墙可能尚未恢复；保留 `.bak` / `.pending`，
   下次生效先重试恢复，恢复仍失败则拒绝继续修改。恢复文件失败时尽力停止新服务。
 - 请求取消不会提前释放 DB 写锁：事务生命周期独立于请求，正常工作仍检查请求 context；
-  恢复使用独立最多 30 秒的 context。外部命令沿用每条最多 5 秒、输出最多 1 MiB 的 runner。
+  恢复使用独立 context（T6.10 收敛为最多 12 秒，总预算见下文）。外部命令沿用每条最多 5 秒、输出最多 1 MiB 的 runner。
 - `.lock` 是持久的锁文件，不删除；进程退出由内核释放 flock，不需人工清理陈旧锁。
-  同一受管配置必须对应同一 DB。持有事务期间其他 DB 操作可能等待；跨连接写竞争仍受
+  同一受管配置必须对应同一 DB。持有事务期间其他写操作可能等待，只读请求走独立连接；跨连接写竞争仍受
   SQLite 的 5 秒 busy timeout 限制，超时需重试。
 - 事务独占一个 `sql.Conn`。COMMIT 出错（例如延迟外键约束）后，丢弃并关闭底层连接，
   强制清理 SQLite 仍可能打开的事务；再用新连接核对 generation。确认未提交则恢复旧状态；
@@ -236,6 +236,37 @@ MVP 规则：**所有启用的用户加入所有启用的入站**。超额/过�
   `.tools/bin/sing-box check` 校验双入站，服务控制/防火墙仍为 fake，无工具时 Skip。
   T3.3 另在 `internal/e2e` 启动临时服务端/客户端进程验证两协议的离线回环，不调用生产服务控制；
   测试专用配置调整与执行边界见 CONFIG.md/INSTALL.md 的 T3.3 说明。
+
+### T6.10 生效期间的读取与超时
+
+- `serve` 在迁移写库之后，对同一绝对文件路径调用 `db.OpenReader`，退出时先关闭读池再关闭写池。
+  读池不迁移、不创建库，要求已启用 WAL；使用 `mode=ro`、`query_only=1`、`foreign_keys=1`、
+  `busy_timeout=500`，最多 8 个连接，事务使用默认 deferred BEGIN，不能使用写库的 `_txlock=immediate`。
+  仅将 `TxOptions.ReadOnly` 加在原写库上不足以解除 BEGIN IMMEDIATE 的锁竞争。
+- 公开订阅（包括 sub_path 路由判断）、认证会话检查、用户/入站/规则/设置/引导状态读取、
+  links/preview 和证书状态使用读池；多表读取保留单事务快照。生效未提交时返回上一份已提交数据，
+  提交后新请求看到新数据；不返回候选用户或 token。不延长读事务到证书文件读取、网络或系统命令。
+  Apply/资源 mutation、登录/凭证更新及普通设置写入继续使用写池；不缩短 Apply 的事务锁范围。
+- 生效期间上述数据读取不因 Apply 排队超过 1 秒。日志和磁盘配置诊断仍需稳定配置/凭证视图，
+  对进程锁使用 TryLock、跨进程 flock 最多等待 100ms；忙时立即返回
+  `503 singbox_applying` + Retry-After=1，提示稍后刷新，不暴露候选配置或未经完整脱敏的日志。
+- Apply 的进程锁等待、flock 等待和正常工作共用最多 **12 秒**预算。已开始的 SQLite 写事务
+  生命周期仍独立于请求取消，以免在恢复前释放写锁；取连接用工作 context，BEGIN 的 SQLite
+  busy timeout 仍为 5 秒。已有 pending 的核对/恢复也受总预算约束，恢复未完成不能开始新变更。
+- 失败恢复使用独立于请求取消、最多 **12 秒**的 context；正常工作与恢复共用从 Apply 入口计算的
+  **24 秒绝对截止时间**，小于 HTTP WriteTimeout=30 秒。COMMIT 失败后的 generation 核对
+  也在此截止时间内。优先恢复服务/文件/防火墙，再用剩余预算（至多 1 秒）读取脱敏 journal。
+  本地文件同步与 SQLite 调用完成后仍检查截止时间；不启动脱离请求的后台资源写入。
+- 正常预算耗尽、恢复成功（或尚未替换配置）时返回 `503 singbox_apply_timeout`，数据库不提交，
+  提示刷新核对后再重试。恢复失败/结果无法确认仍优先返回原 `500 singbox_rollback_failed` 语义，
+  保留 `.pending/.bak`，后续 Apply 先恢复；不能用 503 声称已恢复。check 的子命令失败/5 秒健康检查
+  失败本身不等于总时限耗尽，原 422/500 契约保持。
+- sing-box **1.14.4** 没有经官方确认可保持连接的用户配置热替换路径。
+  [官方服务管理文档](https://sing-box.sagernet.org/installation/package-manager/#service-management)
+  提供 restart；[锁定版本 SIGHUP 处理源码](https://github.com/SagerNet/sing-box/blob/v1.14.4/cmd/sing-box/cmd_run.go#L178-L213)
+  先 check，再 cancel/Close 旧实例，然后重新 create，仍会断开旧连接。
+  因此不把 SIGHUP 当作无损重载，按 T6.10 允许的例外保留 restart/check/回滚；连接无损更新仍是限制。
+  不新增内核字段、动态用户 API 或 T7.1 流量采样/封禁。
 
 ## 8. 安全基线
 

@@ -202,3 +202,56 @@ func TestSchemaConstraintsAndDefaults(t *testing.T) {
 		t.Fatalf("session cascade: count=%d err=%v", count, err)
 	}
 }
+
+func TestReaderDuringApplyTransaction(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "panel # 中文?.db")
+	writer := openTestPath(t, path)
+	mustExec(t, writer, "INSERT INTO settings VALUES ('reader_probe','1')")
+	reader, err := OpenReader(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	reader.SetMaxIdleConns(0) // verify pragmas on replacement connections too
+	tx, err := writer.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	mustExec(t, tx, "UPDATE settings SET value='2' WHERE key='reader_probe'")
+	for range 2 {
+		readCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		snapshot, err := reader.BeginTx(readCtx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		var value string
+		err = snapshot.QueryRowContext(readCtx, "SELECT value FROM settings WHERE key='reader_probe'").Scan(&value)
+		if err != nil || value != "1" {
+			t.Fatalf("dirty/blocked read: %q %v", value, err)
+		}
+		if _, err := snapshot.ExecContext(readCtx, "UPDATE settings SET value='3'"); err == nil {
+			t.Fatal("reader allowed a write")
+		}
+		snapshot.Rollback()
+		cancel()
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var value string
+	if err := reader.QueryRowContext(ctx, "SELECT value FROM settings WHERE key='reader_probe'").Scan(&value); err != nil || value != "2" {
+		t.Fatalf("reader did not see commit: %q %v", value, err)
+	}
+}
+
+func TestReaderRequiresExistingWAL(t *testing.T) {
+	for _, path := range []string{"", ":memory:", filepath.Join(t.TempDir(), "missing.db")} {
+		if reader, err := OpenReader(context.Background(), path); err == nil {
+			reader.Close()
+			t.Fatal("reader accepted missing database")
+		}
+	}
+}

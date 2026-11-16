@@ -73,7 +73,21 @@ if [[ $url == */latest ]]; then echo "https://github.com/revfanc/boxpanel/releas
 EOF
     cat >"$FIXTURE/bin/apt-get" <<'EOF'
 #!/usr/bin/env bash
-echo "apt-get $*" >>"$FIXTURE/calls"
+echo "${0##*/} $*" >>"$FIXTURE/calls"
+if [[ -f $FIXTURE/package-error ]]; then cat "$FIXTURE/package-error"; exit 1; fi
+if [[ -f $FIXTURE/package-locked && ( -z ${LOCK_OPERATION:-} || " $* " == *" ${LOCK_OPERATION} "* ) ]]; then
+    count=$(cat "$FIXTURE/package-locked")
+    if ((count > 0)); then
+        echo $((count - 1)) >"$FIXTURE/package-locked"
+        if [[ ${0##*/} == dnf ]]; then
+            echo 'metadata already locked by 123'
+            exit 200
+        else
+            echo 'E: Could not get lock /var/lib/apt/lists/lock. It is held by process 123 (apt-get)'
+        fi
+        exit 1
+    fi
+fi
 EOF
     cp "$FIXTURE/bin/apt-get" "$FIXTURE/bin/dnf"
     # Avoid sleeps or host firewall discovery in tests.
@@ -257,12 +271,72 @@ test_download_safety() {
     [[ $(find "$FIXTURE/local/bin" -name '.boxpanel-*' | wc -l | tr -d ' ') == 0 ]] || fail 'staging leaked'
 }
 
+test_package_locks() {
+    echo 2 >"$FIXTURE/package-locked"
+    run_install --non-interactive --version v0.1.0
+    contains "$FIXTURE/output" '系统正在自动更新软件，请稍候'
+    contains "$FIXTURE/calls" 'apt-get -o DPkg::Lock::Timeout=0 install'
+    [[ $(grep -c 'apt-get .* update' "$FIXTURE/calls") == 3 ]] || fail 'apt lock not retried'
+}
+
+test_apt_install_lock() {
+    export LOCK_OPERATION=install
+    echo 2 >"$FIXTURE/package-locked"
+    run_install --non-interactive --version v0.1.0
+    contains "$FIXTURE/output" '系统正在自动更新软件，请稍候'
+    [[ $(grep -c 'apt-get .* install' "$FIXTURE/calls") == 3 ]] || fail 'apt install lock not retried'
+    [[ $(grep -c 'apt-get .* update' "$FIXTURE/calls") == 1 ]] || fail 'apt update retried without lock'
+}
+
+test_package_lock_timeout() {
+    echo 100 >"$FIXTURE/package-locked"
+    reject --non-interactive --version v0.1.0
+    contains "$FIXTURE/output" '等待软件管理器锁已超过 5 分钟'
+    contains "$FIXTURE/output" '检查 apt-daily/dnf 服务状态'
+    if grep -q '^curl ' "$FIXTURE/calls"; then fail 'downloaded after lock timeout'; fi
+    [[ $(grep -c '^apt-get ' "$FIXTURE/calls") == 61 ]] || fail 'lock wait not bounded'
+}
+
+test_dnf_locks() {
+    printf 'ID=rocky\nVERSION_ID="9"\n' >"$FIXTURE/os-release"
+    echo 2 >"$FIXTURE/package-locked"
+    run_install --non-interactive --version v0.1.0
+    contains "$FIXTURE/calls" 'dnf --setopt=exit_on_lock=True install'
+    contains "$FIXTURE/output" '系统正在自动更新软件，请稍候'
+    [[ $(grep -c '^dnf ' "$FIXTURE/calls") == 3 ]] || fail 'dnf lock not retried'
+}
+
+test_dnf_lock_timeout() {
+    printf 'ID=rocky\nVERSION_ID="9"\n' >"$FIXTURE/os-release"
+    echo 100 >"$FIXTURE/package-locked"
+    reject --non-interactive --version v0.1.0
+    contains "$FIXTURE/output" '等待软件管理器锁已超过 5 分钟'
+    [[ $(grep -c '^dnf ' "$FIXTURE/calls") == 61 ]] || fail 'dnf wait not bounded'
+    if grep -q '^curl ' "$FIXTURE/calls"; then fail 'downloaded after lock timeout'; fi
+}
+
+test_package_permission_error() {
+    printf '%s\n' 'E: Could not get lock /var/lib/dpkg/lock-frontend (13: Permission denied)' 'E: Unable to acquire the dpkg frontend lock' >"$FIXTURE/package-error"
+    reject --non-interactive --version v0.1.0
+    contains "$FIXTURE/output" '请检查 root 权限和文件系统状态'
+    absent "$FIXTURE/output" '系统正在自动更新软件'
+    [[ $(grep -c '^apt-get ' "$FIXTURE/calls") == 1 ]] || fail 'permission failure retried'
+}
+
+test_package_nonlock_error() {
+    echo 'E: repository unavailable' >"$FIXTURE/package-error"
+    reject --non-interactive --version v0.1.0
+    contains "$FIXTURE/output" '请检查软件源、网络和包管理器状态'
+    absent "$FIXTURE/output" '系统正在自动更新软件'
+    [[ $(grep -c '^apt-get ' "$FIXTURE/calls") == 1 ]] || fail 'non-lock failure retried'
+}
+
 if [[ ${1:-} == --case ]]; then
     fixture
     "test_$2"
     exit 0
 fi
-for scenario in install resume update uninstall rejections download_safety optional_bbr_and_lock piped_entry; do
+for scenario in install resume update uninstall rejections download_safety optional_bbr_and_lock piped_entry package_locks apt_install_lock package_lock_timeout dnf_locks dnf_lock_timeout package_permission_error package_nonlock_error; do
     # A separate bash process preserves errexit in the installer under test.
     output=$(mktemp)
     if bash "$0" --case "$scenario" >"$output" 2>&1; then

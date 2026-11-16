@@ -21,6 +21,7 @@ import (
 	"github.com/revfanc/boxpanel/internal/acme"
 	"github.com/revfanc/boxpanel/internal/app"
 	"github.com/revfanc/boxpanel/internal/auth"
+	"github.com/revfanc/boxpanel/internal/db"
 	"github.com/revfanc/boxpanel/internal/firewall"
 	"github.com/revfanc/boxpanel/internal/httpapi"
 	"github.com/revfanc/boxpanel/internal/singbox"
@@ -149,11 +150,16 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	if err != nil {
 		return fmt.Errorf("load panel settings (check the data directory and initialized database): %w", err)
 	}
-	service, err := auth.New(conn, nil)
+	reader, err := db.OpenReader(ctx, opts.paths.Database)
+	if err != nil {
+		return fmt.Errorf("prepare database reader: %w", err)
+	}
+	defer reader.Close()
+	service, err := auth.NewWithReader(conn, reader, nil)
 	if err != nil {
 		return fmt.Errorf("prepare authentication: %w", err)
 	}
-	manager, err := newApplyManager(conn, opts.paths, opts.core, singbox.ApplyOptions{Dev: opts.dev, DevDBOnly: opts.dev})
+	manager, err := newApplyManager(conn, opts.paths, opts.core, singbox.ApplyOptions{Dev: opts.dev, DevDBOnly: opts.dev, ReadDB: reader})
 	if err != nil {
 		return err
 	}
@@ -165,13 +171,13 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	if opts.dev {
 		logger.Warn("仅开发用：入站和用户修改只写 DB，不生成、校验或生效 sing-box 配置。")
 	}
-	store := &subscription.Store{DB: conn, Certificate: func(id int64, sni string) ([]byte, error) {
+	store := &subscription.Store{DB: reader, Certificate: func(id int64, sni string) ([]byte, error) {
 		hash := sha256.Sum256([]byte(sni))
 		return os.ReadFile(filepath.Join(filepath.Dir(opts.core.config), "certs", fmt.Sprintf("hy2-%d-%x.crt", id, hash[:8])))
 	}}
 	limiter := &subscription.Limiter{}
 	panel := &livePanel{ctx: ctx, host: opts.listenHost, port: cfg.WebPort, dev: opts.dev, logger: logger, grace: 2 * time.Second}
-	certificates, err := acme.New(ctx, conn, acme.Options{Dir: opts.paths.CertificateDir(), CertFile: opts.paths.CertFile, KeyFile: opts.paths.KeyFile, Directory: opts.acmeDirectory, Dev: opts.dev, Logger: logger, OpenPort: func(ctx context.Context) error {
+	certificates, err := acme.New(ctx, conn, acme.Options{ReadDB: reader, Dir: opts.paths.CertificateDir(), CertFile: opts.paths.CertFile, KeyFile: opts.paths.KeyFile, Directory: opts.acmeDirectory, Dev: opts.dev, Logger: logger, OpenPort: func(ctx context.Context) error {
 		if runtime.GOOS != "linux" {
 			return nil
 		}
@@ -181,7 +187,7 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 		return fmt.Errorf("prepare panel certificates: %w", err)
 	}
 	panel.build = func(settings httpapi.PanelSettings) (http.Handler, error) {
-		api := httpapi.New(service, httpapi.Options{WebPath: settings.WebPath, Dev: opts.dev, Logger: logger, System: system, Singbox: manager, DB: conn, Applier: manager, PanelPort: settings.WebPort, Subscriptions: store, PreparePanel: panel.prepare, Certificates: certificates})
+		api := httpapi.New(service, httpapi.Options{WebPath: settings.WebPath, Dev: opts.dev, Logger: logger, System: system, Singbox: manager, DB: conn, ReadDB: reader, Applier: manager, PanelPort: settings.WebPort, Subscriptions: store, PreparePanel: panel.prepare, Certificates: certificates})
 		spaHandler, err := spa.New(web.Assets, spa.Options{WebPath: settings.WebPath, Version: version, API: api})
 		if err != nil {
 			return nil, fmt.Errorf("prepare HTTP server: %w", err)

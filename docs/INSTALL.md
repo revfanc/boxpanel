@@ -49,6 +49,20 @@ uninstall：二次确认 → 停服务、删单元 → 清防火墙规则与端�
 
 脚本要求：幂等（重复执行 install 等于检测到已安装后提示改用 update）；`shellcheck` 无警告；不依赖 bash 4 以外的特性。
 
+### T6.10 系统包管理锁等待
+
+依赖安装遇到 apt/dnf 的锁占用时，每 5 秒重试，单条包管理操作的等待窗口最多 300 秒。
+等待期间提示「系统正在自动更新软件，请稍候」，超时建议等待更新结束、检查 apt-daily/dnf
+服务状态后重跑；不删除锁文件、不 kill 占锁进程。非锁错误立即失败并提示检查软件源、网络及包管理器。
+
+apt update 的 lists 锁及 archives 锁并不都受
+[`DPkg::Lock::Timeout`](https://github.com/Debian/apt/blob/main/apt-pkg/deb/debsystem.cc) 控制
+（[APT 官方问题记录](https://bugs.debian.org/1069167)）。因此统一使用外层 300 秒有界重试，
+显式 `DPkg::Lock::Timeout=0` 避免内部等待与外层窗口相加，并以 `LC_ALL=C` 的锁错误判定是否重试。
+dnf 使用官方 [`exit_on_lock=True`](https://dnf.readthedocs.io/en/latest/conf_ref.html#exit-on-lock)
+避免无限内置等待，进入同一重试窗口。离线测试覆盖 update/install 锁、释放后成功、apt/dnf
+持续占锁超时及非锁失败；sleep 使用替身，不实际等待五分钟、不操作宿主包管理器。
+
 ### T6.1 参数、重试与验证边界
 
 - 脚本兼容 macOS 自带 Bash 3.2 进行离线测试，真正安装仅支持 Linux/systemd + root。
@@ -334,7 +348,7 @@ make test                     # 工具存在时自动把 .tools/bin 加到 Go �
 受管二进制或服务单元。Hysteria2 材料相对配置目录保存，重启无需额外路径参数。
 `sing-box.json.lock` 不删除；`.pending` 由生效流程自动恢复/清理，不手工删除。
 若提示自动恢复失败，检查 `.bak`、受管服务 journal 和面板专用防火墙表/链，修复权限/端口后
-再次执行相同路径参数的 `boxpanel apply`。具体事务和恢复记录语义见 SPEC.md §7。
+再次执行相同路径参数的 `boxpanel apply`。具体事务、恢复记录以及 T6.10 的 12 秒工作/12 秒恢复/24 秒总预算见 SPEC.md §7。
 
 ### T3.2 面板监听与订阅
 

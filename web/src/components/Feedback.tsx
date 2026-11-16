@@ -6,12 +6,13 @@ import { zhCN } from '@/i18n/zh-CN'
 
 export function ErrorNotice({ error, retry }: { error: unknown; retry?: () => void }) {
   const known = error instanceof APIError ? error : null
+  const applying = known?.status === 503 && ['singbox_apply_timeout', 'singbox_applying'].includes(known.code)
   return (
     <Alert variant="destructive" role="alert" className="min-w-0 text-left [overflow-wrap:anywhere]">
       <AlertCircle aria-hidden="true" />
-      <AlertTitle>{known?.message ?? zhCN.errors.request}</AlertTitle>
+      <AlertTitle>{applying ? zhCN.errors.applying : known?.message ?? zhCN.errors.request}</AlertTitle>
       <AlertDescription className="min-w-0 space-y-2">
-        <p>{known?.hint ?? zhCN.errors.retryHint}</p>
+        <p>{applying ? zhCN.errors.applyingHint : known?.hint ?? zhCN.errors.retryHint}</p>
         {known?.retryAfter && <p>{zhCN.login.retryAfter(known.retryAfter)}</p>}
         {known?.detail && <details className="w-full min-w-0">
           <summary className="cursor-pointer">{zhCN.common.detail}</summary>

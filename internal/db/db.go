@@ -55,6 +55,37 @@ func Open(ctx context.Context, path string) (*sql.DB, error) {
 	return conn, nil
 }
 
+// OpenReader opens an existing WAL database without migration or write access.
+// Its deferred transactions take snapshots without competing for the writer lock.
+// The caller must close this pool before closing the writer.
+func OpenReader(ctx context.Context, path string) (*sql.DB, error) {
+	if path == "" || path == ":memory:" {
+		return nil, fmt.Errorf("open reader: provide an existing database path")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve reader path: %w", err)
+	}
+	uri := url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}
+	query := url.Values{"mode": {"ro"}, "_pragma": {"busy_timeout(500)", "foreign_keys(1)", "query_only(1)"}}
+	uri.RawQuery = query.Encode()
+	reader, err := sql.Open("sqlite", uri.String())
+	if err != nil {
+		return nil, fmt.Errorf("open database reader: %w", err)
+	}
+	reader.SetMaxOpenConns(8)
+	reader.SetMaxIdleConns(8)
+	var mode string
+	if err = reader.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&mode); err != nil || mode != "wal" {
+		reader.Close()
+		if err == nil {
+			err = fmt.Errorf("expected WAL journal mode")
+		}
+		return nil, fmt.Errorf("connect database reader (open and migrate the writer first): %w", err)
+	}
+	return reader, nil
+}
+
 func enableWAL(ctx context.Context, conn *sql.DB) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

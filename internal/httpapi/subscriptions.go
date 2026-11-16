@@ -83,7 +83,7 @@ func (a *api) rulesPut(w http.ResponseWriter, r *http.Request) {
 	if input.CustomProxy == nil {
 		input.CustomProxy = []string{}
 	}
-	conn, err := a.readDB()
+	conn, err := a.writeDB()
 	if err != nil {
 		a.resourceError(w, err)
 		return

@@ -225,6 +225,11 @@ func (a *api) settingsPut(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
+		conn, err := a.writeDB()
+		if err != nil {
+			a.resourceError(w, err)
+			return
+		}
 		tx, err := conn.BeginTx(r.Context(), nil)
 		if err != nil {
 			a.resourceError(w, err)

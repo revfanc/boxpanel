@@ -25,6 +25,12 @@ import (
 )
 
 var ErrUnsupported = errors.New("sing-box management requires Linux without --dev")
+var ErrApplying = errors.New("configuration apply is in progress; refresh shortly")
+
+// Apply uses at most 12s for work and 12s for recovery, below HTTP write timeout.
+const ApplyTimeout = 12 * time.Second
+const RecoveryTimeout = 12 * time.Second
+
 var ErrNoConfig = errors.New("no applied sing-box configuration")
 
 type ApplyFiles interface {
@@ -36,8 +42,11 @@ type FirewallSync interface {
 }
 
 type ApplyOptions struct {
-	OS  string
-	Dev bool
+	ReadDB *sql.DB // independent WAL reader for diagnostics
+	// ApplyTimeout and RecoveryTimeout can only shorten the production budgets.
+	ApplyTimeout, RecoveryTimeout time.Duration
+	OS                            string
+	Dev                           bool
 	// DevDBOnly is an explicit development substitute for T3 resource writes.
 	// It requires Dev, accepts non-nil mutations only, and never applies config.
 	DevDBOnly      bool
@@ -51,17 +60,19 @@ type ApplyOptions struct {
 	HealthTimeout time.Duration
 }
 type Manager struct {
-	db             *sql.DB
-	binary, config string
-	runner         host.Runner
-	controller     Controller
-	firewall       FirewallSync
-	files          ApplyFiles
-	now            func() time.Time
-	healthTimeout  time.Duration
-	unsupported    bool
-	devDBOnly      bool
-	mu             sync.Mutex
+	db                            *sql.DB
+	readDB                        *sql.DB
+	applyTimeout, recoveryTimeout time.Duration
+	binary, config                string
+	runner                        host.Runner
+	controller                    Controller
+	firewall                      FirewallSync
+	files                         ApplyFiles
+	now                           func() time.Time
+	healthTimeout                 time.Duration
+	unsupported                   bool
+	devDBOnly                     bool
+	mu                            sync.Mutex
 }
 
 type ApplyError struct {
@@ -118,7 +129,16 @@ func NewManager(conn *sql.DB, opts ApplyOptions) (*Manager, error) {
 	if opts.HealthTimeout <= 0 || opts.HealthTimeout > 5*time.Second {
 		opts.HealthTimeout = 5 * time.Second
 	}
-	return &Manager{db: conn, binary: opts.Binary, config: config, runner: opts.Runner, controller: opts.Controller, firewall: opts.Firewall, files: opts.Files, now: opts.Now, healthTimeout: opts.HealthTimeout, unsupported: opts.Dev || opts.OS != "linux", devDBOnly: opts.DevDBOnly}, nil
+	if opts.ReadDB == nil {
+		opts.ReadDB = conn
+	}
+	if opts.ApplyTimeout <= 0 || opts.ApplyTimeout > ApplyTimeout {
+		opts.ApplyTimeout = ApplyTimeout
+	}
+	if opts.RecoveryTimeout <= 0 || opts.RecoveryTimeout > RecoveryTimeout {
+		opts.RecoveryTimeout = RecoveryTimeout
+	}
+	return &Manager{db: conn, readDB: opts.ReadDB, applyTimeout: opts.ApplyTimeout, recoveryTimeout: opts.RecoveryTimeout, binary: opts.Binary, config: config, runner: opts.Runner, controller: opts.Controller, firewall: opts.Firewall, files: opts.Files, now: opts.Now, healthTimeout: opts.HealthTimeout, unsupported: opts.Dev || opts.OS != "linux", devDBOnly: opts.DevDBOnly}, nil
 }
 
 // Mutation must use only tx for DB access. Do not commit, rollback, or perform
@@ -159,13 +179,31 @@ type pendingApply struct {
 }
 
 func (m *Manager) Apply(ctx context.Context, mutate Mutation) (result error) {
+	// Queueing, flock and work share one deadline; recovery retains an independent
+	// bounded deadline even when the request is cancelled. Never detach a write.
+	recoveryBase, stopRecovery := context.WithTimeout(context.WithoutCancel(ctx), m.applyTimeout+m.recoveryTimeout)
+	defer stopRecovery()
+	ctx, cancelWork := context.WithTimeout(ctx, m.applyTimeout)
+	defer cancelWork()
+	defer func() {
+		if result != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			var e *ApplyError
+			if errors.As(result, &e) {
+				e.Code = "singbox_apply_timeout"
+			} else {
+				result = &ApplyError{Code: "singbox_apply_timeout", cause: result}
+			}
+		}
+	}()
 	if m.devDBOnly && mutate != nil {
 		return m.applyDevelopmentDBOnly(ctx, mutate)
 	}
 	if m.unsupported {
 		return ErrUnsupported
 	}
-	m.mu.Lock()
+	if err := m.lock(ctx); err != nil {
+		return err
+	}
 	defer m.mu.Unlock()
 	unlock, err := lockApply(ctx, m.config+".lock")
 	if err != nil {
@@ -179,7 +217,7 @@ func (m *Manager) Apply(ctx context.Context, mutate Mutation) (result error) {
 	// Cancellation must not make database/sql automatically release it early.
 	txctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
-	connection, err := m.db.Conn(txctx)
+	connection, err := m.db.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("reserve config connection: %w", err)
 	}
@@ -194,7 +232,7 @@ func (m *Manager) Apply(ctx context.Context, mutate Mutation) (result error) {
 			result = &ApplyError{Code: "singbox_rollback_failed", RollbackFailed: true, DatabaseUncertain: true, cause: errors.Join(result, e)}
 		}
 	}()
-	if err := m.recoverPending(txctx, tx); err != nil {
+	if err := m.recoverPending(recoveryBase, tx); err != nil {
 		return err
 	}
 	_, oldSecrets, err := snapshot(ctx, tx)
@@ -268,10 +306,12 @@ func (m *Manager) Apply(ctx context.Context, mutate Mutation) (result error) {
 	}
 	// From this point every error must restore both external state and DB.
 	fail := func(code string, cause error) error {
-		recoveryCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		recoveryCtx, stop := context.WithTimeout(recoveryBase, m.recoveryTimeout)
 		defer stop()
-		lines, _ := m.journal(recoveryCtx, 30)
 		recovery := m.restore(recoveryCtx, pending)
+		diagnosticCtx, stopDiagnostic := context.WithTimeout(recoveryCtx, time.Second)
+		lines, _ := m.journal(diagnosticCtx, 30)
+		stopDiagnostic()
 		if recovery == nil {
 			recovery = m.removePending()
 		}
@@ -301,7 +341,7 @@ func (m *Manager) Apply(ctx context.Context, mutate Mutation) (result error) {
 		// deferred foreign key). Reserve this connection so no other request can
 		// receive its still-open transaction; close it to force rollback.
 		discardConnection(connection)
-		recoveryCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		recoveryCtx, stop := context.WithTimeout(recoveryBase, min(5*time.Second, m.recoveryTimeout))
 		generation, readErr := db.GetSetting(recoveryCtx, m.db, db.ApplyGeneration)
 		stop()
 		if readErr != nil && !errors.Is(readErr, sql.ErrNoRows) {
@@ -382,7 +422,7 @@ func (m *Manager) recoverPending(ctx context.Context, tx *sql.Tx) error {
 		return err
 	}
 	if generation != p.ID {
-		recovery, cancel := context.WithTimeout(ctx, 30*time.Second)
+		recovery, cancel := context.WithTimeout(ctx, m.recoveryTimeout)
 		defer cancel()
 		if err := m.restore(recovery, p); err != nil {
 			return &ApplyError{Code: "singbox_recovery_failed", RollbackFailed: true, cause: err}
@@ -424,4 +464,23 @@ func randomID() (string, error) {
 // Closing SQLite rolls back any transaction left open by a failed COMMIT.
 func discardConnection(connection *sql.Conn) {
 	_ = connection.Raw(func(any) error { return driver.ErrBadConn })
+}
+
+// lock keeps queued requests inside the same apply budget.
+func (m *Manager) lock(ctx context.Context) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("wait for config apply: %w", err)
+		}
+		if m.mu.TryLock() {
+			return nil
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("wait for config apply: %w", ctx.Err())
+		case <-timer.C:
+		}
+	}
 }

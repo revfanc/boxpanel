@@ -64,6 +64,9 @@ func (a *api) singboxConfig(w http.ResponseWriter, r *http.Request) {
 func (a *api) singboxError(w http.ResponseWriter, err error) {
 	var apply *singbox.ApplyError
 	switch {
+	case errors.Is(err, singbox.ErrApplying):
+		w.Header().Set("Retry-After", "1")
+		writeError(w, 503, "singbox_applying", "正在生效，请稍后刷新", "请稍等后刷新状态；不要重复提交，配置诊断将在生效完成后恢复。")
 	case errors.Is(err, singbox.ErrUnsupported):
 		writeError(w, 409, "system_unsupported", "当前环境不支持 sing-box 生效操作", "请在 Linux VPS 上关闭 --dev 后重试；本机可用 make tools 校验配置。")
 	case errors.Is(err, singbox.ErrNoConfig):
@@ -77,6 +80,12 @@ func (a *api) singboxError(w http.ResponseWriter, err error) {
 			status = 422
 			message = "配置生成或校验未通过，数据库修改未提交"
 			hint = "请检查入站、用户及证书配置，修正后重新生效。"
+		}
+		if code == "singbox_apply_timeout" {
+			status = 503
+			message = "配置生效超时，数据库修改未提交"
+			hint = "请稍后刷新用户和内核状态；确认未保存后再重试，持续超时请检查 systemd 与防火墙。"
+			w.Header().Set("Retry-After", "1")
 		}
 		if apply.RollbackFailed {
 			status = 500

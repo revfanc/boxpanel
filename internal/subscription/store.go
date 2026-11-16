@@ -181,7 +181,7 @@ func (s *Store) Load(ctx context.Context, id int64, token *string) (Data, error)
 		return d, fmt.Errorf("finish subscription snapshot: %w", err)
 	}
 	// Certificate files are immutable and named by inbound ID and SNI. Read
-	// public PEM only after releasing the single DB connection; never the key.
+	// public PEM only after releasing the snapshot connection; never the key.
 	for i := range d.Nodes {
 		n := &d.Nodes[i]
 		if n.Hysteria2 == nil {
