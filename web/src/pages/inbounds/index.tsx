@@ -25,12 +25,13 @@ export function InboundsPage() {
       {query.data.map((node) => <Panel key={node.id} title={node.remark || node.tag} hint={node.tag}>
         <div className="flex flex-wrap gap-2"><Badge variant="secondary">{node.protocol === 'vless_reality' ? t.inbounds.reality : t.inbounds.hysteria2}</Badge><Badge variant={node.enabled ? 'default' : 'outline'}>{node.enabled ? t.common.enabled : t.common.disabled}</Badge></div>
         <p className="text-sm">{t.inbounds.port}: {node.port} / {node.protocol === 'vless_reality' ? 'TCP' : 'UDP'}</p>
+        {!node.enabled && <p className="text-sm text-muted-foreground">{t.common.applyHint}</p>}
         <div className="flex flex-wrap gap-2"><Button variant="outline" asChild><Link to={`/inbounds/${node.id}`}>{t.common.edit}</Link></Button>
           <Button variant="outline" disabled={operation.pending} onClick={() => { operation.reset(); if (node.enabled) setAction({ node, kind: 'disable' }); else toggle(node) }}>{operation.pending ? t.common.working : node.enabled ? t.common.disable : t.common.enable}</Button>
           <Button variant="destructive" disabled={operation.pending} onClick={() => { operation.reset(); setAction({ node, kind: 'delete' }) }}>{t.common.delete}</Button></div>
       </Panel>)}
     </div>}
-    <Confirm open={!!action} onOpenChange={(open) => { if (!open) setAction(null) }} title={action?.kind === 'delete' ? t.inbounds.deleteTitle : t.common.disable} description={<>{action?.node.remark || action?.node.tag}<br />{action?.kind === 'delete' ? t.inbounds.deleteHint : t.common.disableHint}</>} pending={operation.pending} error={operation.error} onConfirm={() => {
+    <Confirm open={!!action} onOpenChange={(open) => { if (!open) setAction(null) }} title={action?.kind === 'delete' ? t.inbounds.deleteTitle : t.common.disable} description={<>{action?.node.remark || action?.node.tag}<br />{action?.kind === 'delete' ? t.inbounds.deleteHint : t.common.disableHint}{action?.node.enabled && <><br />{t.common.applyHint}</>}</>} pending={operation.pending} error={operation.error} onConfirm={() => {
       if (!action) return
       if (action.kind === 'disable') toggle(action.node)
       else void operation.run(() => api<void>(`/inbounds/${action.node.id}`, { method: 'DELETE' }), async () => { setAction(null); await refreshResources(client) })

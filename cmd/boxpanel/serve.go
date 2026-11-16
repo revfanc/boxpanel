@@ -28,6 +28,7 @@ import (
 	"github.com/revfanc/boxpanel/internal/spa"
 	"github.com/revfanc/boxpanel/internal/subscription"
 	"github.com/revfanc/boxpanel/internal/sysinfo"
+	"github.com/revfanc/boxpanel/internal/traffic"
 	"github.com/revfanc/boxpanel/web"
 	"time"
 )
@@ -221,6 +222,13 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	workerCtx, cancelWorker := context.WithCancel(ctx)
 	workerDone := make(chan struct{})
 	go func() { defer close(workerDone); certificates.Run(workerCtx) }()
-	defer func() { cancelWorker(); <-workerDone }()
+	trafficDone := make(chan struct{})
+	if !opts.dev && runtime.GOOS == "linux" {
+		scheduler := traffic.NewScheduler(traffic.NewCollector(conn, reader, nil), manager, nil, logger)
+		go func() { defer close(trafficDone); scheduler.Run(workerCtx) }()
+	} else {
+		close(trafficDone)
+	}
+	defer func() { cancelWorker(); <-workerDone; <-trafficDone }()
 	return panel.run(listener, handler)
 }

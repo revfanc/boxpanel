@@ -4,10 +4,10 @@ import { queryKeys } from '@/lib/query'
 import type { Inbound, User, RulesSettings, SystemCheck } from '@/types/api'
 
 export const inboundsQuery = queryOptions({ queryKey: queryKeys.inbounds, queryFn: ({ signal }) => api<Inbound[]>('/inbounds', { signal }) })
-export const usersQuery = queryOptions({ queryKey: queryKeys.users, queryFn: ({ signal }) => api<User[]>('/users', { signal }) })
+export const usersQuery = queryOptions({ queryKey: queryKeys.users, refetchInterval: 60_000, queryFn: ({ signal }) => api<User[]>('/users', { signal }) })
 export const rulesQuery = queryOptions({ queryKey: queryKeys.rules, queryFn: ({ signal }) => api<RulesSettings>('/rules', { signal }) })
 export const inboundQuery = (id: string) => queryOptions({ queryKey: [...queryKeys.inbounds, id], queryFn: ({ signal }) => api<Inbound>(`/inbounds/${id}`, { signal }) })
-export const userQuery = (id: string) => queryOptions({ queryKey: [...queryKeys.users, id], queryFn: ({ signal }) => api<User>(`/users/${id}`, { signal }) })
+export const userQuery = (id: string) => queryOptions({ queryKey: [...queryKeys.users, id], refetchInterval: 60_000, queryFn: ({ signal }) => api<User>(`/users/${id}`, { signal }) })
 export const unsupported = (error: unknown) => error instanceof APIError && error.status === 409 && error.code === 'system_unsupported'
 
 export async function refreshResources(client: QueryClient) {

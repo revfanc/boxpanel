@@ -17,6 +17,14 @@
     {
       "type": "direct",
       "tag": "direct"
+    },
+    {
+      "type": "direct",
+      "tag": "direct-u1"
+    },
+    {
+      "type": "direct",
+      "tag": "direct-u2"
     }
   ],
   "route": {
@@ -35,6 +43,20 @@
       {
         "ip_is_private": true,
         "action": "reject"
+      },
+      {
+        "auth_user": [
+          "alice"
+        ],
+        "outbound": "direct-u1",
+        "action": "route"
+      },
+      {
+        "auth_user": [
+          "bob"
+        ],
+        "outbound": "direct-u2",
+        "action": "route"
       }
     ],
     "final": "direct",

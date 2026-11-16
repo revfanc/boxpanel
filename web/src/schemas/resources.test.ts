@@ -33,3 +33,13 @@ it('validates settings path collisions and password length in characters and byt
   expect(passwordSchema.safeParse({ old_password: 'old', new_password: '🔐'.repeat(10) }).success).toBe(true)
   expect(passwordSchema.safeParse({ old_password: 'old', new_password: '🔐'.repeat(257) }).success).toBe(false)
 })
+
+it('validates and round-trips monthly reset days, preserving the default opt out', () => {
+  expect(userBody(userDefaults())).toHaveProperty('traffic_reset_day', 0)
+  for (const traffic_reset_day of [1, 16, 28]) {
+    const values = { ...userDefaults(), name: 'alice', traffic_reset_day }
+    expect(userSchema.safeParse(values).success).toBe(true)
+    expect(userBody(values)).toHaveProperty('traffic_reset_day', traffic_reset_day)
+  }
+  for (const traffic_reset_day of [-1, 29, 1.5, NaN]) expect(userSchema.safeParse({ ...userDefaults(), name: 'alice', traffic_reset_day }).success).toBe(false)
+})

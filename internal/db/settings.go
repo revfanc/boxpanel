@@ -25,6 +25,8 @@ var (
 	SingboxVersion        = SettingKey[string]{"singbox_version"}
 	BlockBittorrent       = SettingKey[bool]{"block_bittorrent"}
 	PanelName             = SettingKey[string]{"panel_name"}
+	TrafficBatch          = SettingKey[string]{"traffic_batch"}
+	AppliedUsers          = SettingKey[[]int64]{"applied_users"}
 	ApplyGeneration       = SettingKey[string]{"apply_generation"}
 	ClashAPIPort          = SettingKey[int]{"clash_api_port"}
 	ClashAPISecret        = SettingKey[string]{"clash_api_secret"}

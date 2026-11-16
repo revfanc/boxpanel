@@ -23,10 +23,21 @@ type InboundFormProps = {
   suggestionError?: unknown
   suggestionHint?: string
 }
+// Only fields used by server generation/firewall affect the restart reminder.
+function appliedFields(values: Partial<InboundFormValues>) {
+  if (!values.enabled) return [false]
+  return [values.enabled, values.port, values.tag,
+    ...(values.protocol === 'vless_reality'
+      ? [values.server_name, values.handshake_server || values.server_name, values.handshake_port, values.short_ids?.split(',').map((id) => id.trim())]
+      : [values.sni, values.up_mbps, values.down_mbps, values.obfs_password, values.clear_obfs, values.hopping, ...(values.hopping ? [values.start, values.end] : [])]),
+  ]
+}
+
 export function InboundForm({ protocol, source, onSaved, onBusy, submitLabel, initialTargets, suggestionError, suggestionHint }: InboundFormProps) {
   const existing = source && 'id' in source ? source : undefined
   const form = useForm<InboundFormValues>({ resolver: zodResolver(inboundSchema), defaultValues: inboundDefaults(protocol, source) })
   const values = useWatch({ control: form.control })
+  const changesConfig = !existing || JSON.stringify(appliedFields(values)) !== JSON.stringify(appliedFields(inboundDefaults(protocol, existing)))
   const errors = form.formState.errors
   const save = useOperation()
   const recommend = useOperation()
@@ -84,6 +95,7 @@ export function InboundForm({ protocol, source, onSaved, onBusy, submitLabel, in
             </>}
           </div>
         </details>
+        {changesConfig && <p className="text-sm text-muted-foreground">{t.common.applyHint}</p>}
         <Submit pending={save.pending} label={submitLabel ?? (existing ? t.common.save : t.common.create)} />
       </fieldset>
       {displayError != null ? <ErrorNotice error={displayError} /> : !recommend.success && suggestionHint && <Notice>{suggestionHint}</Notice>}

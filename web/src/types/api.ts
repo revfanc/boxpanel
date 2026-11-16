@@ -131,6 +131,8 @@ export interface User {
   name: string
   uuid: string // masked; never use as a connection credential
   enabled: boolean
+  traffic_reset_day: number
+  traffic_reset_at: number
   traffic_limit: number
   traffic_up: number
   traffic_down: number
@@ -139,7 +141,7 @@ export interface User {
   created_at: number
   status: 'disabled' | 'expired' | 'exhausted' | 'active'
 }
-export interface UserInput { name: string; remark?: string; traffic_limit?: number; expire_at?: number }
+export interface UserInput { name: string; remark?: string; traffic_limit?: number; expire_at?: number; traffic_reset_day?: number }
 export interface UserLinks {
   subscription: { auto: string; singbox: string; clash: string; base64: string }
   import: { singbox: string; clash: string }

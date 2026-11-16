@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQueryClient } from '@tanstack/react-query'
 import { Badge } from '@/components/ui/badge'
@@ -17,6 +17,11 @@ import { userSchema, userDefaults, userBody, type UserFormValues } from '@/schem
 import type { User } from '@/types/api'
 import { zhCN as t } from '@/i18n/zh-CN'
 
+function userEligible(user: User, now: number) {
+  return user.enabled && (user.expire_at === 0 || user.expire_at > now) &&
+    (user.traffic_limit === 0 || user.traffic_up < user.traffic_limit && user.traffic_down < user.traffic_limit - user.traffic_up)
+}
+
 export function UserUsage({ user }: { user: User }) {
   const used = user.traffic_up + user.traffic_down
   const percent = user.traffic_limit > 0 ? Math.min(100, Math.max(0, used / user.traffic_limit * 100)) : 0
@@ -24,8 +29,11 @@ export function UserUsage({ user }: { user: User }) {
   return <div className="space-y-3 text-sm">
     <Badge variant={user.status === 'active' ? 'default' : 'secondary'}>{t.users[user.status]}</Badge>
     <p>{t.users.usage}: {usage}</p>
+    <p className="text-muted-foreground">{t.users.usageHint}</p>
     <Progress value={percent} aria-label={t.users.usage} aria-valuenow={percent} aria-valuetext={usage} />
     <p className="text-muted-foreground">{t.users.expire}: {expiry(user.expire_at)}</p>
+    <p>{t.users.resetDay}: {user.traffic_reset_day ? t.users.resetOnDay(user.traffic_reset_day) : t.users.resetDisabled}</p>
+    {user.traffic_reset_at > 0 && <p>{t.users.resetAt}: {new Date(user.traffic_reset_at * 1000).toISOString()}</p>}
   </div>
 }
 export function UserForm({ user, close, setBusy, onSaved, defaultName, submitLabel }: {
@@ -33,6 +41,13 @@ export function UserForm({ user, close, setBusy, onSaved, defaultName, submitLab
   onSaved?: (user: User) => void | Promise<void>; defaultName?: string; submitLabel?: string
 }) {
   const form = useForm<UserFormValues>({ resolver: zodResolver(userSchema), defaultValues: { ...userDefaults(user), name: user?.name ?? defaultName ?? '' } })
+  const values = useWatch({ control: form.control })
+  const candidate = userSchema.safeParse(values)
+  const next = candidate.success ? userBody(candidate.data) : undefined
+  const [now] = useState(() => Math.floor(Date.now() / 1000))
+  const active = user ? userEligible(user, now) : false
+  const nextActive = user && next ? userEligible({ ...user, ...next }, now) : active
+  const changesConfig = !user || active !== nextActive || (active && next?.name !== undefined && next.name !== user.name)
   const operation = useOperation()
   const client = useQueryClient()
   const errors = form.formState.errors
@@ -45,7 +60,9 @@ export function UserForm({ user, close, setBusy, onSaved, defaultName, submitLab
       <Field label={t.common.remark} {...form.register('remark')} error={errors.remark?.message} />
       <Field label={t.users.limit} type="number" step="any" hint={t.users.limitHint} {...form.register('limit_gib', { valueAsNumber: true })} error={errors.limit_gib?.message} />
       <Field label={t.users.expire} type="datetime-local" step="1" hint={t.users.expireHint} {...form.register('expiry')} error={errors.expiry?.message} />
+      <Field label={t.users.resetDay} type="number" min="0" max="28" step="1" hint={t.users.resetDayHint} {...form.register('traffic_reset_day', { valueAsNumber: true })} error={errors.traffic_reset_day?.message} />
     </fieldset>
+    {changesConfig && <p className="text-sm text-muted-foreground">{t.common.applyHint}</p>}
     {operation.error != null && <ErrorNotice error={operation.error} />}
     <div className="flex flex-wrap justify-end gap-2">{close && <Button type="button" variant="outline" disabled={operation.pending} onClick={close}>{t.common.cancel}</Button>}<Submit pending={operation.pending} label={submitLabel ?? (user ? t.common.save : t.common.create)} /></div>
   </form>
@@ -61,9 +78,9 @@ export function UserEditor({ user }: { user?: User }) {
     </DialogContent>
   </Dialog>
 }
-type Action = 'delete' | 'disable' | 'reset-token' | 'reset-credentials'
-const descriptions = { delete: t.users.deleteHint, disable: t.common.disableHint, 'reset-token': t.users.tokenHint, 'reset-credentials': t.users.credentialsHint }
-const titles = { delete: t.users.deleteTitle, disable: t.common.disable, 'reset-token': t.users.resetToken, 'reset-credentials': t.users.resetCredentials }
+type Action = 'reset-traffic' | 'delete' | 'disable' | 'reset-token' | 'reset-credentials'
+const descriptions = { 'reset-traffic': t.users.resetTrafficHint, delete: t.users.deleteHint, disable: t.common.disableHint, 'reset-token': t.users.tokenHint, 'reset-credentials': t.users.credentialsHint }
+const titles = { 'reset-traffic': t.users.resetTraffic, delete: t.users.deleteTitle, disable: t.common.disable, 'reset-token': t.users.resetToken, 'reset-credentials': t.users.resetCredentials }
 export function UserActions({ user, detail = false }: { user: User; detail?: boolean }) {
   const [action, setAction] = useState<Action | null>(null)
   const operation = useOperation()
@@ -81,14 +98,18 @@ export function UserActions({ user, detail = false }: { user: User; detail?: boo
       await refreshResources(client)
     })
   }
+  const changesConfig = action === 'delete' || action === 'disable' || action === 'reset-credentials'
+  const [now] = useState(() => Math.floor(Date.now() / 1000))
+  const active = userEligible(user, now)
   function ask(kind: Action) { operation.reset(); setAction(kind) }
   return <div className="space-y-3">
     <div className="flex flex-wrap gap-2"><UserEditor user={user} />
       <Button variant="outline" disabled={operation.pending} onClick={() => user.enabled ? ask('disable') : perform('enable')}>{operation.pending ? t.common.working : user.enabled ? t.common.disable : t.common.enable}</Button>
-      {detail && <><Button variant="outline" disabled={operation.pending} onClick={() => ask('reset-token')}>{t.users.resetToken}</Button><Button variant="outline" disabled={operation.pending} onClick={() => ask('reset-credentials')}>{t.users.resetCredentials}</Button></>}
+      {detail && <><Button variant="outline" disabled={operation.pending} onClick={() => ask('reset-traffic')}>{t.users.resetTraffic}</Button><Button variant="outline" disabled={operation.pending} onClick={() => ask('reset-token')}>{t.users.resetToken}</Button><Button variant="outline" disabled={operation.pending} onClick={() => ask('reset-credentials')}>{t.users.resetCredentials}</Button></>}
       <Button variant="destructive" disabled={operation.pending} onClick={() => ask('delete')}>{t.common.delete}</Button>
     </div>
+    {!user.enabled && userEligible({ ...user, enabled: true }, now) && <p className="text-sm text-muted-foreground">{t.common.applyHint}</p>}
     {operation.error != null && !action && <ErrorNotice error={operation.error} />}
-    <Confirm open={!!action} onOpenChange={(open) => { if (!open) setAction(null) }} title={action ? titles[action] : ''} description={<>{user.name}<br />{action ? descriptions[action] : ''}</>} pending={operation.pending} error={operation.error} onConfirm={() => { if (action) perform(action) }} />
+    <Confirm open={!!action} onOpenChange={(open) => { if (!open) setAction(null) }} title={action ? titles[action] : ''} description={<>{user.name}<br />{action ? descriptions[action] : ''}{changesConfig && active && <><br />{t.common.applyHint}</>}</>} pending={operation.pending} error={operation.error} onConfirm={() => { if (action) perform(action) }} />
   </div>
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/binary"
 	"fmt"
 	"net/http"
 	"time"
@@ -12,17 +13,19 @@ import (
 )
 
 type userView struct {
-	ID           int64  `json:"id"`
-	Name         string `json:"name"`
-	UUID         string `json:"uuid"` // masked; credentials and tokens never leave these APIs
-	Enabled      bool   `json:"enabled"`
-	TrafficLimit int64  `json:"traffic_limit"`
-	TrafficUp    int64  `json:"traffic_up"`
-	TrafficDown  int64  `json:"traffic_down"`
-	ExpireAt     int64  `json:"expire_at"`
-	Remark       string `json:"remark"`
-	CreatedAt    int64  `json:"created_at"`
-	Status       string `json:"status"`
+	ID              int64  `json:"id"`
+	Name            string `json:"name"`
+	UUID            string `json:"uuid"` // masked; credentials and tokens never leave these APIs
+	Enabled         bool   `json:"enabled"`
+	TrafficResetDay int    `json:"traffic_reset_day"`
+	TrafficResetAt  int64  `json:"traffic_reset_at"`
+	TrafficLimit    int64  `json:"traffic_limit"`
+	TrafficUp       int64  `json:"traffic_up"`
+	TrafficDown     int64  `json:"traffic_down"`
+	ExpireAt        int64  `json:"expire_at"`
+	Remark          string `json:"remark"`
+	CreatedAt       int64  `json:"created_at"`
+	Status          string `json:"status"`
 }
 
 type rowScanner interface{ Scan(...any) error }
@@ -30,11 +33,11 @@ type rowReader interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-const userColumns = "id,name,uuid,enabled,traffic_limit,traffic_up,traffic_down,expire_at,remark,created_at"
+const userColumns = "id,name,uuid,enabled,traffic_limit,traffic_up,traffic_down,expire_at,remark,created_at,traffic_reset_day,traffic_reset_at"
 
 func scanUser(row rowScanner) (userView, error) {
 	var u userView
-	if err := row.Scan(&u.ID, &u.Name, &u.UUID, &u.Enabled, &u.TrafficLimit, &u.TrafficUp, &u.TrafficDown, &u.ExpireAt, &u.Remark, &u.CreatedAt); err != nil {
+	if err := row.Scan(&u.ID, &u.Name, &u.UUID, &u.Enabled, &u.TrafficLimit, &u.TrafficUp, &u.TrafficDown, &u.ExpireAt, &u.Remark, &u.CreatedAt, &u.TrafficResetDay, &u.TrafficResetAt); err != nil {
 		return u, fmt.Errorf("read user: %w", err)
 	}
 	if len(u.UUID) > 8 {
@@ -104,10 +107,11 @@ func (a *api) userGet(w http.ResponseWriter, r *http.Request) {
 }
 
 type userInput struct {
-	Name         *string `json:"name"`
-	Remark       *string `json:"remark"`
-	TrafficLimit *int64  `json:"traffic_limit"`
-	ExpireAt     *int64  `json:"expire_at"`
+	TrafficResetDay *int    `json:"traffic_reset_day"`
+	Name            *string `json:"name"`
+	Remark          *string `json:"remark"`
+	TrafficLimit    *int64  `json:"traffic_limit"`
+	ExpireAt        *int64  `json:"expire_at"`
 }
 
 func (in userInput) validate(create bool) error {
@@ -116,6 +120,9 @@ func (in userInput) validate(create bool) error {
 	}
 	if in.Remark != nil && len(*in.Remark) > 1024 {
 		return invalid("remark", "请将备注缩短到 1024 字节以内。")
+	}
+	if in.TrafficResetDay != nil && (*in.TrafficResetDay < 0 || *in.TrafficResetDay > 28) {
+		return invalid("traffic_reset_day", "每月重置日须为 0–28 的整数，0 表示不自动重置；请修改后重试。")
 	}
 	if in.TrafficLimit != nil && *in.TrafficLimit < 0 {
 		return invalid("traffic_limit", "流量上限须为非负整数字节数，0 表示不限。")
@@ -166,6 +173,14 @@ func (a *api) userCreate(w http.ResponseWriter, r *http.Request) {
 		a.resourceError(w, err)
 		return
 	}
+	var epochBytes [8]byte
+	if _, err := rand.Read(epochBytes[:]); err != nil {
+		a.resourceError(w, fmt.Errorf("generate traffic epoch: %w", err))
+		return
+	}
+	// New users get a random epoch, preventing reused SQLite IDs from receiving
+	// pending increments belonging to a deleted user. Leave ample reset headroom.
+	epoch := int64(binary.BigEndian.Uint64(epochBytes[:])&((1<<62)-1)) + 1
 	var result userView
 	if !a.applyResource(w, r, func(ctx context.Context, tx *sql.Tx) error {
 		if err := uniqueUserName(ctx, tx, *input.Name, 0); err != nil {
@@ -173,7 +188,7 @@ func (a *api) userCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		u := userView{Name: *input.Name, Enabled: true, CreatedAt: time.Now().Unix()}
 		patchUser(&u, input)
-		res, err := tx.ExecContext(ctx, "INSERT INTO users (name,uuid,password,sub_token,traffic_limit,expire_at,remark,created_at) VALUES (?,?,?,?,?,?,?,?)", u.Name, uuid, password, token, u.TrafficLimit, u.ExpireAt, u.Remark, u.CreatedAt)
+		res, err := tx.ExecContext(ctx, "INSERT INTO users (name,uuid,password,sub_token,traffic_limit,expire_at,remark,created_at,traffic_reset_day,traffic_epoch) VALUES (?,?,?,?,?,?,?,?,?,?)", u.Name, uuid, password, token, u.TrafficLimit, u.ExpireAt, u.Remark, u.CreatedAt, u.TrafficResetDay, epoch)
 		if err != nil {
 			return fmt.Errorf("create user: %w", err)
 		}
@@ -189,6 +204,9 @@ func (a *api) userCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, result)
 }
 func patchUser(u *userView, input userInput) {
+	if input.TrafficResetDay != nil {
+		u.TrafficResetDay = *input.TrafficResetDay
+	}
 	if input.Name != nil {
 		u.Name = *input.Name
 	}
@@ -244,7 +262,7 @@ func (a *api) userUpdate(w http.ResponseWriter, r *http.Request) {
 		if err := uniqueUserName(ctx, tx, u.Name, u.ID); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, "UPDATE users SET name=?,remark=?,traffic_limit=?,expire_at=? WHERE id=?", u.Name, u.Remark, u.TrafficLimit, u.ExpireAt, u.ID)
+		_, err := tx.ExecContext(ctx, "UPDATE users SET name=?,remark=?,traffic_limit=?,expire_at=?,traffic_reset_day=? WHERE id=?", u.Name, u.Remark, u.TrafficLimit, u.ExpireAt, u.TrafficResetDay, u.ID)
 		return err
 	})
 }
@@ -292,6 +310,16 @@ func (a *api) userResetCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mutateUser(w, r, false, func(ctx context.Context, tx *sql.Tx, u userView) error {
 		_, err := tx.ExecContext(ctx, "UPDATE users SET uuid=?,password=? WHERE id=?", uuid, password, u.ID)
+		return err
+	})
+}
+
+func (a *api) userResetTraffic(w http.ResponseWriter, r *http.Request) {
+	if !noBody(w, r) {
+		return
+	}
+	a.mutateUser(w, r, false, func(ctx context.Context, tx *sql.Tx, u userView) error {
+		_, err := tx.ExecContext(ctx, "UPDATE users SET traffic_up=0,traffic_down=0,traffic_reset_at=?,traffic_epoch=traffic_epoch+1 WHERE id=?", time.Now().Unix(), u.ID)
 		return err
 	})
 }

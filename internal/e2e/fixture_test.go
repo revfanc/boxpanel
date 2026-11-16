@@ -3,6 +3,7 @@ package e2e_test
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -23,6 +24,7 @@ import (
 type object = map[string]any
 
 type fixture struct {
+	writer, reader                                  *sql.DB
 	server                                          object
 	client                                          []byte
 	realityAddress, hysteriaAddress, controlAddress string
@@ -107,6 +109,8 @@ func newFixture(t *testing.T, handshake *httptest.Server) fixture {
 	// actual destinations are IP literals and require no DNS queries.
 	for _, err := range []error{
 		db.SetSetting(ctx, tx, db.WebPort, control.port()),
+		db.SetSetting(ctx, tx, db.ClashAPIPort, control.port()),
+		db.SetSetting(ctx, tx, db.ClashAPISecret, secret),
 		db.SetSetting(ctx, tx, db.BlockBittorrent, snapshot.BlockBittorrent),
 		db.SetSetting(ctx, tx, db.Hysteria2Fingerprints, map[string]string{"2": material.Fingerprint}),
 		db.SetSetting(ctx, tx, db.Rules, db.RulesSettings{Preset: "global", Source: "metacubex", UpdateInterval: "1d",
@@ -138,7 +142,12 @@ func newFixture(t *testing.T, handshake *httptest.Server) fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return fixture{server: loopbackServer(t, server), client: client,
+	reader, err := db.OpenReader(ctx, filepath.Join(dir, "fixture.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reader.Close() })
+	return fixture{writer: conn, reader: reader, server: loopbackServer(t, server), client: client,
 		realityAddress: vless.address(), hysteriaAddress: hy2.address(), controlAddress: control.address(),
 		releaseServerPorts: func() { vless.release(); hy2.release(); _ = udp.Close(); control.release() },
 		secrets:            []string{pair.PrivateKey, user.UUID, user.Password, token, secret, string(material.PrivateKey)}}

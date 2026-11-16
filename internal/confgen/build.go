@@ -47,6 +47,11 @@ func Build(snapshot Snapshot, opts Options) ([]byte, error) {
 		routeRule{Action: "resolve", Server: "dns-local"},
 		routeRule{IPIsPrivate: true, Action: "reject"},
 	)
+	for _, user := range users {
+		tag := UserOutboundTag(user.ID)
+		cfg.Outbounds = append(cfg.Outbounds, outboundConfig{Type: "direct", Tag: tag})
+		cfg.Route.Rules = append(cfg.Route.Rules, routeRule{AuthUser: []string{user.Name}, Action: "route", Outbound: tag})
+	}
 	inbounds := slices.Clone(snapshot.Inbounds)
 	slices.SortFunc(inbounds, func(a, b Inbound) int { return compareID(a.ID, b.ID) })
 	ids, tags, ports := map[int64]bool{}, map[string]bool{}, map[int]bool{}
@@ -85,8 +90,7 @@ func eligibleUsers(input []User, now int64) ([]User, error) {
 			return nil, fmt.Errorf("user %d: restore nonnegative traffic and expiry values", user.ID)
 		}
 		// Subtraction avoids int64 overflow even with very large traffic counters.
-		if user.ExpireAt > 0 && user.ExpireAt <= now ||
-			user.TrafficLimit > 0 && (user.TrafficUp >= user.TrafficLimit || user.TrafficDown >= user.TrafficLimit-user.TrafficUp) {
+		if !UserEligible(user, now) {
 			continue
 		}
 		if user.ID <= 0 || ids[user.ID] || !validUserName(user.Name) || names[user.Name] {
@@ -244,3 +248,13 @@ func validHost(host string) bool {
 	}
 	return true
 }
+
+// UserEligible is shared by generation and the automatic quota scheduler.
+// Callers validate nonnegative stored values before using it.
+func UserEligible(user User, now int64) bool {
+	return user.Enabled && (user.ExpireAt == 0 || user.ExpireAt > now) &&
+		(user.TrafficLimit == 0 || user.TrafficUp < user.TrafficLimit && user.TrafficDown < user.TrafficLimit-user.TrafficUp)
+}
+
+// UserOutboundTag contains only the stable database ID, never a credential.
+func UserOutboundTag(id int64) string { return "direct-u" + strconv.FormatInt(id, 10) }

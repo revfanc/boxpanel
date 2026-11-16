@@ -38,7 +38,7 @@ make lint         # go vet + gofmt 检查 + eslint
 
 ## 硬性约定
 
-1. **sing-box 配置先校验后生效**：写临时文件 → `sing-box check -c` → 原子替换 → 重启 → 检查存活，失败自动回滚。任何绕过这条路径写配置的代码都不接受。
+1. **sing-box 配置写入必须先校验后生效**：写临时文件 → `sing-box check -c` → 原子替换 → 重启 → 检查存活，失败自动回滚。生成配置与当前文件逐字节相同、防火墙计划相同且内核运行中时，非 nil mutation 只提交 DB 与生效记账，不写文件、不 check、不重启、不动防火墙；显式重启仍走完整流程。任何绕过校验写入配置的代码都不接受。
 2. **sing-box 版本集中管理**：目标版本写在 `internal/singbox/version.go` 的常量里；配置字段以 [sing-box 官方文档](https://sing-box.sagernet.org/) 对应版本为准，不确定的字段必须查文档，不要凭记忆。
 3. **配置生成必须有 golden test**：`internal/confgen`、`internal/subscription` 的输出放 `testdata/*.golden`，`go test -update` 可更新。若 PATH 中有 `sing-box`，测试额外对生成的 JSON 跑 `sing-box check`，否则 `t.Skip`。
 4. **密钥与凭证**：随机数一律用 `crypto/rand`；日志与 API 响应里不得出现私钥、密码、订阅 token 全文（预览接口要脱敏）。

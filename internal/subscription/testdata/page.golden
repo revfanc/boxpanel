@@ -91,6 +91,7 @@ footer p + p { margin-top: 8px; }
   <section class="card" aria-labelledby="usage-title">
     <h2 id="usage-title">流量用量</h2>
     <p class="usage"><strong>10.50 GB</strong> <span class="muted">/ 100.00 GB</span></p>
+    <p class="hint muted">统计每 5 秒采集，可能略少于实际用量；通常每 60 秒保存。</p>
     <progress max="100" value="10.5" aria-label="已用流量" aria-valuetext="10.50 GB / 100.00 GB"></progress>
     <div class="expiry"><div><p class="muted">到期</p><p>2026-12-09（UTC）</p></div><p class="muted">剩余 30 天</p></div>
   </section>

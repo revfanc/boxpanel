@@ -128,6 +128,9 @@ CREATE TABLE users (
   traffic_limit INTEGER NOT NULL DEFAULT 0,   -- 字节，0=不限
   traffic_up INTEGER NOT NULL DEFAULT 0,
   traffic_down INTEGER NOT NULL DEFAULT 0,
+  traffic_reset_day INTEGER NOT NULL DEFAULT 0, -- 0=不自动重置；1–28 为 UTC 每月重置日
+  traffic_reset_at INTEGER NOT NULL DEFAULT 0,  -- 最近成功重置的 Unix 秒
+  traffic_epoch INTEGER NOT NULL DEFAULT 0,     -- 内部采集代号，不出 API
   expire_at INTEGER NOT NULL DEFAULT 0,       -- unix 秒，0=永不
   remark TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL
@@ -182,6 +185,9 @@ MVP 规则：**所有启用的用户加入所有启用的入站**。超额/过�
   → BEGIN IMMEDIATE（保持写锁直到恢复完成；调用方只能使用传入的 *sql.Tx）
   → 处理上次中断的 .pending 恢复记录
   → 在事务内写 DB，读取一致快照，confgen.Build
+  → T7.1b：非 nil mutation + 已有配置逐字节相同 + 防火墙计划相同 + is-active
+      → 仅更新 applied_firewall / applied_users / apply_generation 并 COMMIT，返回
+    否则继续完整流程：
   → 写 sing-box.json.tmp（0600，同目录）
   → sing-box check -c tmp             失败：删除 tmp、ROLLBACK，不改变当前文件/服务
   → 当前 sing-box.json 原子复制为 .bak（0600）
@@ -190,9 +196,32 @@ MVP 规则：**所有启用的用户加入所有启用的入站**。超额/过�
   → systemctl restart boxpanel-singbox.service
   → 轮询 is-active，最多 5 秒
   → 同步防火墙服务端口及 Hysteria2 端口跳跃
-  → 更新 applied_firewall / apply_generation，COMMIT
+  → 更新 applied_firewall / applied_users / apply_generation，COMMIT
   → 删除 .pending，释放锁
 ```
+
+### T7.1b 配置不变时只提交数据库
+
+在原进程锁、flock、BEGIN IMMEDIATE 和 pending 恢复之后执行 mutation 并生成配置。
+只有 mutation 非 nil、当前文件存在、生成结果与文件**逐字节相同**、前后防火墙计划相同，
+且 `systemctl is-active` 成功返回 active 时，才走只提交 DB 的分支：同事务写入
+applied_firewall、applied_users 和新随机 apply_generation，再提交资源变更。
+不写配置、临时文件、备份或新 pending，不执行 check/restart/firewall；健康探测不是重启。
+已有 pending 必须先核对/恢复并清理；这次恢复本身仍可能重启内核，不能跳过恢复直接短路。
+
+显式 Restart/Startup/CLI apply 使用 nil mutation，无论配置是否相同都走完整流程。
+内核未运行、状态探测失败、缺少当前配置、配置字节不同或防火墙计划不同也走完整流程；
+例如只改 Hysteria2 跳跃范围虽不改变 JSON，仍必须同步防火墙。
+状态探测或提交前的取消/超时不提交 mutation。
+只提交 DB 的 COMMIT 失败同样丢弃底层 SQLite 连接，并在有界独立 context 中核对 generation：
+未提交则返回失败，已提交则返回成功；无法确认返回 500 和核对建议，不声称已回滚。
+因该分支没有改变外部状态，不通过重启旧配置来补偿 DB 失败，也不创建新恢复记录。
+
+保持有效的用户编辑上限/有效期/备注/月度重置日、重置 token，以及不改变有效用户集合的
+手动/月度清零，现在不会中断其他连接。用户名进入认证配置与路由，改有效用户名称仍会重启；
+增加/删除/启停有效用户、变更其被启用协议使用的连接凭证、以及恢复或移除到期/超额用户仍会重启。
+节点服务参数、端口、跳跃或 BT 设置改变同样走完整流程；节点备注/客户端 fingerprint 不改变服务端配置。
+最终以生成字节、计划和运行状态为准，不按接口名白名单绕过。具体操作表见 [T7.1b.md](T7.1b.md)。
 
 ### T2.3 事务与恢复约定
 
@@ -265,7 +294,7 @@ MVP 规则：**所有启用的用户加入所有启用的入站**。超额/过�
   [官方服务管理文档](https://sing-box.sagernet.org/installation/package-manager/#service-management)
   提供 restart；[锁定版本 SIGHUP 处理源码](https://github.com/SagerNet/sing-box/blob/v1.14.4/cmd/sing-box/cmd_run.go#L178-L213)
   先 check，再 cancel/Close 旧实例，然后重新 create，仍会断开旧连接。
-  因此不把 SIGHUP 当作无损重载，按 T6.10 允许的例外保留 restart/check/回滚；连接无损更新仍是限制。
+  因此不把 SIGHUP 当作无损重载；配置改变时保留 restart/check/回滚，T7.1b 仅优化配置未改变的写操作。
   不新增内核字段、动态用户 API 或 T7.1 流量采样/封禁。
 
 ## 8. 安全基线
@@ -418,3 +447,63 @@ Hysteria2=true 读取，首次保存时写入，不修改已发布迁移。setup
 - 时钟、Issuer、HTTP client、directory、challenge listener 和放行端口均可注入。
   测试使用临时 DB/文件、假 CA HTTP 服务器及本地 TLS 握手；不访问 LE 正式环境。
   未引入 Pebble 依赖或额外真实 CA 测试。
+
+
+## 14. T7.1 近似流量统计与自动停用
+
+调研（锁定 tag v1.14.4）：
+
+- [`connections.go` L80–99](https://github.com/SagerNet/sing-box/blob/v1.14.4/experimental/clashapi/connections.go#L80-L99)
+  手工序列化 metadata，**没有认证用户字段**；processPath 中的系统用户名不是代理认证用户。
+  顶层返回 upload/download、start、chains。
+- [`tracker.go` L62–77](https://github.com/SagerNet/sing-box/blob/v1.14.4/common/trafficcontrol/tracker.go#L62-L77)
+  将 OutboundChain 的 tag 反转后放入 Chain，并生成随机连接 UUID 和 CreatedAt。
+  [`connections.go` L29–43](https://github.com/SagerNet/sing-box/blob/v1.14.4/experimental/clashapi/connections.go#L29-L43)
+  读取当前连接；[Manager.Connections](https://github.com/SagerNet/sing-box/blob/v1.14.4/common/trafficcontrol/manager.go#L129-L136)
+  不含已经关闭的连接。
+- 使用每个合格用户的 `direct-u<数据库 ID>` 普通 direct 出站，以 `auth_user:[用户名]` 路由，
+  从 chains 确定用户。字段依据锁定 tag 的
+  [auth_user 文档](https://github.com/SagerNet/sing-box/blob/v1.14.4/docs/configuration/route/rule.md#L218-L220)。
+  规则追加在 sniff → 可选 BT reject → resolve → private reject 之后，安全语义不变。
+  不使用 v2ray_api、不替换官方内核或构建标签。
+
+运行与一致性：
+
+- `internal/traffic` 共用一个调度循环，仅 Linux 生产 serve 启动；macOS/--dev 不采集、不自动生效。
+  每 5 秒请求持久化端口的 `http://127.0.0.1:<port>/connections`，Bearer secret 从读库取，
+  不通过环境代理、不跟随重定向，网络最多 3 秒、响应最多 16 MiB，不记录响应/凭证/连接目标。
+- 按连接 ID 与 start 保留当前存活连接的基线；首次观察到开始时间早于采集器启动的连接仅记基线，
+  防止面板进程重启后长连接重复计量；其余首次观察计入累计值，之后只计非负增量；
+  start 改变或计数回退视为新连接，避免重启后负数或尖峰；未知用户/非法计数忽略。
+  已关闭基线回收，采集失败保留基线与待写增量。流量加法按 int64 饱和，不转成 SQLite REAL。
+- **这是近似用量**：两次采集之间新建并关闭的短连接可能整个漏计，已观察连接关闭时的最后一段也会丢失；
+  实际重启会断开全部连接，无法从之后的快照补齐尾部；T7.1b 的配置不变写操作保留连接。采集不可用期间已关闭连接也会漏计。
+  不用于精确计费；面板/分享页提示「统计每 5 秒采集，可能略少于实际用量」。
+- 每 60 秒在同一个短写事务中批量 `traffic_up/down += 增量`，无网络、内核或防火墙操作；
+  Flush 使用至多 1 秒 context（含写池排队），失败全部回滚、保留增量重试。
+  SQLite BEGIN 的底层 busy timeout 仍沿用 §6；读请求继续走 T6.10 独立只读 WAL 池。
+  写入同时保存内部 `settings.traffic_batch` 标记；若上次 COMMIT 结果无法确认，下次写入前核对标记，
+  扣除已提交的批次后仅重试剩余增量，避免生效事务结果不确定时重复累计。
+  正常退出尽力最后采样并落库（采样 5 秒、落库至多 1 秒）；失败记录下一步提示。
+  崩溃/强制终止可能丢失尚未落库的增量，通常至多 60 秒，写失败期间可能更长。
+- 页面/API/Subscription-Userinfo 均读取已落库值，通常延迟至多 60 秒；自动停用检查额外纳入内存增量，
+  不必等待下一轮落库。面板用户列表/详情每 60 秒刷新；不在读取请求中触发采样或落库。
+- 新迁移 `0002_user_traffic.sql` 追加 reset_day/reset_at/epoch 三列，旧用户默认 0、不自动重置，旧计数保留。
+  epoch 为内部防重置竞争代号；新建用户用 crypto/rand 生成正初值，避免 SQLite 复用删除用户的 ID 后继承旧增量。
+  手动/月度清零与 epoch+1 在同一 Apply 事务中提交。旧 epoch 增量落库时条件更新并丢弃，
+  同秒重复重置也不互相混淆。若极少数连接跨 epoch 存活，首次观察仅重建基线，不补记重置前字节。
+- Manager 每次成功 Apply 在同一事务保存 `settings.applied_users`（ID 数组，无启用入站时为空），
+  与 apply_generation 一起提交/回滚，表示当前配置实际包含的用户。启动重新生效会补齐旧实例的此键。
+  调度器每 30 秒检查到期/超额且仍在该数组中的用户，使用与 confgen 相同的 UserEligible 判定，
+  合并为一次 Manager.Apply；事务内再次核对并同步待写增量，禁止绕过 check/原子替换/重启/存活/回滚。
+  成功后日志仅记用户 ID 和 expired/exhausted 原因，不修改 enabled；重启断开已有连接，入站不再接受其认证。
+  普通情况到期/超额检测延迟至多约 30 秒，另加一次生效时间；失败从 30 秒指数退避至最多 10 分钟，
+  下轮重试。用户提高限额、延期或清零时沿用资源 Apply 恢复，无额外手动操作。
+- `traffic_reset_day=1–28` 时，在 **UTC 本月该日 00:00 后**首次检查清零并生效，
+  `traffic_reset_at >= 本月边界` 即不重复。0 关闭；停机跨月后只补本月已到的边界，不补每个错过月份。
+  手动重置也更新 reset_at，因此当月边界后的手动清零会抑制当月再次自动清零。
+  月度清零在配置不变且内核运行时只提交 DB，不重启；可能跨 epoch 存活的连接按上述规则重建基线。
+  月度清零不限 enabled，可能恢复仅因超额被移除的用户（恢复会改变配置，仍重启）；到期/手动禁用仍保持不可用。
+  多用户清零、到期、超额共用一次 Apply；失败时计数、reset_at、epoch、applied_users 一起回滚。
+
+完整评审说明与验收记录见 [T7.1.md](T7.1.md) 和 [T7.1b.md](T7.1b.md)。无新依赖。

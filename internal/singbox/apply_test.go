@@ -26,6 +26,7 @@ type applyRunner struct {
 	checkFail               bool
 	restartFails            int
 	unhealthy               bool
+	inactive                bool
 	restarts, stops, checks int
 	hook                    func(context.Context, string, []string)
 	realCheck               bool
@@ -66,7 +67,7 @@ func (r *applyRunner) Run(ctx context.Context, name string, args ...string) ([]b
 		r.stops++
 		return nil, nil
 	case "is-active":
-		if r.unhealthy && r.restarts == 1 {
+		if r.inactive && r.restarts == 0 || r.unhealthy && r.restarts == 1 {
 			return []byte("failed"), errors.New("inactive")
 		}
 		return []byte("active\n"), nil

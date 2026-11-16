@@ -92,13 +92,17 @@
       }
     }
   ],
-  "outbounds": [{ "type": "direct", "tag": "direct" }],
+  "outbounds": [
+    { "type": "direct", "tag": "direct" },
+    { "type": "direct", "tag": "direct-u1" }
+  ],
   "route": {
     "rules": [
       { "action": "sniff" },
       { "protocol": "bittorrent", "action": "reject" },
       { "action": "resolve", "server": "dns-local" },
-      { "ip_is_private": true, "action": "reject" }
+      { "ip_is_private": true, "action": "reject" },
+      { "auth_user": ["alice"], "action": "route", "outbound": "direct-u1" }
     ],
     "final": "direct",
     "default_domain_resolver": "dns-local"
@@ -130,7 +134,8 @@
 再在重新生成时复用；本任务不修改初始化设置或增加持久化键。
 
 快照切片不会被排序操作修改；相同快照、时间及运行参数产生逐字节一致的两空格缩进 JSON，
-末尾一个换行。输出包含真实凭证，只可交给后续校验/生效流程；不得直接写日志或作为预览响应。
+末尾一个换行。T7.1b 的短路依赖此保证：重复生成、切片顺序变化、options 对象键顺序及
+证书 map 插入顺序变化均有逐字节测试；用户出站与 auth_user 路由跟随 ID 顺序。输出包含真实凭证，只可交给后续校验/生效流程；不得直接写日志或作为预览响应。
 启用入站 options 拒绝非法 JSON、未知字段、未知协议；错误只包含记录 ID、字段说明和修复建议，
 不包含 options 原文、私钥、UUID 或密码。禁用记录及已剔除用户的凭证不参与生成。
 
@@ -557,3 +562,24 @@ check 只校验格式，不启动 TUN、不连接节点、不下载 rule-set。
   探测函数、HTTP 客户端/拨号器可注入；显式 IP 可离线初始化，所有网络单测不访问外网。
 - 用户可改为域名。所有订阅/URI 中的 server 都用它。
 - IPv6-only 机器：URI 中 IPv6 需加方括号。
+
+
+## 7. T7.1 服务端用户归属与流量采样
+
+§2 示例假设 alice 的数据库 ID 为 1。每个合格用户按 ID 顺序增加一个 `direct-u<ID>` direct 出站，
+在所有原有安全规则之后添加 `auth_user:[当前用户名]` → 对应出站的 route action。
+停用/到期/超额的用户既不加入入站，也不生成其出站/用户路由；保留原 direct final。
+用户改名后按新 name 匹配，出站仍使用稳定 ID；客户端订阅的分组/出站无需改变。
+
+锁定版本的 [Clash JSON 序列化](https://github.com/SagerNet/sing-box/blob/v1.14.4/experimental/clashapi/connections.go#L80-L99)
+没有认证用户名，因此不能用 metadata.processPath 当作用户名；
+[连接 tracker](https://github.com/SagerNet/sing-box/blob/v1.14.4/common/trafficcontrol/tracker.go#L62-L77)
+将出站 tag 放到 chains；
+[auth_user 的锁定版本文档](https://github.com/SagerNet/sing-box/blob/v1.14.4/docs/configuration/route/rule.md#L218-L220)
+确认匹配入站认证用户名。先 sniff/BT reject/resolve/private reject，最后用户 route，避免安全规则被提前终结。
+所有服务端 golden 更新并执行锁定内核 check；新增测试显式断言安全规则顺序和每用户归属。
+
+统计每 5 秒采集当前连接，漏计短连接及关闭尾段的限制、60 秒落库、30 秒自动停用与重置事务语义见 SPEC §14。
+`Subscription-Userinfo` 的 upload/download 继续使用同一 users 计数，单位字节，不作精确计费承诺。
+新增独立 `TestTrafficLoopback` 对两协议各传输 32 KiB 上传/64 KiB 下载，在连接仍打开时一次生产 Poll+Flush，
+要求 DB 用量在预期量级内（0.5–3 倍）；原 `TestLoopback` 执行条件和断言保持。

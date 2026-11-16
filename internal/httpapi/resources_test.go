@@ -30,8 +30,8 @@ import (
 // The handlers use the real Manager with fake system boundaries. This proves
 // they enter Apply, keep a single transaction, and really roll back on failure.
 type resourceRunner struct {
-	checks, restarts       int
-	failCheck, failRestart bool
+	checks, restarts, healths int
+	failCheck, failRestart    bool
 }
 
 func (f *resourceRunner) LookPath(name string) (string, error) { return name, nil }
@@ -42,6 +42,9 @@ func (f *resourceRunner) Run(_ context.Context, name string, args ...string) ([]
 			return []byte("password=DO-NOT-LEAK"), errors.New("secret-check-error")
 		}
 		return nil, nil
+	}
+	if name == "systemctl" && len(args) > 0 && args[0] == "is-active" {
+		f.healths++
 	}
 	if name == "journalctl" {
 		return []byte("password=DO-NOT-LEAK"), nil
@@ -56,9 +59,13 @@ func (f *resourceRunner) Run(_ context.Context, name string, args ...string) ([]
 	return []byte("active\n"), nil
 }
 
-type resourceFirewall struct{ plan firewall.Plan }
+type resourceFirewall struct {
+	plan  firewall.Plan
+	calls int
+}
 
 func (f *resourceFirewall) Sync(_ context.Context, _, next firewall.Plan) error {
+	f.calls++
 	f.plan = next
 	return nil
 }
@@ -120,12 +127,48 @@ func (f *resourceFixture) call(t *testing.T, method, path, body string, status i
 }
 func (f *resourceFixture) write(t *testing.T, method, path, body string, status int) *httptest.ResponseRecorder {
 	t.Helper()
-	calls, checks := f.apply.calls, f.runner.checks
+	calls, checks, restarts, healths, firewallCalls := f.apply.calls, f.runner.checks, f.runner.restarts, f.runner.healths, f.firewall.calls
 	w := f.call(t, method, path, body, status)
 	if f.apply.calls != calls+1 || f.runner.checks != checks+1 {
 		t.Fatalf("write bypassed Apply/check: %s %s", method, path)
 	}
+	if status < 300 && (f.runner.restarts != restarts+1 || f.runner.healths != healths+1 || f.firewall.calls != firewallCalls+1) {
+		t.Fatalf("changed config bypassed restart/health/firewall: %s %s", method, path)
+	}
+	if status == 422 && (f.runner.restarts != restarts || f.firewall.calls != firewallCalls) {
+		t.Fatal("failed check changed external state")
+	}
 	if status < 300 && w.Header().Get("X-Boxpanel-Apply") != "applied" {
+		t.Fatal("missing apply marker")
+	}
+	return w
+}
+
+// unchanged explicitly asserts the data-only path, including applied bookkeeping.
+func (f *resourceFixture) unchanged(t *testing.T, method, path, body string, status int) *httptest.ResponseRecorder {
+	t.Helper()
+	calls, checks, restarts, healths, firewallCalls := f.apply.calls, f.runner.checks, f.runner.restarts, f.runner.healths, f.firewall.calls
+	before, err := os.ReadFile(f.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation, err := db.GetSetting(context.Background(), f.conn, db.ApplyGeneration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := f.call(t, method, path, body, status)
+	if f.apply.calls != calls+1 || f.runner.checks != checks || f.runner.restarts != restarts || f.runner.healths != healths+1 || f.firewall.calls != firewallCalls {
+		t.Fatalf("data-only write touched core/firewall or bypassed Apply: %s %s", method, path)
+	}
+	after, err := os.ReadFile(f.config)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("data-only write changed config", err)
+	}
+	next, err := db.GetSetting(context.Background(), f.conn, db.ApplyGeneration)
+	if err != nil || next == generation {
+		t.Fatal("data-only bookkeeping not committed", err)
+	}
+	if w.Header().Get("X-Boxpanel-Apply") != "applied" {
 		t.Fatal("missing apply marker")
 	}
 	return w
@@ -173,11 +216,11 @@ func TestUserHandlersEveryWriteAppliesAndRedacts(t *testing.T) {
 	if u.Status != "expired" || u.Name != "alice_new" {
 		t.Fatal(u)
 	}
-	u = decodeResult[userView](t, f.write(t, "POST", "users/1/toggle", `{"enabled":false}`, 200))
+	u = decodeResult[userView](t, f.unchanged(t, "POST", "users/1/toggle", `{"enabled":false}`, 200))
 	if u.Status != "disabled" {
 		t.Fatal(u)
 	}
-	f.write(t, "POST", "users/1/reset-token", "", 200)
+	f.unchanged(t, "POST", "users/1/reset-token", "", 200)
 	var nextUUID, nextPassword, nextToken string
 	if err := f.conn.QueryRow("SELECT uuid,password,sub_token FROM users WHERE id=1").Scan(&nextUUID, &nextPassword, &nextToken); err != nil {
 		t.Fatal(err)
@@ -185,14 +228,14 @@ func TestUserHandlersEveryWriteAppliesAndRedacts(t *testing.T) {
 	if nextToken == token || nextUUID != uuid || nextPassword != password {
 		t.Fatal("token reset changed wrong credentials")
 	}
-	f.write(t, "POST", "users/1/reset-credentials", "", 200)
+	f.unchanged(t, "POST", "users/1/reset-credentials", "", 200)
 	if err := f.conn.QueryRow("SELECT uuid,password,sub_token FROM users WHERE id=1").Scan(&nextUUID, &nextPassword, &token); err != nil {
 		t.Fatal(err)
 	}
 	if nextUUID == uuid || nextPassword == password || token != nextToken {
 		t.Fatal("credentials reset changed wrong credentials")
 	}
-	f.write(t, "DELETE", "users/1", "", 204)
+	f.unchanged(t, "DELETE", "users/1", "", 204)
 	f.call(t, "GET", "users/1", "", 404)
 	for _, secret := range []string{uuid, password, token, nextUUID, nextPassword} {
 		if strings.Contains(f.logs.String(), secret) {
@@ -225,7 +268,7 @@ func TestInboundHandlersEveryWriteAppliesAndFirewallFollows(t *testing.T) {
 		}
 	}
 	f.busy[sysinfo.Socket{Port: 443, Proto: "tcp"}] = true // own running listener must remain editable
-	f.write(t, "PUT", "inbounds/1", `{"remark":"renamed","options":{"fingerprint":"firefox"}}`, 200)
+	f.unchanged(t, "PUT", "inbounds/1", `{"remark":"renamed","options":{"fingerprint":"firefox"}}`, 200)
 	updated, err := readInbound(context.Background(), f.conn, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -263,7 +306,7 @@ func TestResourceValidationConflictsProtectionAndScope(t *testing.T) {
 		requireStatus(t, request(t, f.h, "GET", "https://example.test/api/v1/"+path, "", nil, nil), 401)
 	}
 	for _, tt := range []struct{ method, path, body string }{
-		{"POST", "users", `{"name":"alice"}`}, {"PUT", "users/1", `{}`}, {"DELETE", "users/1", ""}, {"POST", "users/1/toggle", `{"enabled":true}`}, {"POST", "users/1/reset-token", ""}, {"POST", "users/1/reset-credentials", ""},
+		{"POST", "users", `{"name":"alice"}`}, {"PUT", "users/1", `{}`}, {"DELETE", "users/1", ""}, {"POST", "users/1/toggle", `{"enabled":true}`}, {"POST", "users/1/reset-token", ""}, {"POST", "users/1/reset-credentials", ""}, {"POST", "users/1/reset-traffic", ""},
 		{"POST", "inbounds", `{"protocol":"hysteria2"}`}, {"PUT", "inbounds/1", `{}`}, {"DELETE", "inbounds/1", ""}, {"POST", "inbounds/1/toggle", `{"enabled":true}`}, {"POST", "inbounds/suggest", `{"protocol":"hysteria2"}`}, {"POST", "reality/check", `{"server":"www.example.com"}`},
 	} {
 		before := f.apply.calls
@@ -352,7 +395,7 @@ func resourceSnapshot(t *testing.T, conn *sql.DB) string {
 	}
 	return result.String()
 }
-func TestEveryResourceWriteRollsBackOnCheckFailure(t *testing.T) {
+func TestEveryConfigChangingResourceWriteRollsBackOnCheckFailure(t *testing.T) {
 	f := newResources(t, false)
 	f.write(t, "POST", "users", `{"name":"alice"}`, 201)
 	f.write(t, "POST", "inbounds", `{"protocol":"vless_reality"}`, 201)
@@ -363,7 +406,7 @@ func TestEveryResourceWriteRollsBackOnCheckFailure(t *testing.T) {
 	}
 	f.runner.failCheck = true
 	for _, tt := range []struct{ method, path, body string }{
-		{"POST", "users", `{"name":"bob"}`}, {"PUT", "users/1", `{"name":"changed"}`}, {"DELETE", "users/1", ""}, {"POST", "users/1/toggle", `{"enabled":false}`}, {"POST", "users/1/reset-token", ""}, {"POST", "users/1/reset-credentials", ""},
+		{"POST", "users", `{"name":"bob"}`}, {"PUT", "users/1", `{"name":"changed"}`}, {"DELETE", "users/1", ""}, {"POST", "users/1/toggle", `{"enabled":false}`}, {"POST", "users/1/reset-credentials", ""},
 		{"POST", "inbounds", `{"protocol":"hysteria2"}`}, {"PUT", "inbounds/1", `{"port":9443}`}, {"DELETE", "inbounds/1", ""}, {"POST", "inbounds/1/toggle", `{"enabled":false}`},
 	} {
 		t.Run(tt.method+tt.path, func(t *testing.T) {
@@ -382,7 +425,7 @@ func TestEveryResourceWriteRollsBackOnCheckFailure(t *testing.T) {
 	}
 	f.runner.failCheck = false
 	f.runner.failRestart = true
-	f.write(t, "PUT", "users/1", `{"remark":"restart fails"}`, 500)
+	f.write(t, "PUT", "users/1", `{"name":"restart_fails"}`, 500)
 	if resourceSnapshot(t, f.conn) != before {
 		t.Fatal("restart failure committed")
 	}
@@ -519,4 +562,31 @@ func TestInboundPortChangesRetainUsableTagsAndOwnSockets(t *testing.T) {
 	// Clash's TCP port is not a UDP conflict, even when it was selected by
 	// Apply after this Hysteria2 inbound was created.
 	f.write(t, "POST", "inbounds", `{"protocol":"hysteria2","port":61000}`, 201)
+}
+
+func TestDataOnlyResourceWritesCommitWithoutRestart(t *testing.T) {
+	f := newResources(t, false)
+	f.write(t, "POST", "inbounds", `{"protocol":"vless_reality"}`, 201)
+	f.write(t, "POST", "users", `{"name":"alice","traffic_limit":1000}`, 201)
+	if _, err := f.conn.Exec("UPDATE users SET traffic_up=10,traffic_down=20 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	f.runner.failCheck = true
+	for _, tt := range []struct{ method, path, body string }{
+		{"PUT", "users/1", `{"traffic_limit":2000,"expire_at":4102444800,"remark":"metadata","traffic_reset_day":15}`},
+		{"POST", "users/1/reset-token", ""},
+		{"POST", "users/1/reset-traffic", ""},
+		{"POST", "users/1/toggle", `{"enabled":true}`},
+		{"PUT", "inbounds/1", `{"remark":"display only","options":{"fingerprint":"firefox"}}`},
+	} {
+		t.Run(tt.path+tt.body, func(t *testing.T) { f.unchanged(t, tt.method, tt.path, tt.body, 200) })
+	}
+	u := decodeResult[userView](t, f.call(t, "GET", "users/1", "", 200))
+	if u.TrafficLimit != 2000 || u.ExpireAt != 4102444800 || u.Remark != "metadata" || u.TrafficResetDay != 15 || u.TrafficUp != 0 || u.TrafficDown != 0 || u.TrafficResetAt == 0 {
+		t.Fatal("data-only edits not persisted", u)
+	}
+	active, err := db.GetSetting(context.Background(), f.conn, db.AppliedUsers)
+	if err != nil || !reflect.DeepEqual(active, []int64{1}) {
+		t.Fatal(active, err)
+	}
 }

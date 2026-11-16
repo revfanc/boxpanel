@@ -1,6 +1,7 @@
 package singbox
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -12,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -275,6 +277,20 @@ func (m *Manager) Apply(ctx context.Context, mutate Mutation) (result error) {
 	if backup, e := m.files.ReadFile(m.config + ".bak"); e == nil {
 		secrets = append(secrets, jsonStrings(backup)...)
 	}
+	// A data-only change (traffic limit, expiry, remark, traffic reset…) that
+	// leaves the generated config and firewall plan identical must not restart
+	// the core: a restart drops every other user's connections. Only commit the
+	// DB change when the running core is already active with this exact config.
+	// A nil mutation is an explicit restart request and always restarts.
+	if mutate != nil && hadConfig && bytes.Equal(config, oldConfig) && reflect.DeepEqual(previous, desired) && m.coreActive(ctx) {
+		if err := m.commitUnchanged(ctx, recoveryBase, connection, tx, current, opts, desired); err != nil {
+			return err
+		}
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	defer func() {
 		if e := m.files.Remove(m.config + ".tmp"); e != nil && !errors.Is(e, fs.ErrNotExist) {
 			result = errors.Join(result, fmt.Errorf("remove temporary config: %w", e))
@@ -326,8 +342,7 @@ func (m *Manager) Apply(ctx context.Context, mutate Mutation) (result error) {
 	if err := m.firewall.Sync(ctx, previous, desired); err != nil {
 		return fail("singbox_firewall_failed", err)
 	}
-	raw, _ := json.Marshal(desired)
-	if err := db.SetSetting(ctx, tx, db.AppliedFirewall, json.RawMessage(raw)); err != nil {
+	if err := m.recordApplied(ctx, tx, current, opts, desired); err != nil {
 		return fail("singbox_apply_failed", err)
 	}
 	if err := db.SetSetting(ctx, tx, db.ApplyGeneration, id); err != nil {
@@ -358,6 +373,64 @@ func (m *Manager) Apply(ctx context.Context, mutate Mutation) (result error) {
 	// A committed generation makes this journal harmless if deletion fails.
 	// The next apply removes it without restoring a committed configuration.
 	_ = m.removePending()
+	return nil
+}
+
+// coreActive reports whether the core unit is currently active.
+func (m *Manager) coreActive(ctx context.Context) bool {
+	output, err := m.runner.Run(ctx, "systemctl", "is-active", "--", SingboxUnit)
+	return err == nil && ctx.Err() == nil && stringTrim(output) == "active"
+}
+
+// commitUnchanged records the same bookkeeping as a full apply (applied users,
+// generation) without touching files, the core or the firewall.
+func (m *Manager) commitUnchanged(ctx, recoveryBase context.Context, connection *sql.Conn, tx *sql.Tx, current confgen.Snapshot, opts confgen.Options, desired firewall.Plan) error {
+	if err := m.recordApplied(ctx, tx, current, opts, desired); err != nil {
+		return &ApplyError{Code: "singbox_apply_failed", cause: fmt.Errorf("record unchanged config: %w", err)}
+	}
+	id, err := randomID()
+	if err != nil {
+		return err
+	}
+	if err := db.SetSetting(ctx, tx, db.ApplyGeneration, id); err != nil {
+		return &ApplyError{Code: "singbox_apply_failed", cause: err}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		// Just as for a full apply, SQLite can reject COMMIT while leaving the
+		// driver transaction open. Do not return that connection to the pool.
+		discardConnection(connection)
+		recoveryCtx, stop := context.WithTimeout(recoveryBase, min(5*time.Second, m.recoveryTimeout))
+		defer stop()
+		generation, readErr := db.GetSetting(recoveryCtx, m.db, db.ApplyGeneration)
+		if readErr != nil && !errors.Is(readErr, sql.ErrNoRows) {
+			return &ApplyError{Code: "singbox_apply_failed", RollbackFailed: true, DatabaseUncertain: true, cause: errors.Join(err, readErr)}
+		}
+		if generation != id {
+			return &ApplyError{Code: "singbox_apply_failed", cause: fmt.Errorf("commit unchanged config: %w", err)}
+		}
+	}
+	return nil
+}
+
+func (m *Manager) recordApplied(ctx context.Context, tx *sql.Tx, current confgen.Snapshot, opts confgen.Options, desired firewall.Plan) error {
+	raw, _ := json.Marshal(desired)
+	if err := db.SetSetting(ctx, tx, db.AppliedFirewall, json.RawMessage(raw)); err != nil {
+		return err
+	}
+	active := []int64{}
+	if len(desired.Ports) > 0 {
+		for _, u := range current.Users {
+			if confgen.UserEligible(u, opts.Now.Unix()) {
+				active = append(active, u.ID)
+			}
+		}
+	}
+	if err := db.SetSetting(ctx, tx, db.AppliedUsers, active); err != nil {
+		return err
+	}
 	return nil
 }
 

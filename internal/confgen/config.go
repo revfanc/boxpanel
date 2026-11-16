@@ -84,10 +84,12 @@ type routeConfig struct {
 }
 
 type routeRule struct {
-	Protocol    string `json:"protocol,omitempty"`
-	IPIsPrivate bool   `json:"ip_is_private,omitempty"`
-	Action      string `json:"action"`
-	Server      string `json:"server,omitempty"`
+	AuthUser    []string `json:"auth_user,omitempty"`
+	Outbound    string   `json:"outbound,omitempty"`
+	Protocol    string   `json:"protocol,omitempty"`
+	IPIsPrivate bool     `json:"ip_is_private,omitempty"`
+	Action      string   `json:"action"`
+	Server      string   `json:"server,omitempty"`
 }
 
 type experimentalConfig struct {

@@ -209,7 +209,7 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
   恢复失败/DB 状态不确定仍返回 500，保留原错误码及恢复提示，不声称成功。
   logs/config 在同进程生效时立即返回 `503 singbox_applying`；跨进程锁最多等待 100ms。
   普通订阅、会话及面板数据读取走独立只读 WAL 池，生效中返回上一份已提交快照，提交后可见新值。
-  sing-box 1.14.4 SIGHUP 会关闭并重建实例，不能保持连接；用户变更仍按 SPEC §7 例外重启。
+  sing-box 1.14.4 SIGHUP 会关闭并重建实例，不能保持连接；实际改变生成配置的用户变更仍按 SPEC §7 重启；T7.1b 的配置/计划不变且运行中写操作只提交 DB。
 - `error.detail` 只含脱敏后的 check 输出或失败时 journal 最近 30 行；日志和错误原因不直接透传。
   DB/存储等内部错误不返回原始内容。生成错误无内核输出时可为空 detail，仍有修复建议。
 - logs 的 lines 默认 200，必须为单个 1–1000 的整数，否则 400。使用固定受管 unit、
@@ -245,7 +245,8 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 { "protocol": "vless_reality", "port": 443, "remark": "香港-Reality", "options": { "server_name": "..." } }
 ```
 
-所有持久化写操作通过 `singbox.Manager.Apply(ctx, mutation)` 走「生成 → check → 生效」流程。
+所有持久化写操作通过 `singbox.Manager.Apply(ctx, mutation)` 生成并比较配置；实际配置写入走
+「check → 生效」流程，配置/计划不变且内核运行时按 SPEC §7 的 T7.1b 约定只提交 DB。
 创建返回 201，修改/启停返回 200 最新脱敏对象，删除成功返回 204；失败按错误表返回。
 `/inbounds/suggest` 只提供推荐参数，不写 DB、不触发生效。
 
@@ -254,9 +255,10 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/users` | 列表（含流量、到期、状态） |
-| POST | `/users` | `{name, remark?, traffic_limit?, expire_at?}`，uuid/password/token 自动生成 |
+| POST | `/users` | `{name, remark?, traffic_limit?, expire_at?, traffic_reset_day?}`，uuid/password/token 自动生成 |
 | GET/PUT/DELETE | `/users/{id}` | |
 | POST | `/users/{id}/toggle` | `{enabled}` |
+| POST | `/users/{id}/reset-traffic` | 清零上传/下载；走 Manager.Apply，200 返回最新脱敏用户 |
 | POST | `/users/{id}/reset-token` | 重置订阅 token（旧链接立即失效） |
 | POST | `/users/{id}/reset-credentials` | 重置 uuid/password（需重新导入） |
 | GET | `/users/{id}/links` | 见下 |
@@ -285,7 +287,7 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 `/users/{id}/links` 按 TASKS.md 留在 **T3.2**，此时仍返回 404；不实现订阅、规则、设置或引导接口。
 所有接口需认证，POST/PUT/DELETE 校验 CSRF；GET 支持 HEAD，响应均为 `Cache-Control: no-store`。
 JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未知字段、错误类型和多余 JSON。
-删除、reset-token、reset-credentials 使用空请求体；toggle 必须给出布尔 `enabled`。
+删除、reset-token、reset-credentials、reset-traffic 使用空请求体；toggle 必须给出布尔 `enabled`。
 已知路径的方法错误返回 JSON 405 和完整 Allow，非法 ID 为 400，正整数 ID 不存在为 404。
 
 **入站**：
@@ -327,7 +329,7 @@ JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未�
   remark 最多 1024 字节；流量上限、到期时间为非负 int64，0 分别表示不限/永不过期。
 - 默认启用、流量计数为零；UUID v4、24 字节 base64url 密码与 token 均用 crypto/rand 生成。
   列表按 ID 升序，返回数组；对象为
-  `{id,name,uuid,enabled,traffic_limit,traffic_up,traffic_down,expire_at,remark,created_at,status}`。
+  `{id,name,uuid,enabled,traffic_limit,traffic_up,traffic_down,traffic_reset_day,traffic_reset_at,expire_at,remark,created_at,status}`。
   uuid 只显示首尾各四位，中间 `****`；不返回 password/sub_token。
 - status 按优先级为 disabled / expired / exhausted / active；到期和超额边界同 CONFIG.md，
   加总流量避免 int64 溢出。这里只计算展示状态和随 Apply 生成配置，不实现 T7.1 的采样/定时禁用。
@@ -485,3 +487,26 @@ JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未�
 - public_host 或 panel_tls_mode 更新成功后异步通知 worker，不重启监听；restart_after 仍只表示
   原面板端口/路径切换。合并 block_bittorrent 的更新仍完整经过 Apply，失败不通知证书管理器。
   setup 的域名校验及普通事务规则保持，只有提交后才通知；旧订单不能覆盖新的主机或策略。
+
+
+## T7.1 流量与月度重置
+
+- POST/PUT 用户可选整数 `traffic_reset_day`，0（默认）关闭自动重置，1–28 表示 UTC 每月该日。
+  PUT 省略保持；null、重复字段、非整数或超出范围为 `400 invalid_argument`，带修改后重试的提示。
+  不接受客户端修改 `traffic_up/down`、`traffic_reset_at` 或内部 `traffic_epoch`。
+- 用户列表、详情及创建/更新/重置响应包含 `traffic_reset_day` 和 `traffic_reset_at`（Unix 秒，0 表示尚未重置）。
+  不返回内部 epoch，不改变普通 CRUD 的凭证脱敏规则。
+- `POST /users/{id}/reset-traffic`：空请求体、需认证与 CSRF；非法 ID 为 400、不存在为 404、
+  其他方法为 405。通过 Manager.Apply 同事务清零 up/down、记录 reset_at 并推进内部 epoch，
+  配置改变时完成 check/重启/存活后返回 `200` 最新脱敏用户及原 Apply 标记；配置与防火墙计划不变
+  且内核运行时只提交 DB，不 check/重启/同步防火墙，同样返回 `200` 与 `applied` 标记；失败沿用原回滚语义。
+  清零可恢复仅因超额不可用的用户，不自动改变 enabled 或 expire_at；订阅 token/UUID/密码保持。
+- UTC 月度边界及手动清零抑制重复、后台停用/恢复规则见 SPEC §14。后台不增加 API 或其他生效入口。
+- 用量为已落库的近似统计（每 5 秒采集，通常每 60 秒保存）；列表/详情/公开分享页与
+  `Subscription-Userinfo` 使用相同计数。短连接、关闭尾段、采集失败和崩溃可能漏计；不用于精确计费。
+  超额调度会额外考虑内存待写用量。公开订阅对禁用/过期/超额继续保持相同空白 404。
+- T7.1b：所有资源写入仍进入 Manager.Apply；配置逐字节相同、防火墙计划相同且内核运行时只提交 DB
+  与生效记账。修改仍有效用户的限额/到期/备注/月度重置日、重置 token、不改变有效用户集合的清零
+  均不重启；修改姓名/连接凭证、增删启停有效用户，或因限额/到期/清零改变有效用户集合仍可能重启。
+  显式 restart 永远走完整流程；成功标记不区分两条路径。面板仅对预计改变配置的操作提醒全连接中断。
+  约 1 秒为正常体验提示，慢生效/恢复的有界预算保持 T6.10 契约；完整边界见 SPEC §7。

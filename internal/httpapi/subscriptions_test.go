@@ -91,7 +91,7 @@ func TestSubscriptionManagement(t *testing.T) {
 		}
 	}
 	old := d.User.Token
-	f.write(t, "POST", "users/1/reset-token", "", 200)
+	f.unchanged(t, "POST", "users/1/reset-token", "", 200)
 	if _, err := store.Load(context.Background(), 0, &old); err == nil {
 		t.Fatal("old token survived reset")
 	}

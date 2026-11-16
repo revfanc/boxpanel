@@ -42,6 +42,7 @@ it('confirms token reset, retains write failures, removes revoked links and refe
   await screen.findByLabelText(t.users.auto)
   await user.click(screen.getByRole('button', { name: t.users.resetToken }))
   expect(screen.getByRole('alertdialog')).toHaveTextContent(t.users.tokenHint)
+  expect(screen.getByRole('alertdialog')).not.toHaveTextContent(t.common.applyHint)
   await user.click(screen.getByRole('button', { name: t.common.cancel }))
   expect(fetch.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0)
   await user.click(screen.getByRole('button', { name: t.users.resetToken }))
@@ -61,6 +62,7 @@ it('asks for confirmation before credential reset and disable', async () => {
   const { user } = mountPage(<UserDetailPage />, '/users/1', '/users/:id')
   await user.click(await screen.findByRole('button', { name: t.users.resetCredentials }))
   expect(screen.getByRole('alertdialog')).toHaveTextContent(t.users.credentialsHint)
+  expect(screen.getByRole('alertdialog')).toHaveTextContent(t.common.applyHint)
   await user.click(screen.getByRole('button', { name: t.common.cancel }))
   await user.click(screen.getByRole('button', { name: t.common.disable }))
   expect(screen.getByRole('alertdialog')).toHaveTextContent(t.common.disableHint)
@@ -74,4 +76,29 @@ it('shows a missing user as a recoverable error rather than mounting subscriptio
   missing = false
   await user.click(screen.getByRole('button', { name: t.common.retry }))
   expect(await screen.findByRole('img', { name: sub.qr })).toBeVisible()
+})
+
+it('confirms traffic reset, keeps errors and refreshes actual usage after success', async () => {
+  let reset = false
+  let fail = true
+  const fetch = mockAPI({
+    '/users/1': () => Response.json({ ...proxyUser, traffic_up: reset ? 0 : 2048, traffic_down: reset ? 0 : 4096, traffic_reset_day: 16, traffic_reset_at: reset ? 1794787200 : 0 }),
+    'POST /users/1/reset-traffic': () => { if (fail) return failure(422); reset = true; return Response.json({ ...proxyUser, traffic_up: 0, traffic_down: 0 }) },
+  })
+  const { user } = mountPage(<UserDetailPage />, '/users/1', '/users/:id')
+  await user.click(await screen.findByRole('button', { name: t.users.resetTraffic }))
+  expect(screen.getByText(t.users.usageHint)).toBeVisible()
+  expect(screen.getByText(`${t.users.resetDay}: ${t.users.resetOnDay(16)}`)).toBeVisible()
+  expect(screen.getByRole('alertdialog')).toHaveTextContent(t.users.resetTrafficHint)
+  expect(screen.getByRole('alertdialog')).not.toHaveTextContent(t.common.applyHint)
+  await user.click(screen.getByRole('button', { name: t.common.cancel }))
+  expect(fetch.mock.calls.some(([url]) => url.endsWith('/reset-traffic'))).toBe(false)
+  await user.click(screen.getByRole('button', { name: t.users.resetTraffic }))
+  await user.click(screen.getByRole('button', { name: t.common.confirm }))
+  expect(await within(screen.getByRole('alertdialog')).findByText('Try again')).toBeVisible()
+  fail = false
+  await user.click(screen.getByRole('button', { name: t.common.confirm }))
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+  expect(await screen.findByText(/2026-11-16T00:00:00.000Z/)).toBeVisible()
+  expect(screen.getByText(/0 B/)).toBeVisible()
 })

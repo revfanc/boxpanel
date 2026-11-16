@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -31,7 +32,7 @@ func TestMigrationsIdempotent(t *testing.T) {
 	conn = openTestPath(t, path)
 	var count int
 	var timestamp int64
-	if err := conn.QueryRow("SELECT count(*), min(applied_at) FROM schema_migrations").Scan(&count, &timestamp); err != nil || count != 1 || timestamp != appliedAt {
+	if err := conn.QueryRow("SELECT count(*), min(applied_at) FROM schema_migrations").Scan(&count, &timestamp); err != nil || count != 2 || timestamp != appliedAt {
 		t.Fatalf("migration history changed: count=%d timestamp=%d err=%v", count, timestamp, err)
 	}
 	if err := conn.QueryRow("SELECT count(*) FROM admins WHERE username = 'admin'").Scan(&count); err != nil || count != 1 {
@@ -48,20 +49,21 @@ func TestMigrationOrderRollbackAndRetry(t *testing.T) {
 	mustExec(t, conn, `INSERT INTO settings VALUES ('keep', 'true')`)
 	source := fstest.MapFS{
 		"migrations/0001_initial.sql": {Data: []byte("SELECT 1;")},
-		"migrations/0002_next.sql":    {Data: []byte("CREATE TABLE upgrade_probe (value TEXT); INSERT INTO upgrade_probe VALUES ('before');")},
-		"migrations/0003_next.sql":    {Data: []byte("UPDATE upgrade_probe SET value = 'after'; INSERT INTO missing_table VALUES (1);")},
+		"migrations/0002_traffic.sql": {Data: []byte("SELECT 1;")},
+		"migrations/0003_next.sql":    {Data: []byte("CREATE TABLE upgrade_probe (value TEXT); INSERT INTO upgrade_probe VALUES ('before');")},
+		"migrations/0004_next.sql":    {Data: []byte("UPDATE upgrade_probe SET value = 'after'; INSERT INTO missing_table VALUES (1);")},
 	}
-	if err := migrate(ctx, conn, source); err == nil || !strings.Contains(err.Error(), "0003_next.sql") {
+	if err := migrate(ctx, conn, source); err == nil || !strings.Contains(err.Error(), "0004_next.sql") {
 		t.Fatalf("expected contextual migration failure, got %v", err)
 	}
 	var count int
 	if err := conn.QueryRow("SELECT count(*) FROM sqlite_master WHERE name = 'upgrade_probe'").Scan(&count); err != nil || count != 0 {
 		t.Fatalf("DDL not rolled back: count=%d err=%v", count, err)
 	}
-	if err := conn.QueryRow("SELECT count(*) FROM schema_migrations").Scan(&count); err != nil || count != 1 {
+	if err := conn.QueryRow("SELECT count(*) FROM schema_migrations").Scan(&count); err != nil || count != 2 {
 		t.Fatalf("version not rolled back: count=%d err=%v", count, err)
 	}
-	source["migrations/0003_next.sql"].Data = []byte("UPDATE upgrade_probe SET value = 'after';")
+	source["migrations/0004_next.sql"].Data = []byte("UPDATE upgrade_probe SET value = 'after';")
 	for range 2 {
 		if err := migrate(ctx, conn, source); err != nil {
 			t.Fatal(err)
@@ -71,7 +73,7 @@ func TestMigrationOrderRollbackAndRetry(t *testing.T) {
 	if err := conn.QueryRow("SELECT value FROM upgrade_probe").Scan(&value); err != nil || value != "after" {
 		t.Fatalf("migration order: value=%q err=%v", value, err)
 	}
-	if err := conn.QueryRow("SELECT count(*) FROM schema_migrations").Scan(&count); err != nil || count != 3 {
+	if err := conn.QueryRow("SELECT count(*) FROM schema_migrations").Scan(&count); err != nil || count != 4 {
 		t.Fatalf("versions after retry: count=%d err=%v", count, err)
 	}
 	if err := conn.QueryRow("SELECT value FROM settings WHERE key = 'keep'").Scan(&value); err != nil || value != "true" {
@@ -82,7 +84,7 @@ func TestMigrationOrderRollbackAndRetry(t *testing.T) {
 func TestMigrationRejectsInvalidSequence(t *testing.T) {
 	for name, source := range map[string]fstest.MapFS{
 		"no files":  {},
-		"gap":       {"migrations/0002_next.sql": {Data: []byte("SELECT 1;")}},
+		"gap":       {"migrations/0003_next.sql": {Data: []byte("SELECT 1;")}},
 		"bad name":  {"migrations/initial.sql": {Data: []byte("SELECT 1;")}},
 		"empty SQL": {"migrations/0001_initial.sql": {Data: []byte(" \n")}},
 		"duplicate version": {
@@ -99,10 +101,11 @@ func TestMigrationRejectsInvalidSequence(t *testing.T) {
 }
 
 func TestOpenRejectsUnsupportedHistory(t *testing.T) {
-	for _, version := range []int{0, 2, 99} {
+	for _, version := range []int{0, 3, 99} {
 		path := filepath.Join(t.TempDir(), "panel.db")
 		conn := openTestPath(t, path)
-		mustExec(t, conn, "UPDATE schema_migrations SET version = ?", version)
+		mustExec(t, conn, "DELETE FROM schema_migrations")
+		mustExec(t, conn, "INSERT INTO schema_migrations (version,applied_at) VALUES (?,1)", version)
 		conn.Close()
 		opened, err := Open(context.Background(), path)
 		if err == nil {
@@ -134,7 +137,43 @@ func TestConcurrentOpen(t *testing.T) {
 	}
 	conn := openTestPath(t, path)
 	var count int
-	if err := conn.QueryRow("SELECT count(*) FROM schema_migrations").Scan(&count); err != nil || count != 1 {
+	if err := conn.QueryRow("SELECT count(*) FROM schema_migrations").Scan(&count); err != nil || count != 2 {
 		t.Fatalf("concurrent migrations: count=%d err=%v", count, err)
+	}
+}
+
+func TestTrafficMigrationPreservesExistingUser(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	conn, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	initial, err := migrations.ReadFile("migrations/0001_initial.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(ctx, conn, fstest.MapFS{"migrations/0001_initial.sql": {Data: initial}}); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, conn, `INSERT INTO users(name,uuid,password,sub_token,traffic_up,traffic_down,created_at) VALUES('legacy','uuid','password','token',123,456,1)`)
+	if err := Migrate(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+	var up, down, day, at, epoch int64
+	if err := conn.QueryRow("SELECT traffic_up,traffic_down,traffic_reset_day,traffic_reset_at,traffic_epoch FROM users").Scan(&up, &down, &day, &at, &epoch); err != nil {
+		t.Fatal(err)
+	}
+	if up != 123 || down != 456 || day != 0 || at != 0 || epoch != 0 {
+		t.Fatal(up, down, day, at, epoch)
+	}
+	for _, day := range []int{-1, 29} {
+		if _, err := conn.Exec("UPDATE users SET traffic_reset_day=?", day); err == nil {
+			t.Fatal("invalid reset day accepted", day)
+		}
+	}
+	if err := Migrate(ctx, conn); err != nil {
+		t.Fatal(err)
 	}
 }

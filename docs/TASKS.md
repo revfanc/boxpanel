@@ -623,9 +623,111 @@ Let's Encrypt 自 2026-01-15 起正式签发 IP 地址证书（必须使用 `sho
   完整 make test 仍仅因既有 e2e 的 macOS DNS 通知 `status 9` 失败，未修改/跳过，最后一项保留未勾选。
 - 仅 T6.10，无新增依赖/供应链策略变动，未执行 git commit/push/切换分支。
 
+### T7.1 到期自动停用 + 每用户流量统计（v0.2.0）
+
+全盘审查发现：`traffic_up/traffic_down` 从未被写入，流量上限形同虚设；到期用户只在下一次无关的生效时才被移出
+sing-box 配置，已导入的设备可继续使用。本任务补齐两者，共用一个后台调度器。
+
+**已核实的约束**：锁定的官方 sing-box 1.14.4 构建标签为
+`with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,…`，**不含 `with_v2ray_api`**，
+不能用 v2ray_api 的用户统计；不得改用自编译内核。现有配置已启用 Clash API（127.0.0.1 + 随机 secret）。
+
+**A. 流量采集（先调研后实现）**
+1. 查 sing-box v1.14.4 源码（`experimental/clashapi`）确认 `/connections` 每条连接的 metadata 是否带认证用户
+   （如 inbound user / `auth_user` 对应字段）。在 PR 描述中引用源码行。
+2. 若带用户字段：直接按该字段归属。若不带：服务端配置为每个启用用户生成独立直连出站（tag 如 `direct-u<id>`，
+   仍为 `direct` 类型），并在路由规则中按 `auth_user` 路由到对应出站（字段以 1.14 官方文档为准），连接的 `chains`
+   即可确定用户。保持现有 sniff/BT 屏蔽/resolve/私网拒绝规则的语义与顺序不变，golden 更新并 `sing-box check`。
+3. 采集器：每 5s 轮询 `/connections`，按连接 id 计算 upload/download 增量累加到对应用户的内存计数；
+   连接在两次轮询之间关闭会丢失最后一段增量——属已知近似误差，在 SPEC 与面板提示中如实说明（不得宣称精确）。
+   sing-box 重启（连接 id 重置）要正确处理，不得重复计数或出现负增量。
+4. 每 60s（以及进程正常退出时）把内存增量批量写入 DB（单个短事务，`traffic_up += ?`），写失败保留增量下次重试；
+   必须与 T6.10 的生效事务、只读池兼容，不得长时间持有写锁。
+
+**B. 到期 / 超额自动停用**
+5. 调度器每 30s 检查：已到期、或用量达到上限（沿用 `eligibleUsers` 的判定）且仍在当前生效配置中的用户；
+   有变化时**合并为一次** `Manager.Apply` 重新生效（失败按现有回滚；下轮重试，指数退避上限 10 分钟），
+   使其连接被断开且不能再连。日志记录被停用的用户 id 与原因（到期/超额），不记录凭证。
+6. 用户在面板延长到期时间、提高上限或重置流量后，按现有生效流程恢复，无需额外操作。
+
+**C. 流量重置**
+7. 新增 `POST /users/{id}/reset-traffic`（认证 + CSRF + 走生效流程），把 up/down 清零；面板用户详情加「重置流量」
+   按钮（二次确认）。
+8. 用户可选「每月重置日」（1–28，0 表示不自动重置；新增列，带迁移）。调度器在 UTC 该日 00:00 后首次检查时清零，
+   用 `traffic_reset_at` 防重复。表单、详情和 API 文档同步。
+
+**D. 展示**
+9. 面板用户列表/详情、订阅分享页、`Subscription-Userinfo` 显示真实用量；去掉「实时统计将在后续版本提供」文案，
+   改为说明「统计每 5 秒采集，可能略少于实际用量」。
+10. 保存用户时提示「保存会使所有在线连接中断约 1 秒」（sing-box 1.14.4 重载即重建实例，见 T6.10）。
+
+**测试**
+- 采集器：注入假 Clash API 响应，覆盖增量、连接关闭、sing-box 重启 id 重置、未知用户、批量落库失败重试。
+- 调度器：注入时钟，覆盖到期、超额、合并生效、生效失败退避、每月重置不重复。
+- e2e 回环测试中新增断言：经代理传输已知字节后，用户用量在一次采集+落库后增加且量级正确（允许近似）。
+- make lint test build 通过；SPEC/API/CONFIG/FRONTEND 文档同步。
+
+- **验收**：
+  - [x] 调研结论（用户字段是否存在）与采用方案写入 PR 描述/SPEC。
+  - [x] 到期、超额自动停用并断开；恢复路径可用（真实 Manager + 假系统边界测试通过，内核回环待复验）。
+  - [x] 用量真实增长；重置与每月重置可用（采集/落库/API/页面集成通过，真实内核量级断言待复验）。
+  - [x] make lint test build 通过（审查者沙箱外复跑，含真实内核流量 e2e）；文档同步。
+
+**T7.1 实现与验证记录（2026-11-16）**：
+- 调研、源码链接、最小规格补齐及逐项测试见 [T7.1.md](T7.1.md)；没有认证用户 metadata，采用 auth_user → direct-u<ID> → chains。
+- 新迁移保留旧计数，增加月度重置日/时间及内部 epoch；5 秒近似采样、60 秒短事务落库、30 秒合并检查，
+  与既有 Apply 和独立只读 WAL 池兼容；失败保留增量/回滚，生效退避至多 10 分钟。
+- 重置 API 与确认按钮、每月 UTC 计划、真实用量和误差/保存中断提示完成；SPEC/API/CONFIG/FRONTEND 同步。
+- make lint、make build 通过；安装脚本、其余 Go 包、前端 typecheck/lint/118 项测试通过；golden 通过锁定 1.14.4 check。
+- 完整 make test 已运行，原 TestLoopback 和新增 TestTrafficLoopback 均仅因沙箱 DNS 通知 status 9 启动失败，
+  须普通终端/CI 复跑；未修改原 TestLoopback 文件或跳过条件，总验收最后一项保留未勾选。
+- 仅 T7.1，无新增依赖或供应链策略变动；未执行 commit/push/切换分支。
+
+### T7.1b 配置未变化时不重启内核（审查者追加，随 v0.2.0）
+
+用户原则：**新增/编辑一个用户不应影响其他用户**。sing-box 1.14.4 任何生效都会重启并断开全部连接（T6.10 已证实无热更新）。
+但很多写操作根本不改变生成的配置：修改流量上限/到期时间/备注（用户仍有效）、手动或每月重置流量、改订阅 token 等。
+
+审查者已在 `internal/singbox/apply.go` 加入短路（请审阅并完善，不要回退）：当 `mutate != nil`、已有配置、
+新生成配置与当前文件**逐字节相同**、防火墙计划相同、且内核 `is-active` 时，只在同一事务里写
+`AppliedFirewall`/`AppliedUsers`/`ApplyGeneration` 并提交，不写临时文件、不 check、不重启、不动防火墙。
+`mutate == nil`（显式重启）、内核不在运行、或任一不同，走原完整流程。
+
+审查者另修复：`internal/traffic/collector.go` 新增 `born` 基线——面板进程重启后首次见到、且开始时间早于采集器启动的连接
+只记基线不计量，避免长连接重复计数；已加 `TestCollectorPanelRestartDoesNotRecount`。
+
+**要求**
+1. 现有失败测试（`TestUserHandlersEveryWriteAppliesAndRedacts`、`TestInboundHandlersEveryWriteAppliesAndFirewallFollows`、
+   `TestEveryResourceWriteRollsBackOnCheckFailure`、`TestSubscriptionManagement` 等）按新语义修正：
+   - 会改变配置的写操作仍必须 check→替换→重启→健康→防火墙，失败回滚（用能改变配置的夹具验证）；
+   - 不改变配置的写操作：不调用 check/restart/firewall，DB 修改与 applied 记账提交，响应成功。
+   不得用“测试专用开关”绕过；断言要区分两条路径。
+2. 新增 apply 单测：未变化短路；`mutate==nil` 仍重启；内核未运行时走完整流程并启动；配置字节不同/防火墙不同走完整流程；
+   短路提交失败时的回滚；与 pending 恢复兼容。
+3. 核实配置生成是**确定性**的（同一快照两次 Build 字节相同，含用户顺序、map 序列化、出站顺序），否则短路无效；补测试。
+4. 文档：AGENTS.md 硬性约定 1 改为「写入配置必须先校验后生效…；生成配置与运行中完全相同时不写文件、不重启」；
+   SPEC §7 补充；FRONTEND/i18n 中「保存会使所有在线连接中断约 1 秒」提示改为仅在会改变配置的操作上出现
+   （新增/删除/启停用户、节点变更等；编辑上限/到期/备注、重置流量不提示）。
+5. 回答并在 PR 描述写明：哪些用户操作现在不再中断他人连接，哪些仍会。
+
+- **验收**：
+  - [x] 旧测试按配置改变/不变分开断言；未用测试开关绕过。
+  - [x] apply 短路、nil、未运行、字节/防火墙不同、提交失败、pending 恢复测试。
+  - [x] 配置生成确定性测试（重复 Build、用户/入站顺序、options/map、出站顺序）。
+  - [x] AGENTS/SPEC/FRONTEND/i18n 及 API/CONFIG 同步；操作影响写入评审说明。
+  - [x] make lint、make build；安装脚本、其余 Go 包及前端 121 项测试通过。
+  - [x] （审查者沙箱外复跑通过）完整 make test：已运行，仅 internal/e2e 两个回环因已知沙箱 DNS 通知 status 9 失败，未修改/跳过。
+
+**T7.1b 实现与验证记录（2026-11-16）**：
+- 具体行为、哪些操作仍中断他人连接、测试证据和未决问题见 [T7.1b.md](T7.1b.md)。
+- 保留审查者的短路与 born 基线修复，完善短路 COMMIT 失败时的连接丢弃/generation 核对；
+  两条路径共享记账，pending 必须先处理。配置真实变更仍走完整 check/原子替换/重启/回滚。
+- 普通有效用户元数据、token、手动/月度清零不再重启；恢复/移除用户或改名/有效凭证仍可能重启。
+- 无新增依赖/迁移/供应链策略变动；未推进后续任务，未执行 commit/push/切换分支。
+
 ## M7 后续增强（MVP 之后，按需排期）
 
-- T7.1 每用户流量统计（评估 v2ray_api 统计是否在官方构建中可用；否则基于 clash_api 连接统计近似）、超额/到期自动禁用（定时任务 + 生效流程）
+- T7.1 见上方详细任务（已排期）
 - T7.2 hy2 复用 ACME 证书（基础 ACME 已在 T6.3）；新增 Trojan/VLESS-WS+TLS（可套 CDN）
 - T7.3 更多协议：TUIC v5、AnyTLS、ShadowTLS
 - T7.4 TOTP 两步验证

@@ -91,6 +91,7 @@ footer p + p { margin-top: 8px; }
   <section class="card" aria-labelledby="usage-title">
     <h2 id="usage-title">{{.Text.usage}}</h2>
     <p class="usage"><strong>{{.Used}}</strong> <span class="muted">/ {{.Total}}</span></p>
+    <p class="hint muted">{{.Text.usageHint}}</p>
     <progress max="100" value="{{.Progress}}" aria-label="{{.Text.used}}" aria-valuetext="{{.Used}} / {{.Total}}"></progress>
     <div class="expiry"><div><p class="muted">{{.Text.expiry}}</p><p>{{.Expire}}</p></div>{{if .Remaining}}<p class="muted">{{.Remaining}}</p>{{end}}</div>
   </section>

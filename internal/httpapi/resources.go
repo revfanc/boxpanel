@@ -80,6 +80,7 @@ func (a *api) registerResources(register func(string, string, http.HandlerFunc, 
 	register("PUT", "/api/v1/users/{id}", a.userUpdate, true)
 	register("DELETE", "/api/v1/users/{id}", a.userDelete, true)
 	register("POST", "/api/v1/users/{id}/toggle", a.userToggle, true)
+	register("POST", "/api/v1/users/{id}/reset-traffic", a.userResetTraffic, true)
 	register("POST", "/api/v1/users/{id}/reset-token", a.userResetToken, true)
 	register("POST", "/api/v1/users/{id}/reset-credentials", a.userResetCredentials, true)
 }
