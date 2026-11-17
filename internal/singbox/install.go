@@ -216,6 +216,12 @@ func (i Installer) download(ctx context.Context, url string, dst io.Writer, limi
 		return fmt.Errorf("create download request: %w", err)
 	}
 	req.Header.Set("User-Agent", "boxpanel")
+	// CI runners share IPs and often exhaust the unauthenticated API quota
+	// (60/hour). Send GITHUB_TOKEN, when present, only to the GitHub API over
+	// HTTPS; net/http drops Authorization on cross-host redirects.
+	if token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); token != "" && req.URL.Scheme == "https" && req.URL.Host == "api.github.com" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	resp, err := i.Client.Do(req)
 	if err != nil {
 		return fmt.Errorf("request official release: %w", err)

@@ -53,6 +53,9 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm --dir web install --frozen-lockfile
       - name: Validate and build frontend
+        # Authenticated GitHub API calls avoid shared-runner rate limits in make tools.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: make tools lint test build-web
       - name: Build and checksum Linux release archives
         run: bash scripts/build-release.sh "$RUNNER_TEMP/release"

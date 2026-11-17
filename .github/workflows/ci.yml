@@ -50,6 +50,9 @@ jobs:
         run: shellcheck scripts/*.sh
       - name: Lint, test and build
         # Install outside unit tests; future golden tests discover it on PATH.
+        # Authenticated GitHub API calls avoid shared-runner rate limits in make tools.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: make tools lint test build
       - name: Check version command
         run: bin/boxpanel version
