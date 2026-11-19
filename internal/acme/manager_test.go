@@ -59,7 +59,15 @@ func newFixture(t *testing.T) *fixture {
 			t.Fatal(err)
 		}
 	}
-	certificate, key, err := certs.PanelHost("panel.example.com", f.now)
+	key, err := certs.GenerateTLSKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate, err := certs.SignPanelHost("panel.example.com", key, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM, err := certs.EncodeTLSKey(key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +75,7 @@ func newFixture(t *testing.T) *fixture {
 	if err := os.WriteFile(certFile, certificate, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(keyFile, key, 0600); err != nil {
+	if err := os.WriteFile(keyFile, keyPEM, 0600); err != nil {
 		t.Fatal(err)
 	}
 	f.m, err = New(context.Background(), f.conn, Options{Dir: filepath.Join(dir, "certs"), CertFile: certFile, KeyFile: keyFile, Directory: "http://127.0.0.1:1/directory", Now: func() time.Time { return f.now }, Logger: slog.New(slog.NewTextHandler(&f.logs, nil)), OpenPort: func(context.Context) error { f.opens++; return nil }, Issuer: issueFunc(func(ctx context.Context, name string) (Material, error) {
@@ -129,6 +137,129 @@ func TestExternalHostChangeIsPickedUpWithoutNotification(t *testing.T) {
 	current, _ := f.m.GetCertificate(nil)
 	if f.calls != 2 || status.Host != "203.0.113.8" || status.Type != "acme" || bytes.Equal(previous.Certificate[0], current.Certificate[0]) || current.Leaf.VerifyHostname("203.0.113.8") != nil {
 		t.Fatalf("worker did not reconcile external host change: %+v calls=%d", status, f.calls)
+	}
+}
+
+func TestFallbackKeyMigrationAndExpiry(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	original, err := f.m.GetCertificate(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin, err := f.m.FallbackPin()
+	if err != nil || pin != certs.SPKIPin(original.Leaf.RawSubjectPublicKeyInfo) {
+		t.Fatal("original installation key was not preserved", err)
+	}
+
+	// Recreate a pre-upgrade installation whose active fallback was generated
+	// after a host change, with a different key from the original panel.crt.
+	legacyKey, err := certs.GenerateTLSKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const legacyHost = "legacy.example.com"
+	if err := db.SetSetting(ctx, f.conn, db.PublicHost, legacyHost); err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := certs.SignPanelHost(legacyHost, legacyKey, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM, err := certs.EncodeTLSKey(legacyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	material := Material{leaf, keyPEM}
+	pair, err := parseMaterial(material, legacyHost, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := certs.SPKIPin(pair.Leaf.RawSubjectPublicKeyInfo)
+	state := savedState{Status: Status{Host: legacyHost, Mode: "acme", Type: "self_signed"}, Directory: f.m.opts.Directory}
+	if err := f.m.activate(ctx, state, material, pair); err != nil {
+		t.Fatal(err)
+	}
+	trusted, err := f.m.opts.Issuer.Issue(ctx, legacyHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued, err := parseMaterial(trusted, legacyHost, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Type = "acme"
+	if err := f.m.activate(ctx, state, trusted, issued); err != nil {
+		t.Fatal(err)
+	}
+	fallbackPath := filepath.Join(f.m.opts.Dir, certs.PanelFallbackKeyFile)
+	if err := os.Remove(fallbackPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.conn.ExecContext(ctx, "DELETE FROM settings WHERE key='panel_fallback_pin'"); err != nil {
+		t.Fatal(err)
+	}
+	f.m, err = New(ctx, f.conn, f.m.opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	served, _ := f.m.GetCertificate(nil)
+	pin, err = f.m.FallbackPin()
+	if err != nil || pin != expected || pin == certs.SPKIPin(served.Leaf.RawSubjectPublicKeyInfo) {
+		t.Fatal("ACME mode did not publish the previous self-signed key pin", err)
+	}
+
+	f.now = issued.Leaf.NotAfter.Add(time.Second)
+	f.fail = ErrPort
+	f.tick(t, false)
+	check := func(name string) {
+		t.Helper()
+		pair, err := f.m.GetCertificate(nil)
+		if err != nil || pair.Leaf.VerifyHostname(name) != nil || certs.SPKIPin(pair.Leaf.RawSubjectPublicKeyInfo) != expected {
+			t.Fatal("fallback did not serve the stable key for", name, err)
+		}
+	}
+	check(legacyHost)
+	const newHost = "203.0.113.8"
+	if err := db.SetSetting(ctx, f.conn, db.PublicHost, newHost); err != nil {
+		t.Fatal(err)
+	}
+	f.tick(t, false)
+	check(newHost)
+	f.m, err = New(ctx, f.conn, f.m.opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(newHost)
+	if err := os.Remove(fallbackPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(ctx, f.conn, f.m.opts); err == nil {
+		t.Fatal("lost fallback key was silently replaced")
+	}
+}
+
+func TestFallbackKeyGeneratedWithoutLegacyMaterial(t *testing.T) {
+	f := newFixture(t)
+	for _, name := range []string{f.m.opts.CertFile, f.m.opts.KeyFile, filepath.Join(f.m.opts.Dir, f.m.state.File), filepath.Join(f.m.opts.Dir, certs.PanelFallbackKeyFile)} {
+		if err := os.Remove(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.conn.Exec("DELETE FROM settings WHERE key IN ('panel_certificate','panel_fallback_pin')"); err != nil {
+		t.Fatal(err)
+	}
+	m, err := New(t.Context(), f.conn, f.m.opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin, err := m.FallbackPin()
+	if err != nil || pin == "" {
+		t.Fatal("did not generate a fallback key", err)
+	}
+	pair, err := m.GetCertificate(nil)
+	if err != nil || certs.SPKIPin(pair.Leaf.RawSubjectPublicKeyInfo) != pin {
+		t.Fatal("wrong fallback key in generated certificate", err)
 	}
 }
 

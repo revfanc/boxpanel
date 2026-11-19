@@ -403,9 +403,9 @@ test_join_install() {
     local token pin
     printf -v token '%043d' 0
     printf -v pin '%043d' 1
-    run_install --join 'https://[2001:db8::10]:2053/mainpanel/' --token "$token" --master-pin "$pin" </dev/null
+    run_install --join 'https://[2001:db8::10]:2053/mainpanel/' --token "$token" --master-pin "$pin" --public-ip '2606:4700::1111' </dev/null
     contains "$FIXTURE/calls" 'singbox install --for-join --preserve-version'
-    contains "$FIXTURE/calls" "join --master https://[2001:db8::10]:2053/mainpanel/ --token $token --master-pin $pin"
+    contains "$FIXTURE/calls" "join --master https://[2001:db8::10]:2053/mainpanel/ --token $token --master-pin $pin --public-ip 2606:4700::1111"
     contains "$FIXTURE/calls" 'systemctl restart boxpanel.service'
     contains "$FIXTURE/calls" 'system ready'
     contains "$FIXTURE/data/boxpanel.db" agent
@@ -421,7 +421,7 @@ test_join_install() {
 test_join_dry_run() {
     local token
     printf -v token '%043d' 0
-    run_install --join https://master.test/panel/ --token "$token" --dry-run
+    run_install --join https://master.test/panel/ --token "$token" --public-ip 8.8.8.8 --dry-run
     contains "$FIXTURE/output" 'join: dependencies'
     contains "$FIXTURE/output" '(non-interactive)'
     absent "$FIXTURE/output" "$token"
@@ -436,6 +436,8 @@ test_join_dry_run() {
     reject update --join https://master.test/panel --token "$token"
     reject --token "$token" --dry-run
     reject --master-pin "$token" --dry-run
+    reject --public-ip 8.8.8.8 --dry-run
+    reject --join https://master.test/panel --token "$token" --public-ip example.test --dry-run
     [[ ! -s $FIXTURE/calls && ! -e $FIXTURE/local && ! -e $FIXTURE/lock ]] || fail 'join dry-run modified system'
 }
 

@@ -224,13 +224,7 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	}
 	nodes := agent.NewMaster(conn, reader, nil)
 	panel.build = func(settings httpapi.PanelSettings) (http.Handler, error) {
-		api := httpapi.New(service, httpapi.Options{WebPath: settings.WebPath, Dev: opts.dev, Logger: logger, System: system, Singbox: manager, DB: conn, ReadDB: reader, Applier: manager, PanelPort: settings.WebPort, Subscriptions: store, PreparePanel: panel.prepare, Certificates: certificates, Backups: backupAPI, Alerts: alertService, Agents: nodes, AgentPin: func() (string, error) {
-			pair, err := certificates.GetCertificate(nil)
-			if err != nil {
-				return "", err
-			}
-			return agent.CertificatePin(pair)
-		}})
+		api := httpapi.New(service, httpapi.Options{WebPath: settings.WebPath, Dev: opts.dev, Logger: logger, System: system, Singbox: manager, DB: conn, ReadDB: reader, Applier: manager, PanelPort: settings.WebPort, Subscriptions: store, PreparePanel: panel.prepare, Certificates: certificates, Backups: backupAPI, Alerts: alertService, Agents: nodes, AgentPin: certificates.FallbackPin})
 		spaHandler, err := spa.New(web.Assets, spa.Options{WebPath: settings.WebPath, Version: version, API: api})
 		if err != nil {
 			return nil, fmt.Errorf("prepare HTTP server: %w", err)

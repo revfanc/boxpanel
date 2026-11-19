@@ -18,6 +18,7 @@ import (
 	"unicode"
 
 	"github.com/revfanc/boxpanel/internal/auth"
+	"github.com/revfanc/boxpanel/internal/reality"
 )
 
 var ErrUnauthorized = errors.New("agent authentication failed")
@@ -145,6 +146,41 @@ func ValidMetadata(value string, maxBytes int) bool {
 }
 
 var ErrRegistration = errors.New("invalid agent registration metadata")
+var ErrPublicIP = errors.New("节点需要公网 IP；位于 NAT 后请用 --public-ip 指定")
+
+// Special-purpose ranges not already excluded by reality.PublicIP. IPv6 node
+// addresses must be in the global unicast allocation and outside special use.
+var specialNodeRanges = [...]netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("192.88.99.0/24"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("2001::/23"),
+	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("2002::/16"),
+	netip.MustParsePrefix("3fff::/20"),
+}
+
+var globalNodeIPv6 = netip.MustParsePrefix("2000::/3")
+
+func validNodeIP(ip netip.Addr) bool {
+	if ip.Zone() != "" {
+		return false
+	}
+	ip = ip.Unmap()
+	if !reality.PublicIP(ip) || ip.Is6() && !globalNodeIPv6.Contains(ip) {
+		return false
+	}
+	for _, prefix := range specialNodeRanges {
+		if prefix.Contains(ip) {
+			return false
+		}
+	}
+	return true
+}
 
 func (m *Master) Register(ctx context.Context, in Registration, peer string) (Identity, error) {
 	if decodeBytes(in.Token, 32) == nil || decodeBytes(in.PublicKey, ed25519.PublicKeySize) == nil {
@@ -173,8 +209,8 @@ func (m *Master) Register(ctx context.Context, in Registration, peer string) (Id
 		address = peer
 	}
 	ip, err := netip.ParseAddr(address)
-	if err != nil || ip.Zone() != "" || ip.IsUnspecified() || ip.IsMulticast() {
-		return Identity{}, ErrRegistration
+	if err != nil || !validNodeIP(ip) {
+		return Identity{}, ErrPublicIP
 	}
 	var result Identity
 	if err := tx.QueryRowContext(ctx, `INSERT INTO servers (name, public_host, version, agent_public_key, created_at, updated_at)

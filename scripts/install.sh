@@ -16,6 +16,7 @@ RESTORE_FILE=
 JOIN_MASTER=
 JOIN_TOKEN=
 MASTER_PIN=
+JOIN_PUBLIC_IP=
 PASSPHRASE_FILE=
 NON_INTERACTIVE=false
 DRY_RUN=false
@@ -38,7 +39,8 @@ usage() {
   --passphrase-file <文件>   恢复口令文件（口令不出现在参数中）
   --join <主控 HTTPS URL>    将空实例作为节点安装，自动采用非交互模式
   --token <令牌>             主控生成的一次性加入令牌
-  --master-pin <指纹>        自签主控的 SPKI SHA-256 指纹
+  --master-pin <指纹>        主控固定回退密钥的 SPKI SHA-256 指纹
+  --public-ip <公网 IP>      仅用于 --join，手动指定节点对外公布的 IPv4 或 IPv6
   --non-interactive         不读取输入；安装时默认尝试开启 BBR
   --yes                     确认卸载（非交互卸载必需）
   --purge                   卸载时删除 /etc/boxpanel（默认保留）
@@ -61,12 +63,13 @@ parse_args() {
             --yes) YES=true; shift ;;
             --purge) PURGE=true; shift ;;
             --dry-run) DRY_RUN=true; shift ;;
-            --version|--port|--restore|--passphrase-file|--join|--token|--master-pin)
+            --version|--port|--restore|--passphrase-file|--join|--token|--master-pin|--public-ip)
                 [[ $# -ge 2 && -n $2 ]] || die '选项缺少值；运行 --help 查看用法。'
                 case "$1" in
                   --version) TAG=$2 ;; --port) PORT=$2 ;;
                   --restore) RESTORE_FILE=$2 ;; --passphrase-file) PASSPHRASE_FILE=$2 ;;
                   --join) JOIN_MASTER=$2 ;; --token) JOIN_TOKEN=$2 ;; --master-pin) MASTER_PIN=$2 ;;
+                  --public-ip) JOIN_PUBLIC_IP=$2 ;;
                 esac
                 shift 2 ;;
             --help|-h) usage; exit 0 ;;
@@ -99,9 +102,10 @@ parse_args() {
         fi
         [[ $JOIN_TOKEN =~ ^[A-Za-z0-9_-]{43}$ ]] || die '缺少有效 --token；请从主控复制新的加入命令。'
         [[ -z $MASTER_PIN || $MASTER_PIN =~ ^[A-Za-z0-9_-]{43}$ ]] || die '--master-pin 格式错误；请从主控复制加入命令。'
+        [[ -z $JOIN_PUBLIC_IP || $JOIN_PUBLIC_IP =~ ^([0-9.]+|[A-Fa-f0-9.]*:[A-Fa-f0-9:.]*)$ ]] || die '--public-ip 格式错误；请填写裸 IPv4 或 IPv6 地址。'
         NON_INTERACTIVE=true
-    elif [[ -n $JOIN_TOKEN || -n $MASTER_PIN ]]; then
-        die '--token 和 --master-pin 需要 --join；请从主控复制加入命令。'
+    elif [[ -n $JOIN_TOKEN || -n $MASTER_PIN || -n $JOIN_PUBLIC_IP ]]; then
+        die '--token、--master-pin 和 --public-ip 需要 --join；请从主控复制加入命令。'
     fi
     # Piped input is never treated as a confirmation.
     if [[ ! -t 0 ]]; then NON_INTERACTIVE=true; fi
@@ -356,6 +360,7 @@ install_agent() {
     progress 6 '向主控注册节点'
     local join_args=(join --master "$JOIN_MASTER" --token "$JOIN_TOKEN")
     [[ -z $MASTER_PIN ]] || join_args+=(--master-pin "$MASTER_PIN")
+    [[ -z $JOIN_PUBLIC_IP ]] || join_args+=(--public-ip "$JOIN_PUBLIC_IP")
     "$BINARY" "${join_args[@]}"
     progress 7 '启用并启动节点服务'
     systemctl enable boxpanel-singbox.service boxpanel.service

@@ -15,7 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/revfanc/boxpanel/internal/acme"
 	"github.com/revfanc/boxpanel/internal/app"
+	"github.com/revfanc/boxpanel/internal/certs"
 	"github.com/revfanc/boxpanel/internal/db"
 	"github.com/revfanc/boxpanel/internal/firewall"
 	"github.com/revfanc/boxpanel/internal/reality"
@@ -115,6 +117,61 @@ func decoded(t *testing.T, b []byte, pass string) Archive {
 		t.Fatal(err)
 	}
 	return a
+}
+
+func TestBackupPreservesPanelFallbackKey(t *testing.T) {
+	dir, conn := fixture(t)
+	openPanel := func(dir string, conn *sql.DB) string {
+		t.Helper()
+		certDir := filepath.Join(dir, "certs")
+		manager, err := acme.New(t.Context(), conn, acme.Options{
+			Dir: certDir, CertFile: filepath.Join(certDir, "panel.crt"), KeyFile: filepath.Join(certDir, "panel.key"),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		pin, err := manager.FallbackPin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pin
+	}
+	pin := openPanel(dir, conn)
+	a := decoded(t, archive(t, conn, dir, testPass), testPass)
+	name := "certs/" + certs.PanelFallbackKeyFile
+	key := a.Files[name]
+	if _, got, err := certs.ParsePanelFallbackKey(key); err != nil || got != pin {
+		t.Fatal("backup omitted the expected fallback key", err)
+	}
+	parent := t.TempDir()
+	stage, err := Stage(t.Context(), a, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := db.Open(t.Context(), filepath.Join(stage, "boxpanel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	info, err := os.Stat(filepath.Join(stage, name))
+	if err != nil || info.Mode().Perm() != 0600 || openPanel(stage, restored) != pin {
+		t.Fatal("restore changed the fallback key or permissions", err)
+	}
+	delete(a.Files, name)
+	if _, err := Stage(t.Context(), a, parent); !errors.Is(err, ErrInvalid) {
+		t.Fatal("restore accepted missing fallback key", err)
+	}
+	replacement, err := certs.GenerateTLSKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Files[name], err = certs.EncodeTLSKey(replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Stage(t.Context(), a, parent); !errors.Is(err, ErrInvalid) {
+		t.Fatal("restore accepted a different fallback key", err)
+	}
 }
 
 func TestRoundTripPreservesIdentityAndConfig(t *testing.T) {

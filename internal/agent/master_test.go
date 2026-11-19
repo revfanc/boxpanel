@@ -34,7 +34,7 @@ func TestConcurrentRegistrationConsumesTokenOnce(t *testing.T) {
 			<-start
 			_, err := master.Register(ctx, Registration{
 				Token: token, PublicKey: encoding.EncodeToString(public), Hostname: "edge", Version: "test",
-			}, "192.0.2.1")
+			}, "8.8.8.8")
 			results <- err
 		})
 	}

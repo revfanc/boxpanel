@@ -47,9 +47,8 @@ func NewClient(masterURL, pin string) (*Client, error) {
 		if expected == nil {
 			return nil, fmt.Errorf("主控证书指纹格式有误，请重新复制加入命令")
 		}
-		// A pinned self-signed key is the trust anchor. The TLS handshake
-		// authenticates possession of that key; the callback checks its pin
-		// and certificate lifetime instead of using the public CA hierarchy.
+		// Defer verification to the callback so either trust anchor can be
+		// used. The TLS handshake still proves possession of the leaf key.
 		tlsConfig.InsecureSkipVerify = true
 		tlsConfig.VerifyConnection = func(state tls.ConnectionState) error {
 			if len(state.PeerCertificates) == 0 {
@@ -58,10 +57,18 @@ func NewClient(masterURL, pin string) (*Client, error) {
 			leaf := state.PeerCertificates[0]
 			hash := sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
 			now := time.Now()
-			if subtle.ConstantTimeCompare(expected, hash[:]) != 1 || now.Before(leaf.NotBefore) || now.After(leaf.NotAfter) {
-				return fmt.Errorf("主控证书指纹不匹配或已过期，请核对主控证书并重新加入")
+			if subtle.ConstantTimeCompare(expected, hash[:]) == 1 && !now.Before(leaf.NotBefore) && !now.After(leaf.NotAfter) {
+				return nil
 			}
-			return nil
+			intermediates := x509.NewCertPool()
+			for _, cert := range state.PeerCertificates[1:] {
+				intermediates.AddCert(cert)
+			}
+			_, err := leaf.Verify(x509.VerifyOptions{
+				DNSName: u.Hostname(), Roots: tlsConfig.RootCAs, Intermediates: intermediates, CurrentTime: now,
+				KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+			})
+			return err
 		}
 	}
 	return &Client{
@@ -77,24 +84,26 @@ func NewClient(masterURL, pin string) (*Client, error) {
 func (c *Client) MasterURL() string { return c.base + "/" }
 func (c *Client) Close()            { c.http.CloseIdleConnections() }
 
-func CertificatePin(pair *tls.Certificate) (string, error) {
-	if pair == nil || len(pair.Certificate) == 0 {
-		return "", fmt.Errorf("read active panel certificate: empty certificate chain")
-	}
-	leaf := pair.Leaf
-	if leaf == nil {
-		var err error
-		leaf, err = x509.ParseCertificate(pair.Certificate[0])
-		if err != nil {
-			return "", fmt.Errorf("parse active panel certificate: %w", err)
+type ClockSkewError struct {
+	Seconds int64
+}
+
+func (e *ClockSkewError) Error() string {
+	return fmt.Sprintf("系统时间与主控相差 %d 秒，请启用 NTP（timedatectl set-ntp true）", e.Seconds)
+}
+
+func unauthorized(date string, now time.Time) error {
+	master, err := http.ParseTime(date)
+	if err == nil {
+		seconds := master.Unix() - now.Unix()
+		if seconds < 0 {
+			seconds = -seconds
+		}
+		if seconds > 100 {
+			return &ClockSkewError{Seconds: seconds}
 		}
 	}
-	// ACME leaves (including staging and private CAs) use the system trust store.
-	if !bytes.Equal(leaf.RawSubject, leaf.RawIssuer) || leaf.CheckSignature(leaf.SignatureAlgorithm, leaf.RawTBSCertificate, leaf.Signature) != nil {
-		return "", nil
-	}
-	hash := sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
-	return encoding.EncodeToString(hash[:]), nil
+	return ErrUnauthorized
 }
 
 func (c *Client) Join(ctx context.Context, token string, key ed25519.PublicKey, hostname, publicIP, version string) (Identity, error) {
@@ -112,7 +121,9 @@ func (c *Client) Join(ctx context.Context, token string, key ed25519.PublicKey, 
 		}
 		return id, nil
 	case http.StatusUnauthorized:
-		return id, ErrUnauthorized
+		return id, unauthorized(resp.Header.Get("Date"), time.Now())
+	case http.StatusUnprocessableEntity:
+		return id, ErrPublicIP
 	case http.StatusTooManyRequests:
 		return id, fmt.Errorf("加入请求过多，请等待一分钟后重试")
 	default:
@@ -130,7 +141,7 @@ func (c *Client) Heartbeat(ctx context.Context, id int64, key ed25519.PrivateKey
 	case http.StatusNoContent:
 		return nil
 	case http.StatusUnauthorized:
-		return ErrUnauthorized
+		return unauthorized(resp.Header.Get("Date"), time.Now())
 	default:
 		return fmt.Errorf("heartbeat returned HTTP %d", resp.StatusCode)
 	}

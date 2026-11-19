@@ -52,7 +52,7 @@ function joinCommand(issued: IssuedJoinToken) {
   const script = `https://raw.githubusercontent.com/revfanc/boxpanel/${tag || 'main'}/scripts/install.sh`
   const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'"
   return `bash <(curl -fsSL ${script}) --join ${quote(issued.master_url)} --token ${quote(issued.token)}`
-    + (issued.master_pin ? ` --master-pin ${quote(issued.master_pin)}` : '')
+    + ` --master-pin ${quote(issued.master_pin)}`
     + (tag ? ` --version ${tag}` : '')
 }
 

@@ -493,27 +493,33 @@ bash scripts/install.sh --restore /root/boxpanel-backup.tar.gz.enc --passphrase-
   确认没有恢复进程后再移除，SIGKILL/断电时检查原目录与完整 pre-restore 目录并人工恢复。
   仅在新数据、服务与订阅验证正常后按需清理旧目录。
 
-## 9. T8.2 节点安装
+## 9. T8.2 / T8.2b 节点安装
 
 在主控面板打开「服务器 → 添加服务器」，生成命令后在新节点以 root 执行。示例中的 URL 包含主控面板路径。
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/main/scripts/install.sh) \
-  --join 'https://master.example:2053/k3m9x2p7q1ab/' --token '<一次性令牌>'
+  --join 'https://master.example:2053/k3m9x2p7q1ab/' --token '<一次性令牌>' \
+  --master-pin '<固定回退密钥的 SPKI 指纹>'
 ```
 
-- 自签主控生成的命令同时带 `--master-pin <SPKI 指纹>`。已有可信证书的主控使用系统 CA 验证，
-  可信证书轮换沿用系统信任。已加入的节点在主控地址、端口、面板路径或已固定的自签公钥变更后须重新加入。
-- `--join` 仅支持 install，要求 `--token`，可带 `--master-pin`、`--version` 或 `--dry-run`。
+- 主控总是附带固定回退密钥的 `--master-pin`。节点用该指纹校验有效的自签回退证书，并通过系统 CA 与主机名校验
+  接受可信证书和续期。旧节点若没有 pin 或原 pin 对应的私钥已丢失，只能连接系统信任的证书。需要支持回退时，
+  请用带当前 pin 的命令重新加入。主控地址、端口或面板路径变更后，需要重新加入仍使用旧 URL 的节点。
+- `--join` 仅支持 install，要求 `--token`，可带 `--master-pin`、`--public-ip`、`--version` 或 `--dry-run`。
   `--join` 自动采用非交互模式，不能和 `--port`、`--restore` 一起使用。dry-run 检查参数和平台并打印计划，
   不显示令牌或指纹。
+- 节点位于 NAT 后时可在加入命令末尾加 `--public-ip <公网 IP>`，优先于 `BOXPANEL_PUBLIC_IP` 和自动探测。
+  自动探测失败时主控检查 TCP 对端地址。主控拒绝私网、回环和保留地址，并允许修正地址后重试同一个有效令牌。
 - 脚本安装依赖、验证发布产物，使用 `singbox install --for-join --preserve-version` 在未初始化的 DB 中
-  安装受管内核和服务单元，再调用 `boxpanel join --master <URL> --token <令牌> [--master-pin <指纹>]`。
+  安装受管内核和服务单元，再调用 `boxpanel join --master <URL> --token <令牌> [--master-pin <指纹>] [--public-ip <公网 IP>]`。
   加入后启用两个 systemd 单元，由 `boxpanel serve` 使用现有校验、生效和回滚流程启动内核。
   节点仅需能出站访问主控 HTTPS，安装不会打开管理端口或 TCP 80，也不会生成管理员或申请面板证书。
 - `boxpanel info` 显示主控 URL、服务器编号和最近心跳结果。`boxpanel system ready` 在节点检查本机内核，
   不依赖主控在线。主控不可达时，心跳从 5 秒指数退避到 60 秒；恢复后回到 30 秒间隔。
   连续三次认证失败时，日志与 info 提醒从主控检查记录，执行 `boxpanel leave` 或重新加入。
+  若 401 响应时间与本机相差超过 100 秒，日志与 info 优先报告偏差和 NTP 操作。请执行 `timedatectl set-ntp true`，
+  并用 `timedatectl status` 确认时钟同步，心跳会自动重试。
 - `boxpanel leave` 清除本地节点身份和私钥，保留已安装的程序、内核配置与本地流量样本。请在主控移除旧记录。
   若节点注册成功但服务启动失败，请排查 `journalctl -u boxpanel` 后执行
   `systemctl enable --now boxpanel.service boxpanel-singbox.service`。

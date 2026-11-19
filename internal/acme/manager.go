@@ -62,6 +62,7 @@ type Options struct {
 type Manager struct {
 	db        *sql.DB
 	opts      Options
+	fallback  fallbackKey
 	work      sync.Mutex
 	mu        sync.Mutex
 	state     savedState
@@ -100,6 +101,10 @@ func New(ctx context.Context, conn *sql.DB, opts Options) (*Manager, error) {
 		return nil, err
 	}
 	m.state = state
+	m.fallback, err = m.loadFallback(ctx, state)
+	if err != nil {
+		return nil, err
+	}
 	// No network during construction: HTTPS is available while the worker
 	// performs its first issuance. Persisted backoff survives process restarts.
 	if err := m.reconcileLocal(ctx); err != nil {
@@ -220,7 +225,7 @@ func (m *Manager) reconcileLocal(ctx context.Context) error {
 		data, err := os.ReadFile(filepath.Join(m.opts.Dir, state.File))
 		if err == nil {
 			pair, err := parseMaterial(Material{data, data}, name, m.opts.Now())
-			if err == nil {
+			if err == nil && (state.Type == "acme" || certs.SPKIPin(pair.Leaf.RawSubjectPublicKeyInfo) == m.fallback.pin) {
 				m.current.Store(pair)
 				return nil
 			}
@@ -230,19 +235,16 @@ func (m *Manager) reconcileLocal(ctx context.Context) error {
 	if state.Host != name || state.Mode != mode || state.Directory != m.opts.Directory {
 		state = savedState{Status: Status{Host: name, Mode: mode}, Directory: m.opts.Directory}
 	}
-	certificate, certErr := os.ReadFile(m.opts.CertFile)
-	key, keyErr := os.ReadFile(m.opts.KeyFile)
-	if certErr != nil || keyErr != nil {
-		return fmt.Errorf("load original panel certificate; restore --cert-file and --key-file")
-	}
-	material := Material{certificate, key}
-	pair, err := parseMaterial(material, name, m.opts.Now())
-	if err != nil {
-		material.Certificate, material.Key, err = certs.PanelHost(name, m.opts.Now())
+	now := m.opts.Now()
+	material := Material{Key: m.fallback.pem}
+	material.Certificate, _ = os.ReadFile(m.opts.CertFile)
+	pair, err := parseMaterial(material, name, now)
+	if err != nil || !selfSigned(pair.Leaf) {
+		material.Certificate, err = certs.SignPanelHost(name, m.fallback.key, now)
 		if err != nil {
 			return err
 		}
-		pair, err = parseMaterial(material, name, m.opts.Now())
+		pair, err = parseMaterial(material, name, now)
 		if err != nil {
 			return err
 		}

@@ -31,11 +31,12 @@ func runAgentCommand(command string, args []string, stdout, stderr io.Writer) in
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stdout)
 	paths := addPathFlags(flags)
-	var masterURL, pin, token string
+	var masterURL, pin, token, publicIP string
 	if command == "join" {
 		flags.StringVar(&masterURL, "master", "", "master panel HTTPS URL, including its panel path")
-		flags.StringVar(&pin, "master-pin", "", "base64url SHA-256 SPKI pin for a self-signed master")
+		flags.StringVar(&pin, "master-pin", "", "base64url SHA-256 SPKI pin for the master fallback key")
 		flags.StringVar(&token, "token", "", "one-use registration token")
+		flags.StringVar(&publicIP, "public-ip", "", "public IPv4 or IPv6 address to advertise")
 	}
 	err := flags.Parse(args)
 	if errors.Is(err, flag.ErrHelp) {
@@ -58,7 +59,7 @@ func runAgentCommand(command string, args []string, stdout, stderr io.Writer) in
 				fmt.Fprintln(stdout, "已清理节点身份。请在主控移除旧服务器记录，或使用新的加入命令重新注册。")
 			}
 		} else {
-			err = joinNode(ctx, resolved, masterURL, pin, token, stdout)
+			err = joinNode(ctx, resolved, masterURL, pin, token, publicIP, stdout)
 		}
 	}
 	if err != nil {
@@ -68,12 +69,14 @@ func runAgentCommand(command string, args []string, stdout, stderr io.Writer) in
 	return 0
 }
 
-func joinNode(ctx context.Context, paths app.Paths, masterURL, pin, token string, output io.Writer) error {
+func joinNode(ctx context.Context, paths app.Paths, masterURL, pin, token, publicIP string, output io.Writer) error {
 	hostname, err := os.Hostname()
 	if err != nil {
 		return fmt.Errorf("读取本机主机名，请检查系统设置: %w", err)
 	}
-	publicIP := os.Getenv("BOXPANEL_PUBLIC_IP")
+	if publicIP == "" {
+		publicIP = os.Getenv("BOXPANEL_PUBLIC_IP")
+	}
 	if publicIP == "" {
 		probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		ip, err := app.DefaultIPProbe(probeCtx)
@@ -81,8 +84,8 @@ func joinNode(ctx context.Context, paths app.Paths, masterURL, pin, token string
 		if err == nil {
 			publicIP = ip.String()
 		}
-	} else if ip, err := netip.ParseAddr(publicIP); err != nil || ip.Zone() != "" || ip.IsUnspecified() || ip.IsMulticast() {
-		return fmt.Errorf("BOXPANEL_PUBLIC_IP 格式无效，请填写 IPv4 或 IPv6 地址")
+	} else if ip, err := netip.ParseAddr(publicIP); err != nil || ip.Zone() != "" {
+		return agent.ErrPublicIP
 	}
 	identity, err := app.JoinNode(ctx, paths, masterURL, pin, token, hostname, publicIP, version)
 	if err != nil {
@@ -112,6 +115,8 @@ func printAgentInfo(ctx context.Context, conn *sql.DB, stdout io.Writer) error {
 		message = "成功"
 	case "unauthorized":
 		message = "认证失败，请检查节点时钟和主控中的服务器记录。"
+	case "clock_skew":
+		message = (&agent.ClockSkewError{Seconds: result.ClockSkewSeconds}).Error()
 	}
 	fmt.Fprintf(stdout, "最近心跳: %s（%s）\n", message, time.Unix(result.At, 0).UTC().Format(time.RFC3339))
 	if result.RepeatedUnauthorized {
@@ -189,8 +194,8 @@ func runHeartbeats(ctx context.Context, conn *sql.DB, master db.AgentConnection,
 			if errors.Is(err, sql.ErrNoRows) || (err == nil && !saved) {
 				return
 			}
-			if err == nil && next.RepeatedUnauthorized && !last.RepeatedUnauthorized {
-				logger.Warn(removalHint)
+			if err == nil {
+				logHeartbeatResult(logger, last, next)
 			}
 			last = next
 		}
@@ -207,6 +212,15 @@ func runHeartbeats(ctx context.Context, conn *sql.DB, master db.AgentConnection,
 	}
 }
 
+func logHeartbeatResult(logger *slog.Logger, last, next db.AgentHeartbeatResult) {
+	if next.Status == "clock_skew" && last.Status != next.Status {
+		logger.Warn((&agent.ClockSkewError{Seconds: next.ClockSkewSeconds}).Error())
+	}
+	if next.RepeatedUnauthorized && !last.RepeatedUnauthorized {
+		logger.Warn(removalHint)
+	}
+}
+
 func nextHeartbeat(last db.AgentHeartbeatResult, err error, streak *int, backoff *time.Duration, now time.Time) (db.AgentHeartbeatResult, time.Duration) {
 	result := db.AgentHeartbeatResult{At: now.Unix(), RepeatedUnauthorized: last.RepeatedUnauthorized}
 	if err == nil {
@@ -214,11 +228,17 @@ func nextHeartbeat(last db.AgentHeartbeatResult, err error, streak *int, backoff
 		result.Status, result.RepeatedUnauthorized = "ok", false
 		return result, agent.HeartbeatInterval
 	}
-	if errors.Is(err, agent.ErrUnauthorized) {
+	var skew *agent.ClockSkewError
+	switch {
+	case errors.As(err, &skew):
+		*streak = 0
+		result.Status, result.ClockSkewSeconds = "clock_skew", skew.Seconds
+		result.RepeatedUnauthorized = false
+	case errors.Is(err, agent.ErrUnauthorized):
 		*streak = min(*streak+1, 3)
 		result.Status = "unauthorized"
 		result.RepeatedUnauthorized = last.RepeatedUnauthorized || *streak >= 3
-	} else {
+	default:
 		*streak = 0
 		result.Status = "unreachable"
 	}

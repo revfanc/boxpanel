@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/revfanc/boxpanel/internal/certs"
 	"github.com/revfanc/boxpanel/internal/db"
 	"github.com/revfanc/boxpanel/internal/rules"
 	"github.com/revfanc/boxpanel/internal/spa"
@@ -48,8 +49,8 @@ func (p Paths) Validate() error {
 			return fmt.Errorf("resolve certificate directory: %w", err)
 		}
 		base := filepath.Base(abs)
-		if filepath.Dir(abs) == certDir && (strings.HasPrefix(base, "account-") || strings.HasPrefix(base, "panel-") && strings.HasSuffix(base, ".pem")) {
-			return fmt.Errorf("configure paths: account-* and panel-*.pem in certs are reserved for managed certificates; choose another file")
+		if filepath.Dir(abs) == certDir && (base == certs.PanelFallbackKeyFile || strings.HasPrefix(base, "account-") || strings.HasPrefix(base, "panel-") && strings.HasSuffix(base, ".pem")) {
+			return fmt.Errorf("configure paths: account-*, panel-*.pem and %s in certs are reserved for managed certificates; choose another file", certs.PanelFallbackKeyFile)
 		}
 		seen[abs] = true
 	}

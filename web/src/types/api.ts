@@ -119,7 +119,7 @@ export interface JoinToken {
 export interface IssuedJoinToken extends JoinToken {
   token: string
   master_url: string
-  master_pin?: string
+  master_pin: string
 }
 
 interface InboundBase {

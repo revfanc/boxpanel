@@ -38,6 +38,7 @@ var (
 	AlertChannels         = SettingKey[map[string]AlertChannel]{"alert_channels"}
 	AlertCore             = SettingKey[CoreAlertState]{"alert_core"}
 	PanelCertificate      = SettingKey[json.RawMessage]{"panel_certificate"}
+	PanelFallbackPin      = SettingKey[string]{"panel_fallback_pin"}
 	Hysteria2Fingerprints = SettingKey[map[string]string]{"hysteria2_fingerprints"}
 )
 
@@ -51,6 +52,7 @@ type AgentConnection struct {
 type AgentHeartbeatResult struct {
 	At                   int64  `json:"at"`
 	Status               string `json:"status"`
+	ClockSkewSeconds     int64  `json:"clock_skew_seconds,omitempty"`
 	RepeatedUnauthorized bool   `json:"repeated_unauthorized,omitempty"`
 }
 

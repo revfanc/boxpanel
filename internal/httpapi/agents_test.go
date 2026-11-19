@@ -23,6 +23,7 @@ import (
 
 	"github.com/revfanc/boxpanel/internal/agent"
 	"github.com/revfanc/boxpanel/internal/auth"
+	"github.com/revfanc/boxpanel/internal/certs"
 	"github.com/revfanc/boxpanel/internal/db"
 	"github.com/revfanc/boxpanel/internal/spa"
 )
@@ -53,7 +54,7 @@ func agentAPI(t *testing.T) (http.Handler, *agent.Master, *sql.DB, *atomic.Int64
 	now.Store(time.Now().Unix())
 	nodes := agent.NewMaster(conn, nil, func() time.Time { return time.Unix(now.Load(), 0) })
 	api := New(service, Options{DB: conn, WebPath: "panel", PanelPort: 2053, Agents: nodes, AgentPin: func() (string, error) {
-		return "active-test-pin", nil
+		return "fallback-test-pin", nil
 	}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	assets := fstest.MapFS{"index.html": {Data: []byte("<!--BOXPANEL_INJECT-->")}}
 	h, err := spa.New(assets, spa.Options{WebPath: "panel", API: api})
@@ -89,7 +90,7 @@ func TestAgentJoinTokens(t *testing.T) {
 		}
 		raw, err := base64.RawURLEncoding.DecodeString(issued.Token)
 		if err != nil || len(raw) != 32 || issued.Name != "edge" || issued.ExpiresAt != now.Load()+3600 ||
-			issued.MasterURL != "https://[2001:db8::8]:2053/panel/" || issued.MasterPin != "active-test-pin" {
+			issued.MasterURL != "https://[2001:db8::8]:2053/panel/" || issued.MasterPin != "fallback-test-pin" {
 			t.Fatal("unexpected token response")
 		}
 		var hash []byte
@@ -107,29 +108,36 @@ func TestAgentJoinTokens(t *testing.T) {
 		}
 		return issued
 	}
-	register := func(token string) *httptest.ResponseRecorder {
+	register := func(token, publicIP string) *httptest.ResponseRecorder {
 		t.Helper()
 		public, _, err := ed25519.GenerateKey(rand.Reader)
 		if err != nil {
 			t.Fatal(err)
 		}
 		body, err := json.Marshal(agent.Registration{Token: token, PublicKey: base64.RawURLEncoding.EncodeToString(public),
-			Hostname: "host", PublicIP: "198.51.100.5", Version: "v0.4.0"})
+			Hostname: "host", PublicIP: publicIP, Version: "v0.4.0"})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return request(t, h, "POST", join, string(body), nil, map[string]string{"Origin": "https://other.test"})
 	}
 	first := issue()
-	requireStatus(t, register(first.Token), 201)
-	reused := register(first.Token)
+	for _, address := range []string{"", "10.0.0.2", "127.0.0.1", "100.64.0.10", "198.51.100.5", "::ffff:127.0.0.1", "2001:db8::5", "240.0.0.1"} {
+		w := register(first.Token, address)
+		requireStatus(t, w, 422)
+		if !strings.Contains(w.Body.String(), "agent_public_ip_required") || !strings.Contains(w.Body.String(), "--public-ip") {
+			t.Fatal("missing public IP guidance", w.Body.String())
+		}
+	}
+	requireStatus(t, register(first.Token, "2606:4700::1111"), 201)
+	reused := register(first.Token, "8.8.8.8")
 	requireStatus(t, reused, 401)
 	revoked := issue()
 	requireStatus(t, request(t, h, "DELETE", panel+"servers/join-tokens/"+strconv.FormatInt(revoked.ID, 10), "", cookie, nil), 204)
 	expired := issue()
 	now.Add(3600)
 	for _, token := range []string{revoked.Token, expired.Token, "invalid"} {
-		w := register(token)
+		w := register(token, "8.8.8.8")
 		requireStatus(t, w, 401)
 		if w.Body.String() != reused.Body.String() {
 			t.Fatal("token authentication failure responses differ")
@@ -166,10 +174,7 @@ func TestAgentTLSJoinHeartbeatOfflineAndRemoval(t *testing.T) {
 	ctx := context.Background()
 	server := httptest.NewTLSServer(h)
 	defer server.Close()
-	pin, err := agent.CertificatePin(&server.TLS.Certificates[0])
-	if err != nil || pin == "" {
-		t.Fatal("missing test self-signed pin", err)
-	}
+	pin := certs.SPKIPin(server.Certificate().RawSubjectPublicKeyInfo)
 	public, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -193,7 +198,7 @@ func TestAgentTLSJoinHeartbeatOfflineAndRemoval(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	id, err := client.Join(ctx, token, public, "host", "", "1.0")
+	id, err := client.Join(ctx, token, public, "host", "8.8.8.8", "1.0")
 	if err != nil || id.ServerID <= 1 {
 		t.Fatal(id, err)
 	}
@@ -272,7 +277,7 @@ func TestAgentSignatureAndReplayWindow(t *testing.T) {
 	}
 	id, err := master.Register(ctx, agent.Registration{
 		Token: token, PublicKey: base64.RawURLEncoding.EncodeToString(public), Hostname: "host", Version: "v1.0.0",
-	}, "192.0.2.5")
+	}, "8.8.4.4")
 	if err != nil {
 		t.Fatal(err)
 	}

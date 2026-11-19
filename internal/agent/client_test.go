@@ -1,13 +1,22 @@
 package agent
 
 import (
+	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"errors"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/revfanc/boxpanel/internal/certs"
 )
 
 func TestClientUsesCAAndDoesNotForwardRegistrationOnRedirect(t *testing.T) {
@@ -53,6 +62,161 @@ func TestInvalidMasterURLs(t *testing.T) {
 	} {
 		if _, err := NewClient(invalid, ""); err == nil {
 			t.Errorf("accepted %q", invalid)
+		}
+	}
+}
+
+func TestClientTrustDuringCertificateSwitches(t *testing.T) {
+	now := time.Now()
+	serial := int64(0)
+	issue := func(key *ecdsa.PrivateKey, parent *tls.Certificate, ip string, before, after time.Time) tls.Certificate {
+		t.Helper()
+		serial++
+		cert := &x509.Certificate{
+			SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: "test certificate"},
+			NotBefore: before, NotAfter: after, BasicConstraintsValid: true, IsCA: ip == "",
+			KeyUsage: x509.KeyUsageDigitalSignature,
+		}
+		if ip == "" {
+			cert.KeyUsage |= x509.KeyUsageCertSign
+		} else {
+			cert.IPAddresses = []net.IP{net.ParseIP(ip)}
+			cert.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+		}
+		issuer, signer := cert, key
+		if parent != nil {
+			issuer, signer = parent.Leaf, parent.PrivateKey.(*ecdsa.PrivateKey)
+		}
+		der, err := x509.CreateCertificate(rand.Reader, cert, issuer, &key.PublicKey, signer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		leaf, err := x509.ParseCertificate(der)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tls.Certificate{Leaf: leaf, Certificate: [][]byte{der}, PrivateKey: key}
+	}
+	newKey := func() *ecdsa.PrivateKey {
+		t.Helper()
+		key, err := certs.GenerateTLSKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return key
+	}
+	before, after := now.Add(-time.Hour), now.Add(time.Hour)
+	root := issue(newKey(), nil, "", before, after)
+	intermediate := issue(newKey(), &root, "", before, after)
+	acme := issue(newKey(), &intermediate, "127.0.0.1", before, after)
+	acme.Certificate = append(acme.Certificate, intermediate.Certificate[0])
+	wrongHost := issue(newKey(), &intermediate, "127.0.0.2", before, after)
+	wrongHost.Certificate = append(wrongHost.Certificate, intermediate.Certificate[0])
+	key := newKey()
+	fallback := issue(key, nil, "127.0.0.1", before, after)
+	expired := issue(key, nil, "127.0.0.1", before, now.Add(-time.Minute))
+	future := issue(key, nil, "127.0.0.1", now.Add(time.Minute), after)
+	pin := certs.SPKIPin(fallback.Leaf.RawSubjectPublicKeyInfo)
+	oldPin := certs.SPKIPin([]byte("retired SPKI"))
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var serving atomic.Pointer[tls.Config]
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) }))
+	server.TLS = &tls.Config{GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+		return serving.Load(), nil
+	}}
+	server.StartTLS()
+	defer server.Close()
+	var clients [2][3]*Client
+	for trust := range clients {
+		for i, savedPin := range []string{pin, oldPin, ""} {
+			client, err := NewClient(server.URL, savedPin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			cfg := client.http.Transport.(*http.Transport).TLSClientConfig
+			cfg.RootCAs = x509.NewCertPool()
+			cfg.RootCAs.AddCert(root.Leaf)
+			if trust == 1 {
+				cfg.RootCAs.AddCert(fallback.Leaf)
+			}
+			clients[trust][i] = client
+		}
+	}
+	for _, step := range []struct {
+		name          string
+		cert          tls.Certificate
+		trustFallback bool
+		want          [3]bool // current pin, old pin, no pin
+	}{
+		{"self-signed", fallback, false, [3]bool{true, false, false}},
+		{"ACME", acme, false, [3]bool{true, true, true}},
+		{"untrusted fallback", fallback, false, [3]bool{true, false, false}},
+		{"explicitly trusted fallback", fallback, true, [3]bool{true, true, true}},
+		{"ACME recovery", acme, false, [3]bool{true, true, true}},
+		{"CA accepted but host mismatch", wrongHost, false, [3]bool{}},
+		{"expired pin", expired, false, [3]bool{}},
+		{"not-yet-valid pin", future, false, [3]bool{}},
+	} {
+		t.Run(step.name, func(t *testing.T) {
+			serving.Store(&tls.Config{Certificates: []tls.Certificate{step.cert}})
+			trust := 0
+			if step.trustFallback {
+				trust = 1
+			}
+			for i, client := range clients[trust] {
+				err := client.Heartbeat(t.Context(), 2, private, Heartbeat{Version: "test"})
+				// Use a new TLS handshake after the server's next switch.
+				client.Close()
+				if (err == nil) != step.want[i] {
+					t.Errorf("trust case %d: got %v, want success=%t", i, err, step.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestClientDetectsClockSkewOnUnauthorized(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	for _, tc := range []struct {
+		date string
+		want int64
+	}{
+		{"", 0},
+		{"invalid", 0},
+		{now.Add(100 * time.Second).UTC().Format(http.TimeFormat), 0},
+		{now.Add(-100 * time.Second).UTC().Format(http.TimeFormat), 0},
+		{now.Add(101 * time.Second).UTC().Format(http.TimeFormat), 101},
+		{now.Add(-101 * time.Second).UTC().Format(http.TimeFormat), 101},
+	} {
+		err := unauthorized(tc.date, now)
+		var skew *ClockSkewError
+		if tc.want == 0 && err != ErrUnauthorized || tc.want > 0 && (!errors.As(err, &skew) || skew.Seconds != tc.want) {
+			t.Errorf("Date %q: %v", tc.date, err)
+		}
+	}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Date", time.Now().UTC().Add(300*time.Second).Format(http.TimeFormat))
+		w.WriteHeader(401)
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, certs.SPKIPin(server.Certificate().RawSubjectPublicKeyInfo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, joinErr := client.Join(t.Context(), "test-token", public, "test", "", "test")
+	for _, err := range []error{joinErr, client.Heartbeat(t.Context(), 2, private, Heartbeat{Version: "test"})} {
+		var skew *ClockSkewError
+		if !errors.As(err, &skew) || skew.Seconds < 299 || skew.Seconds > 300 {
+			t.Fatalf("expected clock skew from 401, got %v", err)
 		}
 	}
 }

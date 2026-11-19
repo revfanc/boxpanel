@@ -13,6 +13,7 @@ import (
 	"path"
 	"strconv"
 
+	"github.com/revfanc/boxpanel/internal/certs"
 	"github.com/revfanc/boxpanel/internal/db"
 )
 
@@ -23,7 +24,16 @@ func validateMaterials(ctx context.Context, conn *sql.DB, files map[string][]byt
 	if err != nil {
 		return ErrInvalid
 	}
-	if mode != "http" {
+	fallbackPin, err := db.GetSetting(ctx, conn, db.PanelFallbackPin)
+	switch {
+	case err == nil:
+		_, pin, err := certs.ParsePanelFallbackKey(files["certs/"+certs.PanelFallbackKeyFile])
+		if err != nil || pin != fallbackPin {
+			return ErrInvalid
+		}
+	case !errors.Is(err, sql.ErrNoRows):
+		return ErrInvalid
+	case mode != "http":
 		if _, err = tls.X509KeyPair(files["certs/panel.crt"], files["certs/panel.key"]); err != nil {
 			return ErrInvalid
 		}

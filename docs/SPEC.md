@@ -472,7 +472,7 @@ Hysteria2=true 读取，首次保存时写入，不修改已发布迁移。setup
 - 账号按 directory 哈希隔离；材料在 `<data-dir>/certs/`，目录 0700、文件 0600。
   每次证书链和私钥作为一个 PEM bundle，临时文件 → fsync → rename → 目录 fsync，
   名称按内容 SHA-256 生成；原 `panel.crt/key` 不覆盖；T7.5 在成功切换后仅保留当前和上一份 panel-*.pem。
-  切换主机/原证书到期时，为当前主机另存自签备用材料，Hysteria2 的生成和指纹不变。
+  切换主机或证书到期回退时，用同一长期回退密钥为当前主机签发自签证书，详见 §17。
 - 可选 settings 键 `panel_certificate` 保存实际类型、主机、签发者、有效期、上次尝试/成功、
   固定错误码及下一步提示、连续失败数、下次重试、内部 bundle 文件名及 directory；没有新迁移。
   内部文件名和 directory 不出 API，私钥/账号/挑战 token/CA 原始错误不进日志或 API。
@@ -564,7 +564,7 @@ T7.1 的 Clash `/connections` 快照在真机 20 MB 下载中只计到约 26%，
 
 - 归档 v1 为单个 gzip 压缩 tar，只有 `manifest.json`、`boxpanel.db` 和 `certs/<普通文件名>`。
   DB 使用参数绑定的 `VACUUM INTO ?` 生成一致性快照，不复制活动 db/wal。
-  全部 certs 材料包括 Hysteria2、ACME 账号、当前/上一份面板 bundle 及原自签备用材料。
+  全部 certs 材料包括 Hysteria2、ACME 账号、当前/上一份面板 bundle、原自签材料和 `panel-fallback.key`。
   不含服务端 JSON、WAL/SHM、备份目录、锁或 bak/pending。manifest 记录 format=1、boxpanel_version、
   schema_version、created_at、public_host 及 files 的 SHA-256 小写 hex。
 - 手动导出全部加密：外层文件 `.tar.gz.enc`，固定头 `BOXPANEL-BACKUP` + 0x00 + 0x01，
@@ -576,7 +576,8 @@ T7.1 的 Clash `/connections` 快照在真机 20 MB 下载中只计到约 26%，
   manifest 不超过 128 KiB。拒绝重复路径、路径穿越、绝对/Windows 路径、反斜杠、链接、目录、设备等非普通条目。
   要求 gzip CRC/尾部完整，拒绝多流/额外尾随内容；每个数据文件与 manifest 一一对应且 SHA-256 匹配。
 - 本任务采用可迁移的标准目录布局：DB 为 `<data-dir>/boxpanel.db`，所有证书在 `<data-dir>/certs/`，
-  fallback 为 panel.crt/key，配置为 `<data-dir>/sing-box.json`；内核二进制在数据目录之外。
+  主控回退密钥为 `certs/panel-fallback.key`，旧安装材料为 `certs/panel.crt/key`，
+  配置为 `<data-dir>/sing-box.json`。内核二进制在数据目录之外。
   数据目录可覆盖；独立外置路径拒绝操作并给迁移建议，避免悄悄漏备份固定指纹材料。
 
 ### 生命周期与回滚
@@ -584,6 +585,7 @@ T7.1 的 Clash `/connections` 快照在真机 20 MB 下载中只计到约 26%，
 - 解密和验证在目标数据目录的同级 0700 临时目录完成；核对 manifest 与 DB 实际迁移号，
   新 schema 拒绝并提示升级，旧 schema 运行现有迁移。检查 integrity_check、foreign_key_check、
   管理员与面板配置，并验证引用的面板/Hysteria2 证书和匹配私钥、固定指纹，拒绝缺失材料。
+  若存在 `panel_fallback_pin`，备份和恢复校验回退私钥与该 pin 一致。升级前的备份仍按原证书材料校验。
   在候选库清空 sessions、checkpoint 并关闭 DB；现有库尚不修改。
 - 用数据目录同级 `.restore-lock` 互斥恢复（中断遗留时，确认无恢复进程后才人工移除）。
   systemctl stop 面板和内核，等待退出；读旧生效计划/已登记面板端口并关闭 CLI 连接，
@@ -657,7 +659,7 @@ T7.1 的 Clash `/connections` 快照在真机 20 MB 下载中只计到约 26%，
   API 和页面行为见 [API.md](API.md#t79-通知与告警)、[FRONTEND.md](FRONTEND.md#12-t79-服务器流量与通知)，
   请求格式依据和评审记录见 [T7.9.md](T7.9.md)。
 
-## 17. T8.2 节点注册与心跳
+## 17. T8.2 / T8.2b 节点注册与心跳
 
 - 同一个二进制按 `node_role` 运行主控或节点。节点的 `serve` 启动本机受管 sing-box、用户计数与网卡采样，
   并主动连接主控。节点没有管理监听、面板用户或 ACME worker。主控通过节点主动发起的 HTTPS 请求进行双向身份校验。
@@ -668,13 +670,24 @@ T7.1 的 Clash `/connections` 快照在真机 20 MB 下载中只计到约 26%，
   备份恢复会清空尚存的加入令牌，防止快照恢复已使用或已撤销的令牌。
 - Ed25519 密钥在节点生成。私钥种子存数据目录 `agent.key`（0600），公钥随注册发送。
   节点 SQLite 保存角色、主控 URL、可选证书 pin、服务器 ID、公钥和最近心跳结果。
-- 节点以主控面板首页 HTTPS URL 为基地址，拒绝重定向。TLS 最低 1.2。自签模式的 pin 是叶证书
-  `SubjectPublicKeyInfo` DER 的 SHA-256，无填充 base64url。节点核对精确公钥和证书有效期，
-  以该公钥作为信任锚。其余证书走系统 CA 与主机名验证，ACME 轮换沿用系统信任。
+- 主控首次启动证书管理时，将回退私钥持久化为 `certs/panel-fallback.key`（0600）。升级优先迁移当前或上一份
+  自签 bundle 中的密钥，其次使用原 `panel.crt/key` 的自签密钥。没有可用自签材料时生成新密钥。
+  `panel_fallback_pin` 记录该密钥的公钥指纹，已记录身份但文件缺失或不匹配时提示恢复原密钥。
+  新 host、到期及 ACME 续期失败回退时沿用同一密钥签发自签叶证书。ACME 使用独立密钥。
+- 节点以主控面板首页 HTTPS URL 为基地址，拒绝重定向。TLS 最低 1.2。HTTPS 主控生成的每条加入命令附带
+  固定回退公钥 SPKI DER 的 SHA-256（无填充 base64url）。节点可凭有效期内匹配的叶证书 pin 建连，或凭
+  标准 `x509.Verify` 验证系统 CA 链和主控 URL 的主机名建连。旧 pin 不匹配时可通过 CA 链建连。空 pin 只走系统信任，
+  主控回退到系统未信任的自签证书时需要使用带固定 pin 的命令重新加入。若旧自签密钥已丢失，旧 pin 节点适用同一限制。
+- 注册只接受公网节点地址。未提供 `public_ip` 时检查实际 TCP 对端地址。私网、回环、共享地址、文档示例和保留地址
+  返回 422，令牌仍可用于修正后的请求。节点可通过 `--public-ip` 提供 NAT 对外映射的地址。
+  [IANA IPv4 特殊用途地址](https://www.iana.org/assignments/iana-ipv4-special-registry/) ·
+  [IANA IPv6 特殊用途地址](https://www.iana.org/assignments/iana-ipv6-special-registry/)
 - 签名覆盖 HTTP 方法、含面板路径的完整 URL 路径、Unix 秒、nonce 和原始请求体 SHA-256。
   主控校验时间偏差上限 120 秒，公钥取自活动服务器行。每个节点的 nonce 在进程内缓存 5 分钟。
   缓存按最近成功用时清理过期项，最多 65,536 条。缓存已满时拒绝新 nonce，活动项保留到期。
   重放、时间偏差、未知或已移除节点、验签失败均返回同一 401。
+  节点收到 401 后按秒比较响应 `Date` 和本地时钟。偏差超过 100 秒时记录 NTP 提示并清除连续认证失败计数。
+  缺少有效 `Date` 或偏差不超过 100 秒时沿用原认证失败提示。
 - 首次心跳使服务器变为 `online`，更新版本及最近联系时间。主控每 30 秒检查，超过 90 秒未成功联系则标为
   `offline`，重新联系时转为 `online`。`pending` 等待首次联系。断线只影响节点心跳重试，本地内核和计数继续运行。
 - T8.2 的心跳携带内核是否运行及节点进程运行秒数，主控更新联系时间和版本。入站、用户、规则和配置版本同步留在 T8.3。

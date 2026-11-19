@@ -67,6 +67,8 @@ func (a *api) agentJoin(w http.ResponseWriter, r *http.Request) {
 		a.rejectAgent(w, true)
 	case agent.ErrRegistration:
 		writeError(w, 400, "invalid_argument", "节点信息无效", "请检查主机名、IP 地址和 boxpanel 版本后重试。")
+	case agent.ErrPublicIP:
+		writeError(w, 422, "agent_public_ip_required", agent.ErrPublicIP.Error(), "请在加入命令末尾加上 --public-ip <公网 IP> 后重试。")
 	default:
 		a.resourceError(w, err)
 	}
@@ -147,7 +149,10 @@ func (a *api) joinTokenCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	address := (app.Config{PublicHost: host, WebPort: port, WebPath: a.opts.WebPath, TLSMode: "acme"}).URL()
 	pin, err := a.opts.AgentPin()
-	if err != nil {
+	if err != nil || pin == "" {
+		if err == nil {
+			err = fmt.Errorf("empty panel fallback pin")
+		}
 		a.resourceError(w, fmt.Errorf("read join certificate pin: %w", err))
 		return
 	}
@@ -160,7 +165,7 @@ func (a *api) joinTokenCreate(w http.ResponseWriter, r *http.Request) {
 		agent.JoinToken
 		Token     string `json:"token"`
 		MasterURL string `json:"master_url"`
-		MasterPin string `json:"master_pin,omitempty"`
+		MasterPin string `json:"master_pin"`
 	}{token, plaintext, address, pin})
 }
 
