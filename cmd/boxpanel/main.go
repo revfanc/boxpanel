@@ -16,6 +16,7 @@ Commands:
   info     Print the panel URL and administrator username
   reset-admin  Reset administrator credentials and revoke sessions
   set-host <IP|domain>  Change the public host and print the new panel URL
+  server add <name>    Issue a one-time join command for a new node (master only)
   join     Register this machine with a master panel
   leave    Clear the local node identity
   serve    Run the panel or the agent (see 'boxpanel serve --help')
@@ -54,6 +55,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if args[0] == "system" {
 		return runSystem(args[1:], stdout, stderr)
+	}
+	if args[0] == "server" {
+		return runServer(args[1:], stdout, stderr)
 	}
 	if args[0] == "set-host" {
 		return runSetHost(args[1:], stdout, stderr)
