@@ -9,12 +9,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/revfanc/boxpanel/internal/db"
 	"github.com/revfanc/boxpanel/internal/reality"
 	"github.com/revfanc/boxpanel/internal/sysinfo"
 )
 
 type inboundRecord struct {
 	ID        int64           `json:"id"`
+	ServerID  int64           `json:"server_id"`
 	Tag       string          `json:"tag"`
 	Protocol  string          `json:"protocol"`
 	Port      int             `json:"port"`
@@ -25,12 +27,12 @@ type inboundRecord struct {
 	UpdatedAt int64           `json:"updated_at"`
 }
 
-const inboundColumns = "id,tag,protocol,port,enabled,remark,options,created_at,updated_at"
+const inboundColumns = "id,tag,protocol,port,enabled,remark,options,created_at,updated_at,server_id"
 
 func scanInbound(row rowScanner) (inboundRecord, error) {
 	var in inboundRecord
 	var raw string
-	if err := row.Scan(&in.ID, &in.Tag, &in.Protocol, &in.Port, &in.Enabled, &in.Remark, &raw, &in.CreatedAt, &in.UpdatedAt); err != nil {
+	if err := row.Scan(&in.ID, &in.Tag, &in.Protocol, &in.Port, &in.Enabled, &in.Remark, &raw, &in.CreatedAt, &in.UpdatedAt, &in.ServerID); err != nil {
 		return in, fmt.Errorf("read inbound: %w", err)
 	}
 	in.Options = json.RawMessage(raw)
@@ -92,6 +94,7 @@ func (a *api) inboundGet(w http.ResponseWriter, r *http.Request) {
 }
 
 type inboundInput struct {
+	ServerID *int64          `json:"server_id"`
 	Protocol *string         `json:"protocol"`
 	Port     *int            `json:"port"`
 	Tag      *string         `json:"tag"`
@@ -142,9 +145,32 @@ func (a *api) prepareInbound(ctx context.Context, protocol string, patch json.Ra
 	}
 	return mergeInboundOptions(protocol, defaults, patch)
 }
+func localInboundOnly() error {
+	return &resourceError{422, "server_not_local", "server_id", "多服务器加入功能尚未开放，请选择本机。"}
+}
+
+// Reject explicit remote IDs before probing local sockets or Reality targets.
+func (a *api) checkInboundServer(w http.ResponseWriter, r *http.Request, id *int64) bool {
+	if id == nil {
+		return true
+	}
+	conn, err := a.readDB()
+	if err == nil {
+		var local int64
+		local, err = db.LocalServerID(r.Context(), conn)
+		if err == nil && *id != local {
+			err = localInboundOnly()
+		}
+	}
+	if err != nil {
+		a.resourceError(w, err)
+	}
+	return err == nil
+}
+
 func (a *api) inboundCreate(w http.ResponseWriter, r *http.Request) {
 	var input inboundInput
-	if !decodeResource(w, r, &input) {
+	if !decodeResource(w, r, &input) || !a.checkInboundServer(w, r, input.ServerID) {
 		return
 	}
 	if input.Protocol == nil {
@@ -163,11 +189,18 @@ func (a *api) inboundCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	var result inboundRecord
 	if !a.applyResource(w, r, func(ctx context.Context, tx *sql.Tx) error {
+		local, err := db.LocalServerID(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if input.ServerID != nil && *input.ServerID != local {
+			return localInboundOnly()
+		}
 		reservations, err := a.inboundReservations(ctx, tx, sockets)
 		if err != nil {
 			return err
 		}
-		in := inboundRecord{Protocol: *input.Protocol, Enabled: true, Options: options, CreatedAt: time.Now().Unix()}
+		in := inboundRecord{ServerID: local, Protocol: *input.Protocol, Enabled: true, Options: options, CreatedAt: time.Now().Unix()}
 		in.UpdatedAt = in.CreatedAt
 		if input.Port != nil {
 			in.Port = *input.Port
@@ -191,7 +224,7 @@ func (a *api) inboundCreate(w http.ResponseWriter, r *http.Request) {
 		if err := reservations.check(in); err != nil {
 			return err
 		}
-		res, err := tx.ExecContext(ctx, "INSERT INTO inbounds (tag,protocol,port,enabled,remark,options,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)", in.Tag, in.Protocol, in.Port, in.Enabled, in.Remark, string(in.Options), in.CreatedAt, in.UpdatedAt)
+		res, err := tx.ExecContext(ctx, "INSERT INTO inbounds (server_id,tag,protocol,port,enabled,remark,options,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)", in.ServerID, in.Tag, in.Protocol, in.Port, in.Enabled, in.Remark, string(in.Options), in.CreatedAt, in.UpdatedAt)
 		if err != nil {
 			return fmt.Errorf("create inbound: %w", err)
 		}
@@ -231,6 +264,13 @@ func (a *api) mutateInbound(w http.ResponseWriter, r *http.Request, deleted bool
 		in, err := readInbound(ctx, tx, id)
 		if err != nil {
 			return err
+		}
+		local, err := db.LocalServerID(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if in.ServerID != local || input.ServerID != nil && *input.ServerID != local {
+			return localInboundOnly()
 		}
 		if deleted {
 			_, err := tx.ExecContext(ctx, "DELETE FROM inbounds WHERE id=?", id)
@@ -272,7 +312,7 @@ func (a *api) mutateInbound(w http.ResponseWriter, r *http.Request, deleted bool
 }
 func (a *api) inboundUpdate(w http.ResponseWriter, r *http.Request) {
 	var input inboundInput
-	if !decodeResource(w, r, &input) {
+	if !decodeResource(w, r, &input) || !a.checkInboundServer(w, r, input.ServerID) {
 		return
 	}
 	a.mutateInbound(w, r, false, input)

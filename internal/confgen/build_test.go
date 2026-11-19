@@ -373,3 +373,18 @@ func TestUserRoutingMarksBoundsAndPlatformOption(t *testing.T) {
 		t.Fatal("user mark overflow accepted")
 	}
 }
+
+func TestBuildFiltersByServer(t *testing.T) {
+	s, opts := fixture(t)
+	s.ServerID = 7
+	s.Inbounds[0].ServerID = 8
+	s.Inbounds[1].ServerID = 7
+	got, err := Build(s, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile("testdata/vless.golden")
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatal("other server affected generated config", err)
+	}
+}

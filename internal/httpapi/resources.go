@@ -67,6 +67,8 @@ func (a *api) applyResource(w http.ResponseWriter, r *http.Request, mutate singb
 func (a *api) registerResources(register func(string, string, http.HandlerFunc, bool)) {
 	register("GET", "/api/v1/reality/recommend", a.realityRecommend, true)
 	register("POST", "/api/v1/reality/check", a.realityCheck, true)
+	register("GET", "/api/v1/servers", a.serverList, true)
+	register("PUT", "/api/v1/servers/{id}", a.serverRename, true)
 	register("POST", "/api/v1/inbounds/suggest", a.inboundSuggest, true)
 	register("GET", "/api/v1/inbounds", a.inboundList, true)
 	register("POST", "/api/v1/inbounds", a.inboundCreate, true)

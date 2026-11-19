@@ -227,6 +227,19 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 | GET | `/reality/recommend` | `{targets: [{server, tls13, h2, latency_ms, ok}]}`，前 3 个推荐 |
 | POST | `/reality/check` | `{server, port?}` → 单个检测结果 |
 
+## 服务器（T8.1）
+
+| 方法 | 路径 | 请求与成功响应 |
+|---|---|---|
+| GET | `/servers` | 200，服务器数组，本机优先，其余按 ID 升序 |
+| PUT | `/servers/{id}` | `{"name":"新名称"}`，200 返回改名后的服务器 |
+
+每项返回 `id`、`name`、`public_host`、`is_local`、`status`、`last_seen_at`、`version`、`created_at` 和
+`updated_at`。状态为 `local`、`online`、`offline` 或 `pending`。时间使用 UTC Unix 秒，`last_seen_at` 可为 `null`。
+`version` 为已记录的 boxpanel 版本，未记录时为空。接口要求登录，改名沿用 CSRF 校验。
+名称去首尾空白后须为 1–64 个字符，且原值中不得包含控制字符。无效名称返回 400，未知 ID 返回 404。
+改名直接更新服务器记录，下一次订阅使用新名称。公网地址在本机设置页修改。
+
 ## 入站
 
 | 方法 | 路径 | 说明 |
@@ -242,13 +255,15 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 创建 body：
 
 ```json
-{ "protocol": "vless_reality", "port": 443, "remark": "香港-Reality", "options": { "server_name": "..." } }
+{ "protocol": "vless_reality", "server_id": 1, "port": 443, "remark": "香港-Reality", "options": { "server_name": "..." } }
 ```
 
 所有持久化写操作通过 `singbox.Manager.Apply(ctx, mutation)` 生成并比较配置；实际配置写入走
 「check → 生效」流程，配置/计划不变且内核运行时按 SPEC §7 的 T7.1b 约定只提交 DB。
 创建返回 201，修改/启停返回 200 最新脱敏对象，删除成功返回 204；失败按错误表返回。
-`/inbounds/suggest` 只提供推荐参数，不写 DB、不触发生效。
+`/inbounds/suggest` 只提供本机推荐参数，不写 DB、不触发生效。
+入站响应含 `server_id`。创建省略该字段时使用本机，更新省略时保持归属。
+写入指定非本机 ID，或尝试修改、启停、删除非本机入站，返回 `422 server_not_local`，提示「多服务器加入功能尚未开放」。
 
 ## 用户
 
@@ -311,7 +326,7 @@ JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未�
 - PUT 采用**部分更新**：省略的顶层及 options 字段保持原值（包括私钥和混淆密码），
   port_hopping 也逐字段合并；数组整体替换。不允许切换 protocol，需新建入站。
   更新 port 不自动更改 tag；显式空混淆密码表示关闭混淆。禁用记录同样校验参数。
-- 端口须为 1–65535；事务内检查所有入站的唯一端口（含禁用记录）、面板 DB/实际监听端口、
+- 端口须为 1–65535；事务内检查本机入站的唯一端口（含禁用记录）、面板 DB/实际监听端口、
   Clash TCP 控制端口及启用 Hysteria2 的跳跃冲突，返回 `409 port_in_use`；tag 重复为 `409 tag_exists`。
   Linux 生产在进入 Apply 前用可注入的 `ss -H -lntu` 快照检查对应协议的系统监听，
   保持原端口的已启用入站视为自身监听。检查失败返回 500 并提示安装 iproute2/检查权限。
@@ -545,6 +560,7 @@ JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未�
 | POST | `/alerts/channels/{channel}/test` | 空请求体，202 `{id}` 表示已把测试通知加入持久化队列 |
 | POST | `/alerts/events/{key}/read` | 空请求体，204 标记已读，可重复请求。key 取自 unread，未知 key 返回 404 |
 
+- 读取和更新本机的 `config`，按本机的服务器 ID 记录网卡样本及告警。
 - `config` 包含 `interface`（空表示自动检测）、`quota_gb`（整数 0–9223372036）、`billing_day`（整数 1–28）、
   `billing_mode`（`out` / `both` / `max` / `in`）及 `events`（事件类型到布尔值的映射）。
   PUT 中省略的字段和事件保持原值。事件类型有 `user_quota_80`、`user_quota_100`、`user_expiring`、

@@ -76,3 +76,34 @@ func TestUnionPlanIncludesTrafficUsers(t *testing.T) {
 		t.Fatal(p)
 	}
 }
+
+func TestRemoteInboundsDoNotAffectLocalApply(t *testing.T) {
+	ctx := context.Background()
+	f, _ := runningApplyFixture(t)
+	before := readFile(t, f.path)
+	if _, err := f.conn.Exec(`INSERT INTO servers(id,name,public_host,status) VALUES(2,'Remote','remote.example','online');
+		INSERT INTO inbounds(server_id,tag,protocol,port,options,created_at,updated_at)
+			VALUES(2,'hy2','hysteria2',8443,'{}',0,0),(2,'remote-only','vless_reality',9443,'{}',0,0);`); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.Restart(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, f.path); string(got) != string(before) {
+		t.Fatal("remote inbound changed local config")
+	}
+	plan := f.fw.calls[len(f.fw.calls)-1].desired
+	if !reflect.DeepEqual(plan, firewall.Plan{Ports: []firewall.Port{{Port: 8443, Proto: "udp"}}, TrafficUsers: []int64{1}}) {
+		t.Fatal("remote inbound changed local plan", plan)
+	}
+	if err := f.m.Apply(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "UPDATE inbounds SET enabled=0 WHERE server_id=1")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	plan = f.fw.calls[len(f.fw.calls)-1].desired
+	if len(plan.Ports)+len(plan.Hops)+len(plan.TrafficUsers) != 0 {
+		t.Fatal("remote-only inbounds opened ports or started local counters", plan)
+	}
+}

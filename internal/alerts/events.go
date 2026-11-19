@@ -92,6 +92,7 @@ type eventRecorder struct {
 	cfg      db.AlertConfig
 	channels map[string]db.AlertChannel
 	address  string
+	serverID int64
 	now      time.Time
 }
 
@@ -104,14 +105,13 @@ func recorder(ctx context.Context, tx *sql.Tx, now time.Time) (eventRecorder, er
 	if out.channels, err = loadChannels(ctx, tx); err != nil {
 		return out, err
 	}
-	out.address, err = db.GetSetting(ctx, tx, db.PublicHost)
-	if errors.Is(err, sql.ErrNoRows) {
-		err = nil
+	if err := tx.QueryRowContext(ctx, "SELECT id, public_host FROM servers WHERE is_local=1").Scan(&out.serverID, &out.address); err != nil {
+		return out, fmt.Errorf("read local server for alerts: %w", err)
 	}
 	if !rules.ValidHost(out.address) {
 		out.address = ""
 	}
-	return out, err
+	return out, nil
 }
 
 func (r eventRecorder) record(ctx context.Context, event Event) (bool, error) {
@@ -122,7 +122,7 @@ func (r eventRecorder) record(ctx context.Context, event Event) (bool, error) {
 	now := r.now.Unix()
 	result, err := r.tx.ExecContext(ctx, `INSERT INTO alert_events
 		(event_key,server_id,kind,address,username,used,limit_bytes,threshold,deadline,created_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(event_key) DO NOTHING`, key, localServer, event.Kind, r.address,
+		VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(event_key) DO NOTHING`, key, r.serverID, event.Kind, r.address,
 		event.Username, event.Used, event.Limit, event.Threshold, event.Deadline, now)
 	if err != nil {
 		return false, fmt.Errorf("record alert: %w", err)
@@ -237,8 +237,8 @@ func (s *Service) UserStopped(ctx context.Context, tx *sql.Tx, id int64, why str
 	return err
 }
 
-func serverKey(kind string, period int64) string {
-	return fmt.Sprintf("server:%d:%s:%d", localServer, kind, period)
+func (r eventRecorder) serverKey(kind string, period int64) string {
+	return fmt.Sprintf("server:%d:%s:%d", r.serverID, kind, period)
 }
 
 func (r eventRecorder) coreEvent(ctx context.Context, running bool) error {
@@ -249,7 +249,7 @@ func (r eventRecorder) coreEvent(ctx context.Context, running bool) error {
 	before := state
 	if running {
 		if state.Alerted {
-			if _, err := r.record(ctx, Event{Key: serverKey(coreRecovered, state.Incident), Kind: coreRecovered}); err != nil {
+			if _, err := r.record(ctx, Event{Key: r.serverKey(coreRecovered, state.Incident), Kind: coreRecovered}); err != nil {
 				return err
 			}
 		}
@@ -258,7 +258,7 @@ func (r eventRecorder) coreEvent(ctx context.Context, running bool) error {
 		state.Failures = min(2, state.Failures+1)
 		if state.Failures == 2 && !state.Alerted && r.cfg.Events[coreDown] {
 			state.Incident++
-			state.Alerted, err = r.record(ctx, Event{Key: serverKey(coreDown, state.Incident), Kind: coreDown})
+			state.Alerted, err = r.record(ctx, Event{Key: r.serverKey(coreDown, state.Incident), Kind: coreDown})
 			if err != nil {
 				return err
 			}
@@ -293,7 +293,7 @@ func (s *Service) evaluate(ctx context.Context, now time.Time) error {
 		return err
 	}
 	if r.cfg.QuotaGB > 0 && s.opts.Network != nil {
-		usage, err := billing(ctx, tx, r.cfg, now, true)
+		usage, err := billing(ctx, tx, r.serverID, r.cfg, now, true)
 		if err != nil {
 			return err
 		}
@@ -302,7 +302,7 @@ func (s *Service) evaluate(ctx context.Context, now time.Time) error {
 			level int
 		}{{serverQuota80, 80}, {serverQuota90, 90}, {serverQuota100, 100}} {
 			if thresholdReached(usage.Used, usage.Quota, item.level) {
-				if _, err := r.record(ctx, Event{Key: serverKey(item.kind, usage.StartsAt), Kind: item.kind,
+				if _, err := r.record(ctx, Event{Key: r.serverKey(item.kind, usage.StartsAt), Kind: item.kind,
 					Used: usage.Used, Limit: usage.Quota, Threshold: item.level}); err != nil {
 					return err
 				}
@@ -310,7 +310,7 @@ func (s *Service) evaluate(ctx context.Context, now time.Time) error {
 		}
 	}
 	if cert.Mode == "acme" && cert.Warning {
-		if _, err := r.record(ctx, Event{Key: serverKey(certWarning, cert.NotAfter), Kind: certWarning, Deadline: cert.NotAfter}); err != nil {
+		if _, err := r.record(ctx, Event{Key: r.serverKey(certWarning, cert.NotAfter), Kind: certWarning, Deadline: cert.NotAfter}); err != nil {
 			return err
 		}
 	}

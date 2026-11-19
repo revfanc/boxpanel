@@ -148,10 +148,10 @@ func (s *Service) persistSample(ctx context.Context) error {
 	defer tx.Rollback()
 	// Retry the same timestamp after a write failure or uncertain commit.
 	if _, err := tx.ExecContext(ctx, `INSERT INTO server_traffic_samples (server_id,sampled_at,interface,rx,tx)
-		VALUES(?,?,?,?,?) ON CONFLICT(server_id,sampled_at) DO NOTHING`, localServer, sample.at.UnixNano(), sample.name, sample.rx, sample.tx); err != nil {
+		VALUES((SELECT id FROM servers WHERE is_local=1),?,?,?,?) ON CONFLICT(server_id,sampled_at) DO NOTHING`, sample.at.UnixNano(), sample.name, sample.rx, sample.tx); err != nil {
 		return fmt.Errorf("write interface delta: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM server_traffic_samples WHERE server_id=? AND sampled_at<?", localServer, sample.at.AddDate(0, 0, -62).UnixNano()); err != nil {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM server_traffic_samples WHERE server_id=(SELECT id FROM servers WHERE is_local=1) AND sampled_at<?", sample.at.AddDate(0, 0, -62).UnixNano()); err != nil {
 		return fmt.Errorf("prune old interface samples: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -196,12 +196,12 @@ func percent(used, quota int64) float64 {
 	return 0
 }
 
-func billing(ctx context.Context, tx *sql.Tx, cfg db.AlertConfig, now time.Time, supported bool) (Billing, error) {
+func billing(ctx context.Context, tx *sql.Tx, serverID int64, cfg db.AlertConfig, now time.Time, supported bool) (Billing, error) {
 	start, end := billingPeriod(now, cfg.Day)
 	result := Billing{Supported: supported, StartsAt: start.Unix(), EndsAt: end.Unix(), Mode: cfg.Mode, Quota: cfg.QuotaGB * bytesPerGB}
 	var last int64
 	err := tx.QueryRowContext(ctx, `SELECT sampled_at,interface FROM server_traffic_samples
-		WHERE server_id=? AND sampled_at<=? ORDER BY sampled_at DESC LIMIT 1`, localServer, now.UnixNano()).Scan(&last, &result.Interface)
+		WHERE server_id=? AND sampled_at<=? ORDER BY sampled_at DESC LIMIT 1`, serverID, now.UnixNano()).Scan(&last, &result.Interface)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return result, fmt.Errorf("read last interface sample: %w", err)
 	}
@@ -212,7 +212,7 @@ func billing(ctx context.Context, tx *sql.Tx, cfg db.AlertConfig, now time.Time,
 	}
 
 	rows, err := tx.QueryContext(ctx, `SELECT rx,tx FROM server_traffic_samples
-		WHERE server_id=? AND sampled_at>=? AND sampled_at<? AND sampled_at<=?`, localServer, start.UnixNano(), end.UnixNano(), now.UnixNano())
+		WHERE server_id=? AND sampled_at>=? AND sampled_at<? AND sampled_at<=?`, serverID, start.UnixNano(), end.UnixNano(), now.UnixNano())
 	if err != nil {
 		return result, fmt.Errorf("read billing cycle: %w", err)
 	}

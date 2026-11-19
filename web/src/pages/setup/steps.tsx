@@ -8,7 +8,7 @@ import { Field, Notice, Panel } from '@/components/ResourceUI'
 import { ErrorNotice, Loading } from '@/components/Feedback'
 import { SuggestedForm } from '@/pages/inbounds/editor'
 import { UserForm } from '@/pages/users/components'
-import { checkQuery, inboundsQuery, usersQuery } from '@/lib/resources'
+import { checkQuery, inboundsQuery, serversQuery, usersQuery } from '@/lib/resources'
 import { api } from '@/lib/api'
 import { useOperation } from '@/hooks/use-operation'
 import type { BBR, SetupStatus } from '@/types/api'
@@ -50,9 +50,12 @@ export function ScenarioStep({ status, save }: { status: SetupStatus; save: (pat
 }
 export function NodeStep({ status, next, setBusy }: StepProps & { status: SetupStatus }) {
   const nodes = useQuery(inboundsQuery)
-  if (nodes.isPending) return <Loading />
+  const servers = useQuery(serversQuery)
+  if (nodes.isPending || servers.isPending) return <Loading />
   if (nodes.isError) return <ErrorNotice error={nodes.error} retry={() => { void nodes.refetch() }} />
-  const active = nodes.data.filter((node) => node.enabled)
+  if (servers.isError) return <ErrorNotice error={servers.error} retry={() => { void servers.refetch() }} />
+  const local = servers.data.find((server) => server.is_local)
+  const active = nodes.data.filter((node) => node.enabled && node.server_id === local?.id)
   const missing = !active.some((node) => node.protocol === 'vless_reality') ? 'vless_reality' : status.hysteria2 && !active.some((node) => node.protocol === 'hysteria2') ? 'hysteria2' : null
   return <>
     <Notice>{t.setup.nodeHint}</Notice>

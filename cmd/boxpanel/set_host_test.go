@@ -73,6 +73,9 @@ func TestSetHostPersistsBeforeRestartAndPrintsURL(t *testing.T) {
 				if err != nil || got != name {
 					t.Fatalf("restart before commit: %q %v", got, err)
 				}
+				if err := conn.QueryRow("SELECT public_host FROM servers WHERE is_local=1").Scan(&got); err != nil || got != name {
+					t.Fatalf("server address at restart: %q %v", got, err)
+				}
 				return nil
 			}}
 			var out, stderr bytes.Buffer

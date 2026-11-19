@@ -1,8 +1,9 @@
 import { queryOptions, type QueryClient } from '@tanstack/react-query'
 import { api, APIError } from '@/lib/api'
 import { queryKeys } from '@/lib/query'
-import type { Inbound, User, RulesSettings, SystemCheck } from '@/types/api'
+import type { Inbound, Server, User, RulesSettings, SystemCheck } from '@/types/api'
 
+export const serversQuery = queryOptions({ queryKey: queryKeys.servers, queryFn: ({ signal }) => api<Server[]>('/servers', { signal }) })
 export const inboundsQuery = queryOptions({ queryKey: queryKeys.inbounds, queryFn: ({ signal }) => api<Inbound[]>('/inbounds', { signal }) })
 export const usersQuery = queryOptions({ queryKey: queryKeys.users, refetchInterval: 60_000, queryFn: ({ signal }) => api<User[]>('/users', { signal }) })
 export const rulesQuery = queryOptions({ queryKey: queryKeys.rules, queryFn: ({ signal }) => api<RulesSettings>('/rules', { signal }) })
@@ -13,7 +14,7 @@ export const unsupported = (error: unknown) => error instanceof APIError && erro
 export async function refreshResources(client: QueryClient) {
   // Cancel old snapshots so an in-flight links/preview read cannot restore a
   // revoked token or a deleted node after a successful write.
-  const roots = ['inbounds', 'users', 'rules', 'system', 'settings', 'singbox']
+  const roots = ['inbounds', 'users', 'rules', 'system', 'settings', 'singbox', 'servers']
   const filter = { predicate: (query: { queryKey: readonly unknown[] }) => roots.includes(String(query.queryKey[0])) }
   await client.cancelQueries(filter)
   await client.invalidateQueries(filter)

@@ -51,10 +51,11 @@ func TestMigrationOrderRollbackAndRetry(t *testing.T) {
 		"migrations/0001_initial.sql": {Data: []byte("SELECT 1;")},
 		"migrations/0002_traffic.sql": {Data: []byte("SELECT 1;")},
 		"migrations/0003_alerts.sql":  {Data: []byte("SELECT 1;")},
-		"migrations/0004_next.sql":    {Data: []byte("CREATE TABLE upgrade_probe (value TEXT); INSERT INTO upgrade_probe VALUES ('before');")},
-		"migrations/0005_next.sql":    {Data: []byte("UPDATE upgrade_probe SET value = 'after'; INSERT INTO missing_table VALUES (1);")},
+		"migrations/0004_servers.sql": {Data: []byte("SELECT 1;")},
+		"migrations/0005_next.sql":    {Data: []byte("CREATE TABLE upgrade_probe (value TEXT); INSERT INTO upgrade_probe VALUES ('before');")},
+		"migrations/0006_next.sql":    {Data: []byte("UPDATE upgrade_probe SET value = 'after'; INSERT INTO missing_table VALUES (1);")},
 	}
-	if err := migrate(ctx, conn, source); err == nil || !strings.Contains(err.Error(), "0005_next.sql") {
+	if err := migrate(ctx, conn, source); err == nil || !strings.Contains(err.Error(), "0006_next.sql") {
 		t.Fatalf("expected contextual migration failure, got %v", err)
 	}
 	var count int
@@ -64,7 +65,7 @@ func TestMigrationOrderRollbackAndRetry(t *testing.T) {
 	if err := conn.QueryRow("SELECT count(*) FROM schema_migrations").Scan(&count); err != nil || count != CurrentSchema() {
 		t.Fatalf("version not rolled back: count=%d err=%v", count, err)
 	}
-	source["migrations/0005_next.sql"].Data = []byte("UPDATE upgrade_probe SET value = 'after';")
+	source["migrations/0006_next.sql"].Data = []byte("UPDATE upgrade_probe SET value = 'after';")
 	for range 2 {
 		if err := migrate(ctx, conn, source); err != nil {
 			t.Fatal(err)
@@ -74,7 +75,7 @@ func TestMigrationOrderRollbackAndRetry(t *testing.T) {
 	if err := conn.QueryRow("SELECT value FROM upgrade_probe").Scan(&value); err != nil || value != "after" {
 		t.Fatalf("migration order: value=%q err=%v", value, err)
 	}
-	if err := conn.QueryRow("SELECT count(*) FROM schema_migrations").Scan(&count); err != nil || count != 5 {
+	if err := conn.QueryRow("SELECT count(*) FROM schema_migrations").Scan(&count); err != nil || count != 6 {
 		t.Fatalf("versions after retry: count=%d err=%v", count, err)
 	}
 	if err := conn.QueryRow("SELECT value FROM settings WHERE key = 'keep'").Scan(&value); err != nil || value != "true" {

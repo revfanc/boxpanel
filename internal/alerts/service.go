@@ -4,17 +4,18 @@ package alerts
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/revfanc/boxpanel/internal/acme"
 	"github.com/revfanc/boxpanel/internal/db"
 )
 
-const localServer = 1
 const bytesPerGB = 1_000_000_000
 const maxQuotaGB = math.MaxInt64 / bytesPerGB
 
@@ -48,22 +49,26 @@ func New(writer, reader *sql.DB, opts Options) *Service {
 }
 
 func loadConfig(ctx context.Context, q db.SettingsDB) (db.AlertConfig, error) {
-	cfg, err := db.GetSetting(ctx, q, db.AlertPreferences)
-	if errors.Is(err, sql.ErrNoRows) {
-		cfg = db.AlertConfig{Day: 1, Mode: "out"}
-		err = nil
+	var cfg db.AlertConfig
+	var raw string
+	if err := q.QueryRowContext(ctx, "SELECT alert_preferences FROM servers WHERE is_local=1").Scan(&raw); err != nil {
+		return cfg, fmt.Errorf("read local server alert settings: %w", err)
 	}
-	if err == nil {
-		if cfg.Events == nil {
-			cfg.Events = make(map[string]bool, len(eventTitles))
-		}
-		for kind := range eventTitles {
-			if _, ok := cfg.Events[kind]; !ok {
-				cfg.Events[kind] = true
-			}
+	if strings.TrimSpace(raw) == "null" {
+		return cfg, fmt.Errorf("decode local server alert settings: expected an object")
+	}
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		return cfg, fmt.Errorf("decode local server alert settings: %w", err)
+	}
+	if cfg.Events == nil {
+		cfg.Events = make(map[string]bool, len(eventTitles))
+	}
+	for kind := range eventTitles {
+		if _, ok := cfg.Events[kind]; !ok {
+			cfg.Events[kind] = true
 		}
 	}
-	return cfg, err
+	return cfg, nil
 }
 
 func loadChannels(ctx context.Context, q db.SettingsDB) (map[string]db.AlertChannel, error) {
@@ -161,8 +166,12 @@ func (s *Service) SaveConfig(ctx context.Context, in ConfigUpdate) (db.AlertConf
 		}
 		cfg.Events[kind] = *value
 	}
-	if err := db.SetSetting(ctx, tx, db.AlertPreferences, cfg); err != nil {
-		return cfg, err
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		return cfg, fmt.Errorf("encode local server alert settings: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE servers SET alert_preferences=?, updated_at=unixepoch() WHERE is_local=1", string(raw)); err != nil {
+		return cfg, fmt.Errorf("save local server alert settings: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return cfg, fmt.Errorf("commit alert settings: %w", err)

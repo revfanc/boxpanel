@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Notice } from '@/components/ResourceUI'
 import { ErrorNotice, Loading } from '@/components/Feedback'
 import { settingsQuery } from '@/lib/query'
-import { checkQuery, inboundsQuery } from '@/lib/resources'
+import { checkQuery, inboundsQuery, serversQuery } from '@/lib/resources'
 import { api } from '@/lib/api'
 import { useOperation } from '@/hooks/use-operation'
 import type { PortProbe } from '@/types/api'
@@ -14,18 +14,20 @@ import { zhCN as t } from '@/i18n/zh-CN'
 export function FirewallStep({ next, setBusy }: StepProps) {
   const settings = useQuery(settingsQuery)
   const nodes = useQuery(inboundsQuery)
+  const servers = useQuery(serversQuery)
   const check = useQuery(checkQuery)
   const probe = useOperation()
   const [results, setResults] = useState<PortProbe[]>([])
-  const queries = [settings, nodes, check]
+  const queries = [settings, nodes, servers, check]
   if (queries.some((query) => query.isPending)) return <Loading />
   const failed = queries.find((query) => query.isError)
   if (failed) return <ErrorNotice error={failed.error} retry={() => { void failed.refetch() }} />
   if (!settings.data || !nodes.data || !check.data) return null
+  const local = servers.data?.find((server) => server.is_local)
   const ports = [
     { key: 'panel', port: settings.data.web_port, proto: 'TCP', name: t.setup.panelPort },
     ...(settings.data.panel_tls_mode === 'acme' ? [{ key: 'acme', port: 80, proto: 'TCP', name: t.cert.port }] : []),
-    ...nodes.data.filter((node) => node.enabled).flatMap((node) => [
+    ...nodes.data.filter((node) => node.enabled && node.server_id === local?.id).flatMap((node) => [
       { key: String(node.id), port: node.port, proto: node.protocol === 'vless_reality' ? 'TCP' : 'UDP', name: node.remark || node.tag },
       ...(node.protocol === 'hysteria2' && node.options.port_hopping.enabled ? [{ key: `${node.id}-hops`, port: `${node.options.port_hopping.start}–${node.options.port_hopping.end}`, proto: 'UDP', name: t.inbounds.hopping }] : []),
     ]),

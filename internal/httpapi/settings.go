@@ -208,7 +208,7 @@ func (a *api) settingsPut(w http.ResponseWriter, r *http.Request) {
 			return conflict("settings_changed", "settings", "设置已被其他请求修改，请刷新后重试。")
 		}
 		var count int
-		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM inbounds WHERE port=?", next.WebPort).Scan(&count); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM inbounds WHERE port=? AND server_id=(SELECT id FROM servers WHERE is_local=1)", next.WebPort).Scan(&count); err != nil {
 			return fmt.Errorf("check panel port: %w", err)
 		}
 		control, e := db.GetSetting(ctx, tx, db.ClashAPIPort)

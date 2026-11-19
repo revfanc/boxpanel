@@ -8,7 +8,7 @@ import { routes } from '@/routes'
 import { ThemeProvider } from '@/components/ThemeProvider'
 import { createQueryClient } from '@/lib/query'
 import { advanceSession } from '@/lib/api'
-import { mockAPI, failure, deferred, inbound, proxyUser, links, settings, status as systemStatus } from '@/test/resources'
+import { mockAPI, failure, deferred, inbound, server, proxyUser, links, settings, status as systemStatus } from '@/test/resources'
 import { setupSteps, type SetupStatus, type SystemCheck, type Inbound, type User } from '@/types/api'
 import { clients, platforms } from '@/data/clients'
 import { zhCN as t, subscriptionText as sub } from '@/i18n/zh-CN'
@@ -246,13 +246,19 @@ it('does not present an empty subscription as ready', async () => {
   expect(screen.queryByRole('img', { name: sub.qr })).not.toBeInTheDocument()
 })
 
-it('probes only TCP ports and includes UDP hopping in the security group checklist', async () => {
+it('lists only local ports and probes TCP while including UDP hopping in the checklist', async () => {
   const f = fixture({ step: 'firewall' }, {
-    '/inbounds': () => Response.json([inbound, { ...hy2, options: { ...hy2.options, port_hopping: { enabled: true, start: 20000, end: 30000 } } }]),
+    '/inbounds': () => Response.json([
+      inbound,
+      { ...hy2, options: { ...hy2.options, port_hopping: { enabled: true, start: 20000, end: 30000 } } },
+      { ...inbound, id: 3, server_id: 2, port: 9443, remark: 'Remote' },
+    ]),
+    '/servers': () => Response.json([server, { ...server, id: 2, is_local: false, status: 'online' }]),
     '/system/port-probe': (init) => Response.json({ port: JSON.parse(String(init?.body)).port, results: [{ ip: '203.0.113.1', ok: true }], hint: 'Check externally too' }),
   })
   const { user } = mount()
   expect(await screen.findByText('20000–30000/UDP')).toBeVisible()
+  expect(screen.queryByText('9443/TCP')).not.toBeInTheDocument()
   await user.click(screen.getByRole('button', { name: t.setup.probe }))
   expect(await screen.findAllByText('Check externally too')).toHaveLength(2)
   const bodies = f.fetch.mock.calls.filter(([url]) => url.endsWith('/system/port-probe')).map(([, init]) => JSON.parse(String(init?.body)))

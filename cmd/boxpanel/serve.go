@@ -154,6 +154,9 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	if err != nil {
 		return fmt.Errorf("load panel settings (check the data directory and initialized database): %w", err)
 	}
+	if _, err := conn.ExecContext(ctx, "UPDATE servers SET version=?, updated_at=unixepoch() WHERE is_local=1 AND version<>?", version, version); err != nil {
+		return fmt.Errorf("record local boxpanel version: %w", err)
+	}
 	reader, err := db.OpenReader(ctx, opts.paths.Database)
 	if err != nil {
 		return fmt.Errorf("prepare database reader: %w", err)

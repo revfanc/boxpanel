@@ -142,7 +142,7 @@ func TestRoundTripPreservesIdentityAndConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer restored.Close()
-	for _, table := range []string{"admins", "users", "inbounds", "settings", "schema_migrations"} {
+	for _, table := range []string{"admins", "users", "inbounds", "servers", "settings", "schema_migrations"} {
 		dump := func(c *sql.DB) [][]any {
 			order := "id"
 			if table == "settings" {
@@ -297,19 +297,7 @@ func TestSchemaValidationAndOldMigration(t *testing.T) {
 	if _, err := Stage(context.Background(), a, t.TempDir()); !errors.Is(err, ErrInvalid) {
 		t.Fatal("manifest/schema mismatch", err)
 	}
-	// Build a v1 snapshot by removing the v2 columns and v3 tables.
-	if _, err := conn.Exec(`ALTER TABLE users DROP COLUMN traffic_reset_day; ALTER TABLE users DROP COLUMN traffic_reset_at; ALTER TABLE users DROP COLUMN traffic_epoch; ALTER TABLE users DROP COLUMN alert_identity; DROP TABLE alert_outbox; DROP TABLE alert_attempts; DROP TABLE alert_events; DROP TABLE server_traffic_samples; DELETE FROM schema_migrations WHERE version>1`); err != nil {
-		t.Fatal(err)
-	}
-	snapshot := filepath.Join(t.TempDir(), "old.db")
-	if _, err := conn.Exec("VACUUM INTO ?", snapshot); err != nil {
-		t.Fatal(err)
-	}
-	b, err := os.ReadFile(snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a.Files["boxpanel.db"] = b
+	a.Files["boxpanel.db"] = legacySnapshot(t, conn, 1)
 	stage, err := Stage(context.Background(), a, t.TempDir())
 	if err != nil {
 		t.Fatal(err)

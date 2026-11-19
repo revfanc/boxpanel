@@ -65,7 +65,7 @@ func Build(snapshot Snapshot, opts Options) ([]byte, error) {
 	slices.SortFunc(inbounds, func(a, b Inbound) int { return compareID(a.ID, b.ID) })
 	ids, tags, ports := map[int64]bool{}, map[string]bool{}, map[int]bool{}
 	for _, in := range inbounds {
-		if !in.Enabled {
+		if !in.Enabled || in.ServerID != snapshot.ServerID {
 			continue
 		}
 		if in.ID <= 0 || ids[in.ID] || strings.TrimSpace(in.Tag) == "" || tags[in.Tag] || !validPort(in.Port) || ports[in.Port] {

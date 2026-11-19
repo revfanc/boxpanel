@@ -54,7 +54,7 @@ func validateMaterials(ctx context.Context, conn *sql.DB, files map[string][]byt
 	} else if err != nil {
 		return ErrInvalid
 	}
-	rows, err := conn.QueryContext(ctx, "SELECT id,options FROM inbounds WHERE protocol='hysteria2' AND enabled=1")
+	rows, err := conn.QueryContext(ctx, "SELECT id,options FROM inbounds WHERE protocol='hysteria2' AND enabled=1 AND server_id=(SELECT id FROM servers WHERE is_local=1)")
 	if err != nil {
 		return ErrInvalid
 	}

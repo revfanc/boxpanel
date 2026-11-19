@@ -105,18 +105,36 @@ CREATE TABLE settings (
   value TEXT NOT NULL                  -- JSON
 );
 -- 关键 key：web_port, web_path, sub_path, public_host, panel_tls_mode,
---          setup_completed, setup_step, setup_preferences(T5.1), rules(见 CONFIG.md), singbox_version
+--          setup_completed, setup_step, setup_preferences(T5.1), rules(见 CONFIG.md), singbox_version, node_role
+
+CREATE TABLE servers (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  public_host TEXT NOT NULL,
+  is_local INTEGER NOT NULL DEFAULT 0 CHECK (is_local IN (0, 1)),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('local', 'online', 'offline', 'pending')),
+  last_seen_at INTEGER,
+  version TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  agent_public_key TEXT,
+  alert_preferences TEXT NOT NULL DEFAULT '{"interface":"","quota_gb":0,"billing_day":1,"billing_mode":"out"}'
+);
+CREATE UNIQUE INDEX servers_one_local ON servers (is_local) WHERE is_local = 1;
 
 CREATE TABLE inbounds (
   id INTEGER PRIMARY KEY,
-  tag TEXT NOT NULL UNIQUE,            -- 例：vless-reality-443
+  tag TEXT NOT NULL,            -- 例：vless-reality-443
   protocol TEXT NOT NULL,              -- vless_reality | hysteria2 | (后期) tuic | anytls | trojan_ws
-  port INTEGER NOT NULL UNIQUE,
+  port INTEGER NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 1,
   remark TEXT NOT NULL DEFAULT '',     -- 显示名，订阅里节点名用它
   options TEXT NOT NULL,               -- JSON，协议特定参数（含私钥），见 CONFIG.md
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  server_id INTEGER NOT NULL DEFAULT 1 REFERENCES servers(id),
+  UNIQUE (server_id, port),
+  UNIQUE (server_id, tag)
 );
 
 CREATE TABLE users (
@@ -138,7 +156,7 @@ CREATE TABLE users (
 );
 ```
 
-MVP 规则：**所有启用的用户加入所有启用的入站**。超额/过期用户视为禁用，从生成的配置中剔除。
+启用的用户在所有服务器共享。每台服务器仅生成属于自己的启用入站。超额或过期的用户从配置中剔除。
 
 ### T1.1 存储约定
 
@@ -165,7 +183,7 @@ MVP 规则：**所有启用的用户加入所有启用的入站**。超额/过�
 - 类型映射：`web_port` 为 `int`；`setup_completed`、`block_bittorrent` 为 `bool`；
   `rules` 为 `RulesSettings`（含 `DNSSettings`，字段对应 CONFIG.md §3）；
   `web_path`、`sub_path`、`public_host`、`panel_tls_mode`、`setup_step`、`singbox_version`、
-  `panel_name` 为 `string`。迁移只创建表，不写入设置、账号或其他业务初始数据；初始化属于 T1.2。
+  `panel_name` 为 `string`。T1.1 的初始迁移仅建表。T8.1 新增的本机元数据在 §6 的服务器小节定义。
 - 单测全部使用 `t.TempDir()` 下的文件数据库，覆盖迁移幂等/顺序/回滚/并发、连接参数、
   五张业务表的字段/约束/默认值，以及 settings 的持久化、类型检查、事务提交/回滚。
 
@@ -177,6 +195,24 @@ MVP 规则：**所有启用的用户加入所有启用的入站**。超额/过�
   自定义域名列表为空（文档中的 example 域名仅是示例）；广告过滤、fakeip、IPv6 默认关闭。
 - `singbox_version=""` 表示尚未安装，不在 T1.2 硬编码或下载后续任务的内核版本。
 - 不创建代理用户、入站或 sing-box 配置；仅初始化管理员、设置和面板证书。
+
+### T8.1 服务器与角色
+
+- 已初始化的库在迁移 0004 时默认获得 `node_role=master`，新安装由 `init` 写入。预留值 `agent` 由同一二进制存储并由
+  `boxpanel info` 显示。两种角色在 T8.1 执行同一套本机流程。
+- 迁移建立本机行 `id=1`、`is_local=1`、`status=local`、名称「本机」。空库的本机地址在初始化时填入。
+  本机地址以 `settings.public_host` 为准。SQLite 触发器在插入或更新该设置的同一事务同步本机的
+  `servers.public_host`，覆盖初始化、设置页、引导、CLI 和备份还原后的修改。其他服务器的地址记录在各自的行。
+  面板与订阅链接仍由本机设置生成，订阅中的节点地址取入站所属服务器。服务器名称允许重复，订阅按原规则去重。
+- `version` 是 boxpanel 版本，本机在 `serve` 启动时记录。空字符串表示尚无版本记录，`last_seen_at` 可为空。
+  入站与服务器通过外键关联，端口和标识分别按服务器唯一。旧入站保留 ID、原始 options、状态、备注和时间戳。
+- 迁移按 SQLite 的建表、复制、删除旧表、重命名顺序执行。在同一事务内重建表、恢复索引和触发器、检查外键并登记版本。
+  外键模式仅在专用连接上暂时调整，结束时恢复。原入站 ID 的外键引用及告警发件箱对事件的引用一并保留。失败整批回滚。
+  [SQLite 表结构迁移说明](https://www.sqlite.org/lang_altertable.html#making_other_kinds_of_table_schema_changes)
+- `server_traffic_samples.server_id` 和 `alert_events.server_id` 引用 `servers.id`。
+  原 `settings.alert_preferences` 移至本机行，保留计费网卡、额度、账期、口径和事件开关。
+  本地采样、账期计算、事件归属与未读概览按本机 ID 读取，通知通道继续按原设置存储。
+- 备份仍归档完整数据库和本机证书材料。从 v0.3 备份恢复时，候选数据库先迁移，再检查外键及本机的 Hysteria2 证书引用。
 
 ## 7. 配置生效流程（核心，务必严格实现）
 
@@ -592,7 +628,7 @@ T7.1 的 Clash `/connections` 快照在真机 20 MB 下载中只计到约 26%，
   用户用量仍为 §14 的服务器与目标站点之间的 IP 层流量。双向网卡计费下，代理流量通常约为两倍用户用量，
   还含加密开销、端口扫描和系统流量。VPS 账单以服务商的账期、计费口径和计数为准。
 - 迁移 `0003_alerts.sql` 添加 `server_traffic_samples`、`alert_events`、`alert_outbox` 和 `alert_attempts`。
-  样本与告警事件预留 `server_id`，当前本机为 1。通知通过事件关联服务器。用户增加稳定的内部 `alert_identity`，
+  T8.1 将样本与告警事件的 `server_id` 关联到 `servers` 表。通知通过事件关联服务器。用户增加稳定的内部 `alert_identity`，
   从既有采集 epoch 初始化，新用户与随机初始 epoch 一起写入，避免复用 ID 与同一有效期的旧事件冲突。
 
 ### 事件与投递

@@ -38,3 +38,10 @@ it('confirms disable/delete, retains failures, prevents duplicate writes, and re
   expect(await screen.findByText(t.inbounds.empty)).toBeVisible()
   await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
 })
+
+it('shows the server assignment without a selector', async () => {
+  mockAPI({ '/inbounds': () => Response.json([inbound]) })
+  mountPage(<InboundsPage />)
+  expect(await screen.findByText(t.servers.owner('本机'))).toBeVisible()
+  expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+})

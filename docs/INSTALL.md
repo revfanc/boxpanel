@@ -113,7 +113,7 @@ shellcheck scripts/*.sh
 | `boxpanel serve` | 启动面板（systemd 用） |
 | `boxpanel serve --dev` | 开发模式：`web_path=""`，HTTP，监听 127.0.0.1:2053，默认 DB 在 `./dev.db`；首次自动初始化并打印随机账号密码，不调用 systemctl |
 | `boxpanel init [--port N]` | 首次初始化（已初始化则拒绝） |
-| `boxpanel info` | 打印面板地址、用户名（不打印密码） |
+| `boxpanel info` | 打印面板地址、用户名和角色（不打印密码） |
 | `boxpanel set-host <IP\|域名>` | 修复节点/面板地址，打印新地址，并在 Linux/systemd 下尝试重启面板 |
 | `boxpanel reset-admin` | 重置管理员用户名与密码并打印 |
 | `boxpanel set port <N>` / `set path <p>` | 修改面板端口/路径并重启面板 |
@@ -147,7 +147,7 @@ boxpanel set-host --data-dir /srv/boxpanel --db-path /srv/boxpanel/panel.db 2001
   校验与 settings API 复用 `rules.ValidHost`：接受 ASCII 域名或裸 IPv4/IPv6，
   不接受 URL、端口、路径、IPv6 方括号/zone。此命令不联网探测或验证域名 DNS，需自行确认地址正确。
 - 仅在事务中更新 `public_host`，保持端口、面板/订阅路径、TLS 策略及账号不变；成功后打印
-  新面板 URL（IPv6 自动加方括号），不输出凭证。下一次订阅使用新地址，已导入客户端需更新订阅。
+  新面板 URL（IPv6 自动加方括号），不输出凭证。本机服务器记录在同一事务同步该地址。下一次订阅使用新地址，已导入客户端需更新订阅。
   不直接写 sing-box 配置；面板重启仍遵守正常 Startup/Apply 流程。
 - CLI 与服务是不同进程，无法调用进程内通知；运行中的证书 worker 会在下一轮每分钟检查时
   发现主机变化，acme 模式自动重新签发，期间使用匹配新地址的自签备用证书。
@@ -157,7 +157,7 @@ boxpanel set-host --data-dir /srv/boxpanel --db-path /srv/boxpanel/panel.db 2001
   手动重试及查看 journal，地址不回滚、命令仍退出 0。保存失败退出非零且不尝试重启。
   自定义路径应与该服务使用的路径一致；非 Linux 不调用系统命令，非 systemd 部署可重启
   同路径的面板进程，或等待 worker 检查。`--dev` 使用已有开发路径规则且不重启服务。
-- `info` 显示已记录的实际证书类型、签发者及 UTC RFC3339 到期时间。
+- `info` 显示角色（默认 `master`，预留 `agent`）及已记录的实际证书类型、签发者和 UTC RFC3339 到期时间。
   信任提示以运行中 worker 持久化的 directory 为准，不受调用 `info` 的 shell 环境变量影响；
   只有已记录来源不是 LE 正式 directory 的 ACME 证书才提示 staging/自定义 CA 信任问题。
   来源缺失则提示核对/重新申请，不推断为 staging；尚无证书状态时显示自签备用说明。

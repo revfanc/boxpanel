@@ -10,6 +10,7 @@ export const queryKeys = {
   cert: ['cert'] as const,
   system: ['system', 'status'] as const,
   inbounds: ['inbounds'] as const,
+  servers: ['servers'] as const,
   users: ['users'] as const,
   rules: ['rules'] as const,
   logs: ['singbox', 'logs'] as const,

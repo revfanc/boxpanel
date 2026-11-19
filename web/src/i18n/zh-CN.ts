@@ -112,6 +112,7 @@ export const zhCN = {
   pages: {
     home: '概览',
     inbounds: '节点',
+    servers: '服务器',
     newInbound: '新建节点',
     editInbound: '编辑节点',
     users: '用户',
@@ -277,6 +278,17 @@ export const zhCN = {
     passwordHint: '新密码至少 10 个字符，最多 1024 字节。', passwordInvalid: '请输入至少 10 个字符、最多 1024 字节的新密码。',
     nameInvalid: '面板名称需为 1–128 字节，不能含换行。', pathInvalid: '请输入有效且不同的面板与订阅路径；订阅路径不能为 api、assets 或 index。',
     hostInvalid: '请输入域名或裸 IPv4/IPv6，不含协议、端口或路径。',
+  },
+  servers: {
+    name: '服务器名称',
+    address: '公网地址',
+    status: '状态',
+    version: 'boxpanel 版本',
+    statuses: { local: '本机', online: '在线', offline: '离线', pending: '待连接' },
+    rename: '改名',
+    invalidName: '请输入 1–64 个字符的服务器名称，且不要包含控制字符。',
+    empty: '暂无服务器，请刷新页面后重试。',
+    owner: (name: string) => `所属服务器 · ${name}`,
   },
   inbounds: {
     description: '所有启用的使用者共享已启用的节点。', empty: '还没有节点。新建一个 Reality 或 Hysteria2 节点开始使用。',

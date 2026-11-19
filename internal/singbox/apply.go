@@ -162,7 +162,7 @@ func (m *Manager) Startup(ctx context.Context) error {
 			}
 		}
 		var count int
-		if err := m.db.QueryRowContext(ctx, "SELECT count(*) FROM inbounds WHERE enabled=1").Scan(&count); err != nil {
+		if err := m.db.QueryRowContext(ctx, "SELECT count(*) FROM inbounds WHERE enabled=1 AND server_id=(SELECT id FROM servers WHERE is_local=1)").Scan(&count); err != nil {
 			return fmt.Errorf("inspect startup inbounds: %w", err)
 		}
 		if count == 0 {

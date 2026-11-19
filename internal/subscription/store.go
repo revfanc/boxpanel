@@ -135,19 +135,30 @@ func (s *Store) Load(ctx context.Context, id int64, token *string) (Data, error)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return d, err
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT id,remark,protocol,port,options FROM inbounds WHERE enabled=1 ORDER BY id")
+	var serverCount int
+	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM servers").Scan(&serverCount); err != nil {
+		return d, fmt.Errorf("count subscription servers: %w", err)
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT i.id,i.remark,i.protocol,i.port,i.options,s.public_host,s.name,s.is_local
+		FROM inbounds i JOIN servers s ON s.id=i.server_id WHERE i.enabled=1 ORDER BY i.id`)
 	if err != nil {
 		return d, fmt.Errorf("read subscription inbounds: %w", err)
 	}
 	d.Nodes = []share.Node{}
+	localCertificates := map[int64]bool{}
+	serverNames := map[int64]string{}
 	for rows.Next() {
 		var n share.Node
-		var protocol, raw string
-		if err := rows.Scan(&n.ID, &n.Name, &protocol, &n.Port, &raw); err != nil {
+		var protocol, raw, serverName string
+		var local bool
+		if err := rows.Scan(&n.ID, &n.Name, &protocol, &n.Port, &raw, &n.Host, &serverName, &local); err != nil {
 			rows.Close()
 			return d, fmt.Errorf("read subscription inbound: %w", err)
 		}
-		n.Host = d.PublicHost
+		if !rules.ValidHost(n.Host) {
+			rows.Close()
+			return d, fmt.Errorf("read subscription inbound %d: repair its server hostname or IP", n.ID)
+		}
 		n.UUID = u.UUID
 		n.Password = u.Password
 		switch protocol {
@@ -159,16 +170,28 @@ func (s *Store) Load(ctx context.Context, id int64, token *string) (Data, error)
 			}
 			n.Reality = &share.Reality{ServerName: v.ServerName, PublicKey: v.PublicKey, ShortID: v.ShortIDs[0], Fingerprint: v.Fingerprint}
 		case "hysteria2":
-			var h confgen.Hysteria2Options
+			var h struct {
+				confgen.Hysteria2Options
+				Fingerprint string `json:"fingerprint"`
+				Certificate string `json:"certificate"`
+			}
 			if json.Unmarshal([]byte(raw), &h) != nil {
 				rows.Close()
 				return d, fmt.Errorf("read Hysteria2 options: repair the inbound")
 			}
-			n.Hysteria2 = &h
-			n.Fingerprint = fingerprints[fmt.Sprint(n.ID)]
+			n.Hysteria2 = &h.Hysteria2Options
+			if local {
+				n.Fingerprint = fingerprints[fmt.Sprint(n.ID)]
+				localCertificates[n.ID] = true
+			} else {
+				n.Fingerprint, n.Certificate = h.Fingerprint, h.Certificate
+			}
 		default:
 			rows.Close()
 			return d, fmt.Errorf("read subscription inbound: unsupported protocol")
+		}
+		if serverCount > 1 {
+			serverNames[n.ID] = serverName
 		}
 		d.Nodes = append(d.Nodes, n)
 	}
@@ -180,19 +203,22 @@ func (s *Store) Load(ctx context.Context, id int64, token *string) (Data, error)
 	if err = tx.Commit(); err != nil {
 		return d, fmt.Errorf("finish subscription snapshot: %w", err)
 	}
-	// Certificate files are immutable and named by inbound ID and SNI. Read
-	// public PEM only after releasing the snapshot connection; never the key.
+	// Read local public PEM after releasing the snapshot connection.
+	// Remote public PEM was loaded with its options in the snapshot.
 	for i := range d.Nodes {
 		n := &d.Nodes[i]
 		if n.Hysteria2 == nil {
 			continue
 		}
-		if s.Certificate == nil {
-			return d, ErrUnavailable
-		}
-		raw, err := s.Certificate(n.ID, n.Hysteria2.SNI)
-		if err != nil {
-			return d, ErrUnavailable
+		raw := []byte(n.Certificate)
+		if localCertificates[n.ID] {
+			if s.Certificate == nil {
+				return d, ErrUnavailable
+			}
+			raw, err = s.Certificate(n.ID, n.Hysteria2.SNI)
+			if err != nil {
+				return d, ErrUnavailable
+			}
 		}
 		block, _ := pem.Decode(raw)
 		if block == nil || block.Type != "CERTIFICATE" {
@@ -208,7 +234,7 @@ func (s *Store) Load(ctx context.Context, id int64, token *string) (Data, error)
 		}
 		n.Certificate = string(pem.EncodeToMemory(block))
 	}
-	d.Nodes = UniqueNames(d.Nodes)
+	d.Nodes = uniqueNames(d.Nodes, serverNames)
 	return d, nil
 }
 
@@ -216,6 +242,10 @@ func (s *Store) Load(ctx context.Context, id int64, token *string) (Data, error)
 // in inbound ID order, without changing the input slice or allowing rule-string
 // injection. All subscription formats and node links share these display names.
 func UniqueNames(nodes []share.Node) []share.Node {
+	return uniqueNames(nodes, nil)
+}
+
+func uniqueNames(nodes []share.Node, serverNames map[int64]string) []share.Node {
 	result := append([]share.Node{}, nodes...)
 	sort.SliceStable(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	text := web.SubscriptionText()
@@ -223,24 +253,11 @@ func UniqueNames(nodes []share.Node) []share.Node {
 		text["select"]: true}
 	for i := range result {
 		n := &result[i]
-		n.Name = strings.Map(func(r rune) rune {
-			if unicode.IsControl(r) || unicode.IsSpace(r) {
-				return ' '
-			}
-			if r == ',' {
-				return '，'
-			}
-			return r
-		}, n.Name)
-		n.Name = strings.Join(strings.Fields(n.Name), " ")
+		n.Name = normalizeName(n.Name)
 		if n.Name == "" {
-			switch {
-			case n.Reality != nil:
-				n.Name = fmt.Sprintf(text["realityName"], n.Port)
-			case n.Hysteria2 != nil:
-				n.Name = fmt.Sprintf(text["hysteria2Name"], n.Port)
-			default:
-				n.Name = fmt.Sprintf("node-%d", n.ID)
+			n.Name = defaultName(*n, text)
+			if name, ok := serverNames[n.ID]; ok {
+				n.Name = normalizeName(name + " · " + n.Name)
 			}
 		}
 		base := n.Name
@@ -250,4 +267,28 @@ func UniqueNames(nodes []share.Node) []share.Node {
 		used[n.Name] = true
 	}
 	return result
+}
+
+func normalizeName(name string) string {
+	name = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.IsSpace(r) {
+			return ' '
+		}
+		if r == ',' {
+			return '，'
+		}
+		return r
+	}, name)
+	return strings.Join(strings.Fields(name), " ")
+}
+
+func defaultName(n share.Node, text map[string]string) string {
+	switch {
+	case n.Reality != nil:
+		return fmt.Sprintf(text["realityName"], n.Port)
+	case n.Hysteria2 != nil:
+		return fmt.Sprintf(text["hysteria2Name"], n.Port)
+	default:
+		return fmt.Sprintf("node-%d", n.ID)
+	}
 }

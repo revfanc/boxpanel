@@ -274,3 +274,27 @@ func TestSchedulerEventPersistsOnlyOnSuccessfulApply(t *testing.T) {
 		t.Fatal("alert was not marked read")
 	}
 }
+
+func TestLocalBillingAndEventsUseServerRow(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, Options{Network: &Network{}})
+	f.exec(`UPDATE servers SET id=7 WHERE is_local=1;
+		INSERT INTO servers(id,name,public_host,status) VALUES(1,'Remote','remote.example','online');`)
+	if _, err := f.service.SaveConfig(ctx, ConfigUpdate{QuotaGB: pointer(int64(1)), Interface: pointer("eth9")}); err != nil {
+		t.Fatal(err)
+	}
+	f.exec("INSERT INTO server_traffic_samples VALUES(1,?,'eth9',0,900000000)", f.now.UnixNano())
+	f.service.pending = &trafficSample{at: f.now, name: "eth9", tx: 800_000_000}
+	if err := f.service.persistSample(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.evaluate()
+	out, err := f.service.Overview(ctx)
+	if err != nil || out.Billing.Used != 800_000_000 || out.Billing.Quota != bytesPerGB || len(out.Unread) != 1 || out.Unread[0].Address != "node.example.com" {
+		t.Fatal(out, err)
+	}
+	if f.count("SELECT count(*) FROM alert_events WHERE server_id=7 AND kind=?", serverQuota80) != 1 ||
+		f.count("SELECT json_extract(alert_preferences, '$.quota_gb') FROM servers WHERE id=1") != 0 {
+		t.Fatal("local alerts used the remote row")
+	}
+}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/revfanc/boxpanel/internal/acme"
 	"github.com/revfanc/boxpanel/internal/app"
+	"github.com/revfanc/boxpanel/internal/db"
 )
 
 type pathFlags struct {
@@ -132,7 +134,16 @@ func configCommand(ctx context.Context, command string, opts app.InitOptions, st
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "面板地址: %s\n用户名:   %s\n", cfg.URL(), username)
+	role, err := db.GetSetting(ctx, conn, db.NodeRole)
+	if errors.Is(err, sql.ErrNoRows) {
+		role = db.RoleMaster
+	} else if err != nil {
+		return err
+	}
+	if role != db.RoleMaster && role != db.RoleAgent {
+		return fmt.Errorf("read node role: restore node_role to master or agent")
+	}
+	fmt.Fprintf(stdout, "面板地址: %s\n用户名:   %s\n角色:     %s\n", cfg.URL(), username, role)
 	if cfg.TLSMode != "http" {
 		status, directory, err := acme.StoredInfo(ctx, conn)
 		if err != nil {

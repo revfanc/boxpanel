@@ -150,7 +150,7 @@ func Initialize(ctx context.Context, opts InitOptions) (InitResult, error) {
 	}
 	for key, value := range map[db.SettingKey[string]]string{
 		db.WebPath: webPath, db.SubPath: subPath, db.PublicHost: ip.String(), db.PanelTLSMode: mode,
-		db.SetupStep: "welcome", db.PanelName: "boxpanel", db.SingboxVersion: "",
+		db.SetupStep: "welcome", db.PanelName: "boxpanel", db.SingboxVersion: "", db.NodeRole: db.RoleMaster,
 	} {
 		if err := db.SetSetting(ctx, tx, key, value); err != nil {
 			return result, err

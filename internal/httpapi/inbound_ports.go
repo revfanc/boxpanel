@@ -38,7 +38,7 @@ func (a *api) inboundReservations(ctx context.Context, q inboundQuery, sockets m
 			p.reserved[value] = true
 		}
 	}
-	rows, err := q.QueryContext(ctx, "SELECT "+inboundColumns+" FROM inbounds ORDER BY id")
+	rows, err := q.QueryContext(ctx, "SELECT "+inboundColumns+" FROM inbounds WHERE server_id=(SELECT id FROM servers WHERE is_local=1) ORDER BY id")
 	if err != nil {
 		return p, fmt.Errorf("read port reservations: %w", err)
 	}

@@ -16,6 +16,7 @@ var (
 	WebPort               = SettingKey[int]{"web_port"}
 	WebPath               = SettingKey[string]{"web_path"}
 	SubPath               = SettingKey[string]{"sub_path"}
+	NodeRole              = SettingKey[string]{"node_role"}
 	PublicHost            = SettingKey[string]{"public_host"}
 	PanelTLSMode          = SettingKey[string]{"panel_tls_mode"}
 	SetupCompleted        = SettingKey[bool]{"setup_completed"}
@@ -32,7 +33,6 @@ var (
 	ClashAPISecret        = SettingKey[string]{"clash_api_secret"}
 	AppliedFirewall       = SettingKey[json.RawMessage]{"applied_firewall"}
 	PanelFirewallPorts    = SettingKey[[]int]{"panel_firewall_ports"}
-	AlertPreferences      = SettingKey[AlertConfig]{"alert_preferences"}
 	AlertChannels         = SettingKey[map[string]AlertChannel]{"alert_channels"}
 	AlertCore             = SettingKey[CoreAlertState]{"alert_core"}
 	PanelCertificate      = SettingKey[json.RawMessage]{"panel_certificate"}

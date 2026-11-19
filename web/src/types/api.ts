@@ -98,7 +98,20 @@ export interface Hysteria2Options {
   down_mbps: number
   port_hopping: PortHopping
 }
+export interface Server {
+  id: number
+  name: string
+  public_host: string
+  is_local: boolean
+  status: 'local' | 'online' | 'offline' | 'pending'
+  last_seen_at: number | null
+  version: string
+  created_at: number
+  updated_at: number
+}
+
 interface InboundBase {
+  server_id: number
   id: number
   tag: string
   port: number
@@ -118,7 +131,7 @@ export type Hysteria2Input = Partial<Omit<Hysteria2Options, 'port_hopping'>> & {
   obfs_password?: string
   port_hopping?: Partial<PortHopping>
 }
-export type InboundInput = Partial<Pick<InboundBase, 'tag' | 'port' | 'enabled' | 'remark'>> & (
+export type InboundInput = Partial<Pick<InboundBase, 'tag' | 'port' | 'enabled' | 'remark' | 'server_id'>> & (
   | { protocol: 'vless_reality'; options?: RealityInput }
   | { protocol: 'hysteria2'; options?: Hysteria2Input }
 )

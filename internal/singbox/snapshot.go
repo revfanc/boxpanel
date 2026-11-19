@@ -28,12 +28,17 @@ import (
 func snapshot(ctx context.Context, tx *sql.Tx) (confgen.Snapshot, []string, error) {
 	var s confgen.Snapshot
 	var secrets []string
-	rows, err := tx.QueryContext(ctx, "SELECT id,tag,protocol,port,enabled,options FROM inbounds ORDER BY id")
+	var err error
+	s.ServerID, err = db.LocalServerID(ctx, tx)
+	if err != nil {
+		return s, nil, err
+	}
+	rows, err := tx.QueryContext(ctx, "SELECT id,tag,protocol,port,enabled,options FROM inbounds WHERE server_id=? ORDER BY id", s.ServerID)
 	if err != nil {
 		return s, nil, fmt.Errorf("read inbounds: %w", err)
 	}
 	for rows.Next() {
-		var in confgen.Inbound
+		in := confgen.Inbound{ServerID: s.ServerID}
 		var options string
 		if err := rows.Scan(&in.ID, &in.Tag, &in.Protocol, &in.Port, &in.Enabled, &options); err != nil {
 			rows.Close()
@@ -74,7 +79,7 @@ func snapshot(ctx context.Context, tx *sql.Tx) (confgen.Snapshot, []string, erro
 func planFor(s confgen.Snapshot) (firewall.Plan, error) {
 	p := firewall.Plan{}
 	for _, in := range s.Inbounds {
-		if !in.Enabled {
+		if !in.Enabled || in.ServerID != s.ServerID {
 			continue
 		}
 		proto := "tcp"

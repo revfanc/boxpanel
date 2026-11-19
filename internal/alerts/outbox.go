@@ -3,7 +3,6 @@ package alerts
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -151,9 +150,9 @@ func deliveryMessage(ctx context.Context, tx *sql.Tx, attempt int64, now time.Ti
 	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM alert_outbox WHERE attempt_id=?", attempt).Scan(&count); err != nil {
 		return message{}, fmt.Errorf("count notification batch: %w", err)
 	}
-	address, err := db.GetSetting(ctx, tx, db.PublicHost)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return message{}, err
+	var address string
+	if err := tx.QueryRowContext(ctx, "SELECT public_host FROM servers WHERE is_local=1").Scan(&address); err != nil {
+		return message{}, fmt.Errorf("read local server notification address: %w", err)
 	}
 	if !rules.ValidHost(address) {
 		address = ""
@@ -262,14 +261,18 @@ func (s *Service) Overview(ctx context.Context) (Overview, error) {
 	if err != nil {
 		return out, err
 	}
-	out.Billing, err = billing(ctx, tx, cfg, s.opts.Now(), s.opts.Network != nil)
+	serverID, err := db.LocalServerID(ctx, tx)
 	if err != nil {
 		return out, err
 	}
-	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM alert_events WHERE server_id=? AND read_at=0", localServer).Scan(&out.UnreadCount); err != nil {
+	out.Billing, err = billing(ctx, tx, serverID, cfg, s.opts.Now(), s.opts.Network != nil)
+	if err != nil {
+		return out, err
+	}
+	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM alert_events WHERE server_id=? AND read_at=0", serverID).Scan(&out.UnreadCount); err != nil {
 		return out, fmt.Errorf("count unread alerts: %w", err)
 	}
-	out.Unread, err = unread(ctx, tx)
+	out.Unread, err = unread(ctx, tx, serverID)
 	if err != nil {
 		return out, err
 	}
@@ -277,9 +280,9 @@ func (s *Service) Overview(ctx context.Context) (Overview, error) {
 	return out, err
 }
 
-func unread(ctx context.Context, tx *sql.Tx) ([]Event, error) {
+func unread(ctx context.Context, tx *sql.Tx, serverID int64) ([]Event, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT event_key,kind,address,username,used,limit_bytes,threshold,deadline,created_at
-		FROM alert_events WHERE server_id=? AND read_at=0 ORDER BY created_at DESC,event_key DESC LIMIT 30`, localServer)
+		FROM alert_events WHERE server_id=? AND read_at=0 ORDER BY created_at DESC,event_key DESC LIMIT 30`, serverID)
 	if err != nil {
 		return nil, fmt.Errorf("read unread alerts: %w", err)
 	}
@@ -319,7 +322,7 @@ func (s *Service) ReadEvent(ctx context.Context, key string) (bool, error) {
 		return false, nil
 	}
 	result, err := s.writer.ExecContext(ctx, `UPDATE alert_events SET read_at=CASE WHEN read_at=0 THEN ? ELSE read_at END
-		WHERE event_key=? AND server_id=?`, s.opts.Now().Unix(), key, localServer)
+		WHERE event_key=? AND server_id=(SELECT id FROM servers WHERE is_local=1)`, s.opts.Now().Unix(), key)
 	if err != nil {
 		return false, fmt.Errorf("mark alert read: %w", err)
 	}

@@ -215,3 +215,22 @@ func TestDevConfigAndCLIValidation(t *testing.T) {
 		t.Fatal("non-init commands created data directory")
 	}
 }
+
+func TestInfoShowsMasterAndAgentRole(t *testing.T) {
+	paths, conn := hostFixture(t)
+	check := func(role string) {
+		t.Helper()
+		var out bytes.Buffer
+		if err := configCommand(context.Background(), "info", app.InitOptions{Paths: paths}, &out); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.String(), "角色:     "+role+"\n") {
+			t.Fatalf("missing %s role in info", role)
+		}
+	}
+	check(db.RoleMaster)
+	if err := db.SetSetting(context.Background(), conn, db.NodeRole, db.RoleAgent); err != nil {
+		t.Fatal(err)
+	}
+	check(db.RoleAgent)
+}

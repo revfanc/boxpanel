@@ -9,12 +9,14 @@ import (
 // Snapshot contains only the database fields needed for server generation.
 // The caller must obtain it from one consistent transaction. It contains secrets.
 type Snapshot struct {
+	ServerID        int64 // selects inbounds for this server; zero matches unassigned inbounds
 	Inbounds        []Inbound
 	Users           []User
 	BlockBittorrent bool
 }
 
 type Inbound struct {
+	ServerID int64
 	ID       int64
 	Tag      string
 	Protocol string

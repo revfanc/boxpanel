@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Box, FileText, LayoutDashboard, LogOut, Menu, Network, Settings, Shuffle, Users, X, LoaderCircle } from 'lucide-react'
+import { Box, FileText, LayoutDashboard, LogOut, Menu, Network, Server, Settings, Shuffle, Users, X, LoaderCircle } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider } from '@/components/ui/sidebar'
@@ -16,6 +16,7 @@ import { zhCN } from '@/i18n/zh-CN'
 
 const navigation = [
   { to: '/', label: zhCN.pages.home, icon: LayoutDashboard },
+  { to: '/servers', label: zhCN.pages.servers, icon: Server },
   { to: '/inbounds', label: zhCN.pages.inbounds, icon: Network },
   { to: '/users', label: zhCN.pages.users, icon: Users },
   { to: '/rules', label: zhCN.pages.rules, icon: Shuffle },
