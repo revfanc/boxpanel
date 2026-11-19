@@ -395,3 +395,20 @@ func TestCollectorPanelRestartDoesNotRecount(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestRunAccountingKeepsSamplingWithoutEnforcingUserPolicy(t *testing.T) {
+	s, apply, now, w := schedulerFixture(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	exec(t, w, "UPDATE users SET expire_at=?,traffic_limit=1,traffic_reset_day=15 WHERE id=2", now.Unix())
+	polls := 0
+	s.collector.fetch = func(context.Context) ([]firewall.Counter, error) {
+		polls++
+		cancel()
+		return []firewall.Counter{counter(2, 50, 60)}, nil
+	}
+	s.RunAccounting(ctx)
+	if apply.calls != 0 || polls == 0 || usage(t, w, 2) != (amount{50, 60}) {
+		t.Fatal("accounting mode did not sample or attempted local enforcement")
+	}
+}

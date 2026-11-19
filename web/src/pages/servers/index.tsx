@@ -9,6 +9,7 @@ import { Confirm, Empty, Field, Page, Panel, Submit } from '@/components/Resourc
 import { Button } from '@/components/ui/button'
 import { useOperation } from '@/hooks/use-operation'
 import { zhCN as t } from '@/i18n/zh-CN'
+import { hostSchema } from '@/schemas/settings'
 import { api } from '@/lib/api'
 import { refreshResources, serversQuery } from '@/lib/resources'
 import type { IssuedJoinToken, JoinToken, Server } from '@/types/api'
@@ -20,12 +21,14 @@ const renameSchema = z.object({
   }, t.servers.invalidName).transform((name) => name.trim()),
 })
 
-function RenameForm({ server, close }: { server: Server; close: () => void }) {
+const serverSchema = renameSchema.extend({ public_host: hostSchema.optional() })
+
+function EditServerForm({ server, close }: { server: Server; close: () => void }) {
   const client = useQueryClient()
   const operation = useOperation()
-  const form = useForm<z.infer<typeof renameSchema>>({
-    resolver: zodResolver(renameSchema),
-    defaultValues: { name: server.name },
+  const form = useForm<z.infer<typeof serverSchema>>({
+    resolver: zodResolver(serverSchema),
+    defaultValues: server.is_local ? { name: server.name } : { name: server.name, public_host: server.public_host },
   })
   return <form className="space-y-3" onSubmit={form.handleSubmit((body) => operation.run(
     () => api<Server>(`/servers/${server.id}`, { method: 'PUT', body }),
@@ -33,9 +36,16 @@ function RenameForm({ server, close }: { server: Server; close: () => void }) {
       await client.cancelQueries({ queryKey: serversQuery.queryKey })
       client.setQueryData(serversQuery.queryKey, (current) => current?.map((row) => row.id === updated.id ? updated : row))
       close()
+      if (updated.public_host !== server.public_host) {
+        await Promise.all([
+          client.invalidateQueries({ queryKey: ['users'] }),
+          client.invalidateQueries({ queryKey: ['rules'] }),
+        ])
+      }
     },
   ))}>
     <Field label={t.servers.name} error={form.formState.errors.name?.message} disabled={operation.pending} {...form.register('name')} />
+    {!server.is_local && <Field label={t.servers.address} error={form.formState.errors.public_host?.message} disabled={operation.pending} {...form.register('public_host')} />}
     {operation.error != null && <ErrorNotice error={operation.error} />}
     <div className="flex flex-wrap gap-2">
       <Submit pending={operation.pending} />
@@ -45,6 +55,7 @@ function RenameForm({ server, close }: { server: Server; close: () => void }) {
 }
 
 const tokenKey = ['servers', 'join-tokens'] as const
+const syncErrors: Readonly<Record<string, string>> = t.servers.syncErrors
 
 function joinCommand(issued: IssuedJoinToken) {
   const version = window.__BOXPANEL__?.version ?? ''
@@ -128,12 +139,21 @@ export function ServersPage() {
             <dt className="text-muted-foreground">{t.servers.status}</dt><dd>{t.servers.statuses[server.status]}</dd>
             <dt className="text-muted-foreground">{t.servers.version}</dt><dd>{server.version || t.common.unknown}</dd>
             {!server.is_local && <>
+              {server.sync_status && <>
+                <dt className="text-muted-foreground">{t.servers.sync}</dt><dd>{t.servers.syncStatuses[server.sync_status]}</dd>
+                <dt className="text-muted-foreground">{t.servers.generations}</dt><dd>{server.applied_generation} / {server.desired_generation}</dd>
+              </>}
+              {server.singbox_active !== undefined && <>
+                <dt className="text-muted-foreground">{t.servers.core}</dt><dd>{server.singbox_active ? t.servers.coreActive : t.servers.coreInactive}</dd>
+              </>}
               <dt className="text-muted-foreground">{t.servers.lastSeen}</dt><dd>{server.last_seen_at === null ? t.servers.noHeartbeat : new Date(server.last_seen_at * 1000).toLocaleString('zh-CN')}</dd>
             </>}
           </dl>
-          {editing === server.id ? <RenameForm server={server} close={() => setEditing(null)} />
+          {server.sync_error && <p role="status" className="text-sm text-destructive">{syncErrors[server.sync_error] ?? t.servers.syncErrors.apply_failed}</p>}
+          {!server.is_local && <p className="text-xs text-muted-foreground">{t.servers.keyRefresh}</p>}
+          {editing === server.id ? <EditServerForm server={server} close={() => setEditing(null)} />
             : <div className="flex flex-wrap gap-2">
-              <Button variant="outline" disabled={editing !== null} onClick={() => setEditing(server.id)}>{t.servers.rename}</Button>
+              <Button variant="outline" disabled={editing !== null} onClick={() => setEditing(server.id)}>{server.is_local ? t.servers.rename : t.common.edit}</Button>
               {!server.is_local && <Button variant="outline" disabled={editing !== null} onClick={() => { operation.reset(); setRemoving(server) }}>{t.servers.remove}</Button>}
             </div>}
         </Panel>)}

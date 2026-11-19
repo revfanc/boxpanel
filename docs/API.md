@@ -227,12 +227,12 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 | GET | `/reality/recommend` | `{targets: [{server, tls13, h2, latency_ms, ok}]}`，前 3 个推荐 |
 | POST | `/reality/check` | `{server, port?}` → 单个检测结果 |
 
-## 服务器（T8.1 / T8.2 / T8.2b）
+## 服务器（T8.1–T8.3）
 
 | 方法 | 路径 | 请求与成功响应 |
 |---|---|---|
 | GET | `/servers` | 200，服务器数组，本机优先，其余按 ID 升序 |
-| PUT | `/servers/{id}` | `{"name":"新名称"}`，200 返回改名后的服务器 |
+| PUT | `/servers/{id}` | `{name?, public_host?}`，至少提供一项，200 返回更新后的服务器 |
 | DELETE | `/servers/{id}` | 移除远程服务器并撤销它的公钥，204 |
 | GET | `/servers/join-tokens` | 200，未过期且未使用令牌的元数据数组 |
 | POST | `/servers/join-tokens` | `{"name":"服务器名称"}`，201，返回元数据、`token`、`master_url` 和 `master_pin` |
@@ -242,31 +242,46 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 `updated_at`。状态为 `local`、`online`、`offline` 或 `pending`。时间使用 UTC Unix 秒，`last_seen_at` 可为 `null`。
 `version` 为已记录的 boxpanel 版本，未记录时为空。接口要求登录，改名沿用 CSRF 校验。
 名称去首尾空白后须为 1–64 个字符，且原值中不得包含控制字符。无效名称返回 400，未知 ID 返回 404。
-改名直接更新服务器记录，下一次订阅使用新名称。公网地址在本机设置页修改。
+名称和公网地址变更直接更新订阅元数据。远端 `public_host` 接受域名或裸 IPv4/IPv6。本机公网地址通过设置 API 修改。
+远端服务器还返回 `desired_generation`、`applied_generation`（0 表示尚未生效）、`sync_status`（`syncing`、`synced`、`failed`）
+及最近心跳记录的 `singbox_active`。有失败时返回固定的 `sync_error` 代码，面板根据代码展示原因和处理建议。
 服务器列表排除 `removed`；本机、已移除或不存在的服务器无法通过 DELETE 移除，返回 404。
 令牌元数据为 `id`、`name`、`expires_at`。只有签发响应含令牌明文，使用和撤销后从列表消失。
 无论主控当前使用自签或 ACME 证书，`master_pin` 都是固定回退公钥 SPKI DER 的 SHA-256（无填充 base64url）。
 签发要求 HTTPS，HTTP 面板返回 `409 agent_requires_https`。令牌管理和服务器移除沿用管理员会话与 CSRF 校验。
 
-### 节点 API（T8.2 / T8.2b）
+### 节点 API（T8.2–T8.3）
 
-前缀为 `/{web_path}/api/agent/v1`，只接受 HTTPS 和 `application/json`。节点不使用面板会话或 CSRF。
+前缀为 `/{web_path}/api/agent/v1`，只接受 HTTPS。带请求体的 POST 使用 `application/json`。节点使用签名认证。
 请求体限 8 KiB、路径不含查询参数。所有 base64url 值均不带填充。
 
 | 方法 | 路径 | 请求与成功响应 |
 |---|---|---|
 | POST | `/join` | `{token, public_key, hostname, public_ip, version}`，201 `{server_id}` |
-| POST | `/heartbeat` | `{version, singbox_active, uptime}`，204。uptime 是节点进程运行秒数 |
+| POST | `/heartbeat` | `{version, singbox_active, uptime, applied_generation?, sync_error?}`。携带 `applied_generation` 时 200 `{desired_generation}`，旧节点省略该字段时返回 204。uptime 为节点进程运行秒数 |
+| GET | `/desired` | 空请求体，200 `{generation, inbounds, users, route}` |
+| POST | `/inbound-keys` | `{inbound_id, key_id, reality_public_key?, short_id?, hy2_cert_sha256?, hy2_cert_pem?}`，204 |
 
 注册按 TCP 对端 IP 限流，每分钟 10 次，返回 429 时带 `Retry-After`。`public_ip` 为空时记录连接对端 IP，
 不会采用转发头。非公网地址（包括未传地址且对端为私网的情况）返回 `422 agent_public_ip_required`，
 节点可补充 `--public-ip` 后使用同一有效令牌重试。失效、已使用、过期或撤销的令牌统一返回 `401 invalid_join_token`。
 
-心跳请求头为 `X-Boxpanel-Server`（十进制 ID）、`X-Boxpanel-Timestamp`（Unix 秒）、
+注册后所有节点请求的签名头为 `X-Boxpanel-Server`（十进制 ID）、`X-Boxpanel-Timestamp`（Unix 秒）、
 `X-Boxpanel-Nonce`（16 字节随机数的 base64url）和 `X-Boxpanel-Signature`（Ed25519 签名的 base64url）。
 签名原文为 `method\npath\ntimestamp\nnonce\nsha256(body)`，使用原始请求体字节和小写十六进制 SHA-256。
 `path` 包含面板路径，例如 `/k3m9x2p7q1ab/api/agent/v1/heartbeat`。
 签名认证失败统一返回 `401 agent_unauthorized`。节点使用 401 响应的标准 `Date` 头诊断超过 100 秒的时钟偏差。
+`/desired` 和 `/inbound-keys` 只使用签名认证所对应的服务器身份。指向别的服务器或其入站返回 401。
+`/desired` 的 `inbounds` 为 `[{id,key_id,tag,protocol,port,enabled,remark,options}]`，只包括该服务器的入站。
+其中 `key_id` 是入站材料版本。Reality options 的公私钥和 Short ID 为空，Hysteria2 options 不含证书材料。
+`users` 为 `[{id,name,uuid,password}]`，只含主控判定的有效用户。入站混淆密码和用户凭证通过签名认证的 TLS 通道下发。
+`route` 包含 `block_bittorrent`。节点同步响应使用 `Cache-Control: no-store`，日志只记路由和状态，节点限制期望状态体为 32 MiB。
+
+节点在成功 Apply 后才上报该入站当前的公开材料。每次上报只提交对应协议的字段。Reality 使用无填充 base64url 的 32 字节公钥
+和 16 位十六进制 Short ID。Hysteria2 提交公开叶证书 PEM 和 DER 的 SHA-256 小写十六进制，主控验证 SNI、有效期、自签名和指纹。
+过期的 `key_id` 返回 `409 stale_inbound_keys`，无效的公开材料返回 `400 invalid_inbound_keys`。同一版本和材料允许重复上报。
+`sync_error` 可为空或为 `check_failed`、`port_in_use`、`restart_failed`、`firewall_failed`、`apply_timeout`、
+`rollback_failed`、`apply_failed`、`key_publication_failed`。主控拒绝其他值，避免向面板转发节点日志或凭证。
 
 ## 入站
 
@@ -278,7 +293,7 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 | PUT | `/inbounds/{id}` | 修改 |
 | DELETE | `/inbounds/{id}` | 删除（同步关闭防火墙端口、清理端口跳跃） |
 | POST | `/inbounds/{id}/toggle` | `{enabled}` |
-| POST | `/inbounds/suggest` | `{protocol}` → 返回一份推荐参数（端口、SNI、密钥…），不落库；引导流程用 |
+| POST | `/inbounds/suggest` | `{protocol, server_id?}` → 返回可用默认参数，不落库 |
 
 创建 body：
 
@@ -286,12 +301,15 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 { "protocol": "vless_reality", "server_id": 1, "port": 443, "remark": "香港-Reality", "options": { "server_name": "..." } }
 ```
 
-所有持久化写操作通过 `singbox.Manager.Apply(ctx, mutation)` 生成并比较配置；实际配置写入走
-「check → 生效」流程，配置/计划不变且内核运行时按 SPEC §7 的 T7.1b 约定只提交 DB。
-创建返回 201，修改/启停返回 200 最新脱敏对象，删除成功返回 204；失败按错误表返回。
-`/inbounds/suggest` 只提供本机推荐参数，不写 DB、不触发生效。
-入站响应含 `server_id`。创建省略该字段时使用本机，更新省略时保持归属。
-写入指定非本机 ID，或尝试修改、启停、删除非本机入站，返回 `422 server_not_local`，提示「当前版本仅支持管理本机入站」。
+本机入站的持久化写操作使用 `singbox.Manager.Apply(ctx, mutation)`。配置和计划不变且内核运行时按 SPEC §7 的 T7.1b 约定
+只提交数据库。仅涉及远端入站的写操作在一笔数据库事务中更新入站和其期望版本，响应头为 `X-Boxpanel-Apply: queued`。
+跨服务器移动涉及本机时仍使用本机 Apply 的事务。创建返回 201，修改或启停返回 200 最新脱敏对象，删除成功返回 204。
+入站响应含 `server_id`。创建省略时使用本机，修改省略时保持归属。可选择本机和 `online` 或 `offline` 的远端服务器。
+未接入、已移除或未知的目标服务器返回 `422 server_unavailable`。远端入站响应附带 `key_status`（`pending` 或 `ready`）。
+
+端口、标识和跳跃范围按目标服务器校验，主控只探测本机的实际端口和 Reality 推荐。远端 Reality 的目标需手动填写。
+远端 Reality 写请求中的 `private_key`、`public_key` 和 `short_ids` 返回 400，由节点生成。
+移动入站会按新归属重新分配 Reality 密钥或 Hysteria2 证书。修改远端 Hysteria2 的 SNI 会重新进入 `pending`。
 
 ## 用户
 

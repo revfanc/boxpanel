@@ -149,25 +149,27 @@ func serveAgent(ctx context.Context, conn *sql.DB, opts serveOptions, logger *sl
 		return err
 	}
 	if err := manager.Startup(ctx); err != nil {
-		return fmt.Errorf("节点内核启动失败，请检查 sing-box 安装与系统服务后重试: %w", err)
+		logger.Warn("节点内核启动未完成，将从主控重试生效。请检查 sing-box 安装与系统服务。")
 	}
 	workerCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if !opts.dev && runtime.GOOS == "linux" {
 		native := host.Native{}
 		network := alerts.New(conn, reader, alerts.Options{Network: &alerts.Network{Files: native, Runner: native}, Logger: logger})
-		scheduler := traffic.NewScheduler(traffic.NewCollector(conn, reader, nil), manager, nil, logger)
+		scheduler := traffic.NewScheduler(traffic.NewCollector(conn, reader, nil), nil, nil, logger)
 		netDone, trafficDone := make(chan struct{}), make(chan struct{})
 		go func() { defer close(netDone); network.RunTraffic(workerCtx) }()
-		go func() { defer close(trafficDone); scheduler.Run(workerCtx) }()
+		go func() { defer close(trafficDone); scheduler.RunAccounting(workerCtx) }()
 		defer func() { cancel(); <-netDone; <-trafficDone }()
 	}
 	logger.Info("已启动节点模式", "server_id", master.ServerID)
 	started := time.Now()
+	node := agent.Node{Reader: reader, Master: master, Key: key, Client: client, Manager: manager}
 	send := func(ctx context.Context) error {
-		return client.Heartbeat(ctx, master.ServerID, key, agent.Heartbeat{
-			Version: version, SingboxActive: !opts.dev && manager.CoreActive(ctx), Uptime: int64(time.Since(started) / time.Second),
-		})
+		active := func() bool { return !opts.dev && manager.CoreActive(ctx) }
+		return node.Sync(ctx, agent.Heartbeat{
+			Version: version, SingboxActive: active(), Uptime: int64(time.Since(started) / time.Second),
+		}, active)
 	}
 	runHeartbeats(ctx, conn, master, send, logger)
 	return nil
@@ -183,12 +185,16 @@ func runHeartbeats(ctx context.Context, conn *sql.DB, master db.AgentConnection,
 		}
 		delay := backoff
 		if err == nil {
+			started := time.Now()
 			sendErr := send(ctx)
 			if ctx.Err() != nil {
 				return
 			}
 			next, wait := nextHeartbeat(last, sendErr, &streak, &backoff, time.Now())
 			delay = wait
+			if sendErr == nil {
+				delay = max(0, wait-time.Since(started))
+			}
 			saved, saveErr := recordHeartbeatResult(ctx, conn, master, next)
 			err = saveErr
 			if errors.Is(err, sql.ErrNoRows) || (err == nil && !saved) {
@@ -226,7 +232,7 @@ func nextHeartbeat(last db.AgentHeartbeatResult, err error, streak *int, backoff
 	if err == nil {
 		*streak, *backoff = 0, 5*time.Second
 		result.Status, result.RepeatedUnauthorized = "ok", false
-		return result, agent.HeartbeatInterval
+		return result, agent.SyncInterval
 	}
 	var skew *agent.ClockSkewError
 	switch {

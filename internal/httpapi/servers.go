@@ -6,26 +6,47 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/revfanc/boxpanel/internal/rules"
 )
 
 type serverRecord struct {
-	ID         int64  `json:"id"`
-	Name       string `json:"name"`
-	PublicHost string `json:"public_host"`
-	IsLocal    bool   `json:"is_local"`
-	Status     string `json:"status"`
-	LastSeenAt *int64 `json:"last_seen_at"`
-	Version    string `json:"version"`
-	CreatedAt  int64  `json:"created_at"`
-	UpdatedAt  int64  `json:"updated_at"`
+	ID                int64  `json:"id"`
+	Name              string `json:"name"`
+	PublicHost        string `json:"public_host"`
+	IsLocal           bool   `json:"is_local"`
+	Status            string `json:"status"`
+	LastSeenAt        *int64 `json:"last_seen_at"`
+	Version           string `json:"version"`
+	CreatedAt         int64  `json:"created_at"`
+	UpdatedAt         int64  `json:"updated_at"`
+	DesiredGeneration int64  `json:"desired_generation,omitempty"`
+	AppliedGeneration *int64 `json:"applied_generation,omitempty"`
+	SyncStatus        string `json:"sync_status,omitempty"`
+	SyncError         string `json:"sync_error,omitempty"`
+	SingboxActive     *bool  `json:"singbox_active,omitempty"`
 }
 
-const serverColumns = "id,name,public_host,is_local,status,last_seen_at,version,created_at,updated_at"
+const serverColumns = "id,name,public_host,is_local,status,last_seen_at,version,created_at,updated_at,desired_generation,applied_generation,sync_error,singbox_active"
 
 func scanServer(row rowScanner) (serverRecord, error) {
 	var s serverRecord
-	if err := row.Scan(&s.ID, &s.Name, &s.PublicHost, &s.IsLocal, &s.Status, &s.LastSeenAt, &s.Version, &s.CreatedAt, &s.UpdatedAt); err != nil {
+	var desired, applied int64
+	var syncError string
+	var active *bool
+	if err := row.Scan(&s.ID, &s.Name, &s.PublicHost, &s.IsLocal, &s.Status, &s.LastSeenAt,
+		&s.Version, &s.CreatedAt, &s.UpdatedAt, &desired, &applied, &syncError, &active); err != nil {
 		return s, fmt.Errorf("read server: %w", err)
+	}
+	if !s.IsLocal {
+		s.DesiredGeneration, s.AppliedGeneration, s.SingboxActive = desired, &applied, active
+		s.SyncError = syncError
+		s.SyncStatus = "syncing"
+		if syncError != "" {
+			s.SyncStatus = "failed"
+		} else if applied == desired && active != nil && *active {
+			s.SyncStatus = "synced"
+		}
 	}
 	return s, nil
 }
@@ -64,17 +85,50 @@ func (a *api) serverRename(w http.ResponseWriter, r *http.Request) {
 		a.resourceError(w, err)
 		return
 	}
-	name, ok := a.readServerName(w, r)
-	if !ok {
+	var input struct {
+		Name       *string `json:"name"`
+		PublicHost *string `json:"public_host"`
+	}
+	if !decodeResource(w, r, &input) {
 		return
 	}
+	if input.Name == nil && input.PublicHost == nil {
+		a.resourceError(w, invalid("body", "请提供服务器名称或公网地址后重试。"))
+		return
+	}
+	if input.Name != nil {
+		if err := validateServerName(*input.Name); err != nil {
+			a.resourceError(w, err)
+			return
+		}
+		*input.Name = strings.TrimSpace(*input.Name)
+	}
+	ctx := r.Context()
 	conn, err := a.writeDB()
 	if err != nil {
 		a.resourceError(w, err)
 		return
 	}
-	// Renaming changes subscription metadata. It does not require kernel Apply.
-	s, err := scanServer(conn.QueryRowContext(r.Context(), "UPDATE servers SET name=?, updated_at=unixepoch() WHERE id=? AND status<>'removed' RETURNING "+serverColumns, name, id))
+	if input.PublicHost != nil {
+		*input.PublicHost = strings.TrimSpace(*input.PublicHost)
+		if !rules.ValidHost(*input.PublicHost) {
+			a.resourceError(w, invalid("public_host", "请输入公网域名或裸 IPv4/IPv6 地址。"))
+			return
+		}
+		var local bool
+		if err := conn.QueryRowContext(ctx, "SELECT is_local FROM servers WHERE id=? AND status<>'removed'", id).Scan(&local); err != nil {
+			a.resourceError(w, err)
+			return
+		}
+		if local {
+			a.resourceError(w, invalid("public_host", "请在设置页修改本机公网地址。"))
+			return
+		}
+	}
+	// These are subscription metadata and do not affect either running kernel.
+	s, err := scanServer(conn.QueryRowContext(ctx, `UPDATE servers SET name=coalesce(?,name),
+		public_host=coalesce(?,public_host),updated_at=unixepoch() WHERE id=? AND status<>'removed' RETURNING `+
+		serverColumns, input.Name, input.PublicHost, id))
 	if err != nil {
 		a.resourceError(w, err)
 		return
@@ -89,10 +143,17 @@ func (a *api) readServerName(w http.ResponseWriter, r *http.Request) (string, bo
 	if !decodeResource(w, r, &input) {
 		return "", false
 	}
-	name := strings.TrimSpace(input.Name)
-	if name == "" || utf8.RuneCountInString(name) > 64 || strings.ContainsFunc(input.Name, unicode.IsControl) {
-		a.resourceError(w, invalid("name", "请输入 1–64 个字符的服务器名称，且不要包含控制字符。"))
+	if err := validateServerName(input.Name); err != nil {
+		a.resourceError(w, err)
 		return "", false
 	}
-	return name, true
+	return strings.TrimSpace(input.Name), true
+}
+
+func validateServerName(input string) error {
+	name := strings.TrimSpace(input)
+	if name == "" || utf8.RuneCountInString(name) > 64 || strings.ContainsFunc(input, unicode.IsControl) {
+		return invalid("name", "请输入 1–64 个字符的服务器名称，且不要包含控制字符。")
+	}
+	return nil
 }

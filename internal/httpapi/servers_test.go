@@ -44,9 +44,9 @@ func TestServerListRenameAndLocalInboundWrites(t *testing.T) {
 		t.Fatal("host sync affected the wrong rows", list, err)
 	}
 
-	w = f.call(t, "POST", "inbounds", `{"server_id":2,"protocol":"vless_reality"}`, 422)
-	if !strings.Contains(w.Body.String(), "当前版本仅支持管理本机入站") || f.apply.calls != calls {
-		t.Fatal("remote create proceeded to Apply")
+	w = f.call(t, "POST", "inbounds", `{"server_id":2,"protocol":"vless_reality","port":2443,"options":{"server_name":"www.example.com"}}`, 201)
+	if w.Header().Get("X-Boxpanel-Apply") != "queued" || f.apply.calls != calls {
+		t.Fatal("remote create proceeded to local Apply")
 	}
 	w = f.call(t, "POST", "inbounds", `{"server_id":1,"protocol":"vless_reality","port":443,"options":{"server_name":"www.example.com"}}`, 201)
 	var local inboundRecord
@@ -55,8 +55,15 @@ func TestServerListRenameAndLocalInboundWrites(t *testing.T) {
 	}
 	path := fmt.Sprintf("inbounds/%d", local.ID)
 	f.call(t, "PUT", path, `{"server_id":1,"remark":"local"}`, 200)
-	f.call(t, "PUT", path, `{"server_id":2}`, 422)
+	f.call(t, "PUT", path, `{"server_id":2}`, 409)
 	f.call(t, "PUT", path, `{"server_id":99}`, 422)
-	f.call(t, "PUT", "inbounds/1", `{"remark":"remote edit"}`, 422)
-	f.call(t, "DELETE", "inbounds/1", "", 422)
+	f.call(t, "DELETE", "inbounds/1", "", 204)
+	moved := decodeResult[inboundRecord](t, f.call(t, "PUT", path, `{"server_id":2}`, 200))
+	if moved.ServerID != 2 || moved.KeyStatus != "pending" || strings.Contains(string(moved.Options), "private_key") {
+		t.Fatal("move to remote did not enter pending", moved)
+	}
+	moved = decodeResult[inboundRecord](t, f.call(t, "PUT", path, `{"server_id":1}`, 200))
+	if moved.ServerID != 1 || moved.KeyStatus != "" || !strings.Contains(string(moved.Options), "public_key") {
+		t.Fatal("move to local did not provision local material", moved)
+	}
 }

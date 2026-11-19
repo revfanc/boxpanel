@@ -104,6 +104,11 @@ export interface Server {
   public_host: string
   is_local: boolean
   status: 'local' | 'online' | 'offline' | 'pending'
+  desired_generation?: number
+  applied_generation?: number
+  sync_status?: 'synced' | 'syncing' | 'failed'
+  sync_error?: string
+  singbox_active?: boolean
   last_seen_at: number | null
   version: string
   created_at: number
@@ -124,6 +129,7 @@ export interface IssuedJoinToken extends JoinToken {
 
 interface InboundBase {
   server_id: number
+  key_status?: 'pending' | 'ready'
   id: number
   tag: string
   port: number

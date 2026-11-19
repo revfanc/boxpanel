@@ -147,16 +147,88 @@ func (c *Client) Heartbeat(ctx context.Context, id int64, key ed25519.PrivateKey
 	}
 }
 
+// SyncHeartbeat exchanges the applied and desired generations.
+func (c *Client) SyncHeartbeat(ctx context.Context, id int64, key ed25519.PrivateKey, in Heartbeat) (HeartbeatReply, error) {
+	var reply HeartbeatReply
+	resp, err := c.post(ctx, "/heartbeat", in, id, key)
+	if err != nil {
+		return reply, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNoContent {
+		return reply, nil
+	}
+	if err := nodeResponse(resp, http.StatusOK); err != nil {
+		return reply, err
+	}
+	if err := decodeResponse(resp, 8192, &reply); err != nil || reply.DesiredGeneration <= 0 {
+		return HeartbeatReply{}, fmt.Errorf("invalid desired generation in heartbeat response")
+	}
+	return reply, nil
+}
+
+func (c *Client) Desired(ctx context.Context, id int64, key ed25519.PrivateKey) (Desired, error) {
+	var out Desired
+	resp, err := c.request(ctx, http.MethodGet, "/desired", nil, id, key)
+	if err != nil {
+		return out, err
+	}
+	defer resp.Body.Close()
+	if err := nodeResponse(resp, http.StatusOK); err != nil {
+		return out, err
+	}
+	const maxSnapshot = 32 << 20
+	if err := decodeResponse(resp, maxSnapshot, &out); err != nil || out.Generation <= 0 || out.Inbounds == nil || out.Users == nil {
+		return Desired{}, fmt.Errorf("invalid desired state response")
+	}
+	return out, nil
+}
+
+func (c *Client) PublishKeys(ctx context.Context, id int64, key ed25519.PrivateKey, in InboundKeys) error {
+	resp, err := c.post(ctx, "/inbound-keys", in, id, key)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nodeResponse(resp, http.StatusNoContent)
+}
+
+func nodeResponse(resp *http.Response, want int) error {
+	switch resp.StatusCode {
+	case want:
+		return nil
+	case http.StatusUnauthorized:
+		return unauthorized(resp.Header.Get("Date"), time.Now())
+	default:
+		return fmt.Errorf("node request returned HTTP %d", resp.StatusCode)
+	}
+}
+
+func decodeResponse(resp *http.Response, limit int64, out any) error {
+	r := &io.LimitedReader{R: resp.Body, N: limit + 1}
+	decoder := json.NewDecoder(r)
+	if err := decoder.Decode(out); err != nil || decoder.Decode(new(any)) != io.EOF || r.N <= 0 {
+		return fmt.Errorf("invalid node response body")
+	}
+	return nil
+}
+
 func (c *Client) post(ctx context.Context, path string, value any, id int64, key ed25519.PrivateKey) (*http.Response, error) {
 	body, err := json.Marshal(value)
 	if err != nil {
 		return nil, fmt.Errorf("encode node request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+Prefix+path, bytes.NewReader(body))
+	return c.request(ctx, http.MethodPost, path, body, id, key)
+}
+
+func (c *Client) request(ctx context.Context, method, path string, body []byte, id int64, key ed25519.PrivateKey) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.base+Prefix+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build node request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	if id != 0 {
 		if err := sign(req, id, key, time.Now(), body); err != nil {
 			return nil, err

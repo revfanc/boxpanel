@@ -86,3 +86,26 @@ it('confirms removal for remote servers and refreshes the list', async () => {
   await waitFor(() => expect(screen.queryByText(edge.name)).not.toBeInTheDocument())
   expect(screen.queryByRole('button', { name: t.servers.remove })).not.toBeInTheDocument()
 })
+
+it('shows remote sync progress and updates the subscription host', async () => {
+  const edge = {
+    ...server, id: 2, name: 'Edge', is_local: false, status: 'online', public_host: 'edge.example.com',
+    desired_generation: 7, applied_generation: 6, sync_status: 'failed', sync_error: 'port_in_use', singbox_active: true,
+  }
+  const fetch = mockAPI({
+    '/servers': () => Response.json([server, edge]),
+    'PUT /servers/2': (init) => Response.json({ ...edge, ...JSON.parse(String(init.body)) }),
+  })
+  const { user } = mountPage(<ServersPage />)
+  expect(await screen.findByText(t.servers.syncStatuses.failed)).toBeVisible()
+  expect(screen.getByText('6 / 7')).toBeVisible()
+  expect(screen.getByText(t.servers.syncErrors.port_in_use)).toBeVisible()
+  await user.click(screen.getByRole('button', { name: t.common.edit }))
+  const input = screen.getByRole('textbox', { name: t.servers.address })
+  await user.clear(input)
+  await user.type(input, 'new.edge.example.com')
+  await user.click(screen.getByRole('button', { name: t.common.save }))
+  expect(await screen.findByText('new.edge.example.com')).toBeVisible()
+  const request = fetch.mock.calls.find(([, init]) => init?.method === 'PUT')
+  expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ public_host: 'new.edge.example.com' })
+})

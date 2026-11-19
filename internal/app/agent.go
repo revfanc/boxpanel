@@ -169,6 +169,9 @@ func LeaveNode(ctx context.Context, paths Paths) error {
 	if role != db.RoleAgent {
 		return fmt.Errorf("当前实例是主控，请在面板移除相应服务器")
 	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM inbounds; DELETE FROM users"); err != nil {
+		return fmt.Errorf("clear mirrored node configuration: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM settings WHERE key <> 'singbox_version'"); err != nil {
 		return fmt.Errorf("clear local node settings: %w", err)
 	}

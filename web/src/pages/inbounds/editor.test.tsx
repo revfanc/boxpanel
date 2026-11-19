@@ -79,3 +79,52 @@ it('reminds of interruption only when an edit affects the core or firewall', asy
   await user.type(screen.getByLabelText(t.inbounds.port), '9443')
   expect(screen.getByText(t.common.applyHint)).toBeVisible()
 })
+
+it('selects a reachable or offline server for creation and bypasses local Reality checks', async () => {
+  const local = { id: 1, name: 'Local', is_local: true, status: 'local' }
+  const edge = { id: 2, name: 'Edge', is_local: false, status: 'offline' }
+  const pending = { id: 3, name: 'Pending', is_local: false, status: 'pending' }
+  const fetch = mockAPI({
+    '/servers': () => Response.json([local, edge, pending]),
+    'POST /inbounds/suggest': () => Response.json({
+      protocol: 'vless_reality', port: 2053,
+      options: { server_name: '', handshake_server: '', handshake_port: 443, fingerprint: 'chrome', short_ids: [] },
+    }),
+    'POST /inbounds': () => Response.json({ ...inbound, server_id: 2, key_status: 'pending' }, { status: 201 }),
+  })
+  const { user, router } = mountPage(<NewInboundPage />, '/inbounds/new')
+  const select = await screen.findByRole('combobox', { name: t.inbounds.server })
+  expect(screen.queryByRole('option', { name: /Pending/ })).not.toBeInTheDocument()
+  await user.selectOptions(select, '2')
+  await user.click(screen.getByRole('radio', { name: /VLESS/ }))
+  await user.type(await screen.findByLabelText(t.inbounds.target), 'www.example.com')
+  expect(screen.getByText(t.inbounds.remoteCheck)).toBeVisible()
+  expect(screen.queryByRole('button', { name: t.inbounds.check })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: t.inbounds.recommend })).not.toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: t.common.create }))
+  await waitFor(() => expect(router.state.location.pathname).toBe('/inbounds'))
+  for (const route of ['/inbounds/suggest', '/inbounds']) {
+    const request = fetch.mock.calls.find(([url, init]) => url.endsWith(route) && init?.method === 'POST')
+    expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ server_id: 2 })
+  }
+})
+
+it('moves an inbound without sending its old Short IDs', async () => {
+  const fetch = mockAPI({
+    '/servers': () => Response.json([
+      { id: 1, name: 'Local', is_local: true, status: 'local' },
+      { id: 2, name: 'Edge', is_local: false, status: 'online' },
+    ]),
+    'PUT /inbounds/1': () => Response.json({ ...inbound, server_id: 2, key_status: 'pending' }),
+  })
+  const { user } = mountPage(<EditInboundPage />, '/inbounds/1', '/inbounds/:id')
+  await user.selectOptions(await screen.findByRole('combobox', { name: t.inbounds.server }), '2')
+  expect(screen.getByText(t.inbounds.moveHint)).toBeVisible()
+  await user.click(screen.getByRole('button', { name: t.common.save }))
+  await waitFor(() => {
+    const request = fetch.mock.calls.find(([, init]) => init?.method === 'PUT')
+    const body = JSON.parse(String(request?.[1]?.body))
+    expect(body.server_id).toBe(2)
+    expect(body.options).not.toHaveProperty('short_ids')
+  })
+})

@@ -14,17 +14,22 @@ import (
 )
 
 func (a *api) agentEndpoints() http.Handler {
-	routes := map[string]string{agent.Prefix + "/join": http.MethodPost, agent.Prefix + "/heartbeat": http.MethodPost}
+	routes := map[string]string{
+		agent.Prefix + "/join": http.MethodPost, agent.Prefix + "/heartbeat": http.MethodPost,
+		agent.Prefix + "/desired": http.MethodGet, agent.Prefix + "/inbound-keys": http.MethodPost,
+	}
 	return middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case agent.Prefix + "/join", agent.Prefix + "/heartbeat":
-			r.Pattern = r.URL.Path
-		default:
+		method, ok := routes[r.URL.Path]
+		if !ok {
 			notFound(w, r)
 			return
 		}
-		if r.Method != http.MethodPost {
-			w.Header().Set("Allow", http.MethodPost)
+		r.Pattern = r.URL.Path
+		if r.URL.Path != agent.Prefix+"/join" {
+			w.Header().Set("Cache-Control", "no-store")
+		}
+		if r.Method != method {
+			w.Header().Set("Allow", method)
 			writeError(w, 405, "method_not_allowed", "请求方法不支持", "请使用接口文档指定的请求方法。")
 			return
 		}
@@ -35,7 +40,7 @@ func (a *api) agentEndpoints() http.Handler {
 		if r.URL.Path == agent.Prefix+"/join" {
 			a.agentJoin(w, r)
 		} else {
-			a.agentHeartbeat(w, r)
+			a.agentAuthenticated(w, r)
 		}
 	}), a.opts.Logger, routes)
 }
@@ -74,7 +79,7 @@ func (a *api) agentJoin(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (a *api) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
+func (a *api) agentAuthenticated(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 8*1024))
 	if err != nil {
 		a.rejectAgent(w, false)
@@ -91,23 +96,62 @@ func (a *api) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
-	var in agent.Heartbeat
-	if !decode(w, r, &in) {
-		return
-	}
-	if !agent.ValidMetadata(in.Version, 128) || in.Uptime < 0 {
-		writeError(w, 400, "invalid_argument", "节点心跳内容无效", "请检查节点 boxpanel 版本后重试。")
-		return
-	}
-	if err := a.opts.Agents.RecordHeartbeat(r.Context(), identity, in); err != nil {
-		if err == agent.ErrUnauthorized {
+	switch r.URL.Path {
+	case agent.Prefix + "/desired":
+		if len(body) != 0 {
 			a.rejectAgent(w, false)
-		} else {
-			a.resourceError(w, err)
+			return
 		}
-		return
+		out, err := a.opts.Agents.Desired(r.Context(), identity)
+		if err == nil {
+			writeJSON(w, http.StatusOK, out)
+			return
+		}
+		a.agentOperationError(w, err)
+	case agent.Prefix + "/inbound-keys":
+		var in agent.InboundKeys
+		if !decodeResource(w, r, &in) {
+			return
+		}
+		if err := a.opts.Agents.PublishKeys(r.Context(), identity, in); err != nil {
+			a.agentOperationError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case agent.Prefix + "/heartbeat":
+		var in agent.Heartbeat
+		if !decodeResource(w, r, &in) {
+			return
+		}
+		if !agent.ValidMetadata(in.Version, 128) || in.Uptime < 0 || !agent.ValidSyncError(in.SyncError) ||
+			in.AppliedGeneration != nil && *in.AppliedGeneration < 0 || in.AppliedGeneration == nil && in.SyncError != "" {
+			writeError(w, 400, "invalid_argument", "节点心跳内容无效", "请检查节点 boxpanel 版本后重试。")
+			return
+		}
+		reply, err := a.opts.Agents.RecordHeartbeat(r.Context(), identity, in)
+		if err != nil {
+			a.agentOperationError(w, err)
+			return
+		}
+		if in.AppliedGeneration == nil {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		writeJSON(w, http.StatusOK, reply)
 	}
-	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *api) agentOperationError(w http.ResponseWriter, err error) {
+	switch err {
+	case agent.ErrUnauthorized:
+		a.rejectAgent(w, false)
+	case agent.ErrStaleKeys:
+		writeError(w, 409, "stale_inbound_keys", "入站密钥版本已变更", "请等待节点重新拉取配置后自动重试。")
+	case agent.ErrInvalidKeys:
+		writeError(w, 400, "invalid_inbound_keys", "入站公开材料无效", "请检查节点时间和证书，或更新节点版本后重试。")
+	default:
+		a.resourceError(w, err)
+	}
 }
 
 func (a *api) joinTokenList(w http.ResponseWriter, r *http.Request) {

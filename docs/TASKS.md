@@ -1088,9 +1088,13 @@ host 变化后回退密钥 SPKI 不变；系统 CA 分支拒绝主机名不匹�
 - make lint test build 通过；SPEC/API/FRONTEND 同步。审查者将在 LXD 容器节点上真机验收（端口映射到主控公网 IP）。
 
 - **验收**：
-  - [ ] 同步、节点侧密钥、鉴权与测试。
-  - [ ] 面板选择服务器建节点、同步状态展示。
-  - [ ] make lint test build 通过；文档同步。
+  - [x] 同步、节点侧密钥与鉴权。进程内 HTTPS 测试覆盖两个节点的归属隔离、入站与用户变化、密钥恢复、
+    订阅、失败回滚、无变化免重启及离线保留。节点保留流量采样，跳过本地停用调度。
+  - [x] 面板支持创建和编辑时选服务器、显示同步状态与版本、编辑远端公网地址。新增前端组件测试。
+  - [x] `make lint`、`make build` 和单机配置/订阅 golden 通过。SPEC、API、FRONTEND、CONFIG、INSTALL 已同步。
+  - [ ] 完整 `make test`。已执行，两项原有 `internal/e2e` 测试启动 sing-box 时触发 macOS 沙箱 DNS 通知 `status 9`。
+    安装脚本、其余 Go 包、前端类型检查、lint 和 134 项 Vitest 测试通过。
+  - [ ] LXD 实机生效耗时、端口映射和客户端连通。
 
 ## M7 后续增强（MVP 之后，按需排期）
 

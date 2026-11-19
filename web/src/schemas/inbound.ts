@@ -36,7 +36,7 @@ export function inboundDefaults(protocol: Protocol, source?: Inbound | InboundSu
   return {
     protocol, port: source?.port, tag: existing?.tag ?? '', remark: existing?.remark ?? '', enabled: existing?.enabled ?? true,
     server_name: reality?.server_name ?? '', handshake_server: reality?.handshake_server ?? '', handshake_port: reality?.handshake_port ?? 443,
-    fingerprint: reality?.fingerprint ?? 'chrome', short_ids: reality?.short_ids.join(', ') ?? '',
+    fingerprint: reality?.fingerprint ?? 'chrome', short_ids: reality?.short_ids?.join(', ') ?? '',
     sni: hy2?.sni ?? 'www.bing.com', up_mbps: hy2?.up_mbps ?? 0, down_mbps: hy2?.down_mbps ?? 0,
     obfs_password: '', clear_obfs: false, hopping: hy2?.port_hopping.enabled ?? false,
     start: hy2?.port_hopping.start ?? 20000, end: hy2?.port_hopping.end ?? 30000,
