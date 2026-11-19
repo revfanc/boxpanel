@@ -36,7 +36,7 @@ func csrf(next http.Handler) http.Handler {
 	})
 }
 
-// Auth responses are small JSON documents. Buffer them so a panic cannot leak a
+// Buffer API responses (including bounded encrypted backup attachments). Buffer them so a panic cannot leak a
 // partial success, cookie or sensitive panic value before the unified 500 reply.
 type response struct {
 	header http.Header
@@ -69,7 +69,9 @@ func middleware(next http.Handler, logger *slog.Logger, routes map[string]string
 			for key, values := range buffer.header {
 				w.Header()[key] = values
 			}
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			if w.Header().Get("Content-Type") == "" {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			}
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 			w.WriteHeader(buffer.status)

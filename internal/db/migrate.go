@@ -94,3 +94,9 @@ func migrate(ctx context.Context, conn *sql.DB, source fs.FS) error {
 	}
 	return nil
 }
+
+// CurrentSchema is the highest embedded migration number understood by this binary.
+func CurrentSchema() int {
+	names, _ := fs.Glob(migrations, "migrations/*.sql")
+	return len(names)
+}

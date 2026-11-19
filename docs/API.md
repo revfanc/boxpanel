@@ -1,6 +1,6 @@
 # 管理 API 契约
 
-前缀：`/{web_path}/api/v1`。除 `/auth/login` 外均需登录会话。请求/响应均为 JSON。
+前缀：`/{web_path}/api/v1`。除 `/auth/login` 外均需登录会话。除加密备份下载和恢复上传外，请求/响应均为 JSON。
 
 ## 通用
 
@@ -445,13 +445,31 @@ JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未�
 另覆盖 UA、URI 特殊字符/IPv6、规则顺序/源、有效期/流量边界、
 限流并发/窗口/代理头、404 伪装、token 重置、认证/CSRF/HEAD、预览脱敏、settings Apply 回滚及真实本地监听切换。
 
-## 备份（后期）
+## T7.5 备份与恢复
 
-| 方法 | 路径 | 说明 |
+全部位于原 API 前缀下，要求登录和 no-store；POST 沿用 CSRF 检查。口令不出现在 URL、日志或响应 JSON 中。
+
+| 方法 | 路径 | 请求与成功响应 |
 |---|---|---|
-| GET | `/backup` | 下载 `boxpanel-backup-<date>.json`（DB 全量 + 证书） |
-| POST | `/restore` | 上传备份并重新生效 |
+| POST | `/backup` | JSON `{passphrase}`，至少 12 个 Unicode 字符、最多 1024 UTF-8 字节；200 加密二进制附件 `boxpanel-backup-<UTC时间>.tar.gz.enc` |
+| GET | `/backup/status` | 200 `{last_attempt,last_success,result}`；时间为 Unix 秒，0 表示无记录，result 为空字符串 / success / failed；支持 HEAD |
+| POST | `/restore` | multipart/form-data：`file` 加密备份、`passphrase`、`confirm="true"`；验证并成功排队后 202 `{accepted:true}` |
 
+- 旧 GET `/backup` 返回 405。下载 Content-Type 为 application/octet-stream，带 attachment、no-store、nosniff；
+  仅返回加密内容，不提供未加密证书/私钥下载。JSON 仍限 8 KiB，拒绝未知/重复/null 字段。
+- 上传备份至多 64 MiB，multipart 总量额外允许 16 KiB，口令最多 1024 字节；只接受上述三个唯一字段。
+  手动解析有界 multipart，不将口令或整个上传写入隐式临时文件。禁止网页恢复本地未加密自动备份。
+- 解密、SHA-256、归档结构、schema、DB 完整性、迁移和证书引用先在 0700 的私有候选目录验证。
+  任一步失败不停止服务、不替换现有 DB；错误口令、损坏/截断、危险条目、缺失固定证书统一
+  `400 backup_invalid`；新 schema 为 `400 backup_schema_newer`，提示先升级。
+- Linux 生产使用独立的 systemd-run 定时瞬态服务（3 秒后启动），复用 CLI 恢复事务；
+  工作进程参数只有路径，口令不持久化。重复排队或系统操作失败返回 `503 backup_failed` 与下一步建议。
+  202 只表示已排队；成功/失败详情可在服务器 `journalctl -u 'boxpanel-restore-*'` 查看。
+  目标服务停完并关闭数据库连接后才替换目录；新面板通过 Startup 再次完整生效，并检查本机 HTTPS 就绪。
+- 恢复会覆盖全部数据、停止代理连接、撤销全部备份会话，管理员使用备份中的凭证；
+  浏览器提示约 30 秒后重新登录，慢启动可能更久，地址改变时使用备份中的 URL。
+- 自定义外置 DB/证书/配置不在本版恢复布局内，返回 `409 backup_unavailable`；请先迁移到标准数据目录。
+  dev 不运行每日自动备份、也不执行面板恢复；CLI restore 仅支持 Linux/systemd。
 
 ## T6.3 面板证书
 

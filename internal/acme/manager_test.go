@@ -384,3 +384,51 @@ func TestWorkerCancelsOrderOnSettingsChange(t *testing.T) {
 		}
 	}
 }
+
+func TestPruneKeepsActiveAndPreviousAcrossRestart(t *testing.T) {
+	f := newFixture(t)
+	original := f.m.state.File
+	if err := f.m.Tick(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	first := f.m.state.File
+	if first == original || f.m.state.PreviousFile != original {
+		t.Fatal("previous bundle not recorded")
+	}
+	if err := f.m.Tick(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	current := f.m.state.File
+	for name, present := range map[string]bool{original: false, first: true, current: true} {
+		_, err := os.Stat(filepath.Join(f.m.opts.Dir, name))
+		if (err == nil) != present {
+			t.Fatalf("bundle retention mismatch: %v", err)
+		}
+	}
+	reloaded, err := New(context.Background(), f.conn, f.m.opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.state.PreviousFile != first {
+		t.Fatal("previous lost on restart")
+	}
+	// Unreferenced syntactically valid bundles are pruned only after success.
+	abandoned := "panel-" + strings.Repeat("a", 64) + ".pem"
+	if err := os.WriteFile(filepath.Join(f.m.opts.Dir, abandoned), []byte("unreferenced"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f.fail = errors.New("issuer failed")
+	if err := f.m.Tick(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(f.m.opts.Dir, abandoned)); err != nil {
+		t.Fatal("pruned on issuance failure")
+	}
+	f.fail = nil
+	if err := f.m.Tick(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(f.m.opts.Dir, abandoned)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("abandoned bundle retained")
+	}
+}

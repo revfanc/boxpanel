@@ -12,6 +12,8 @@ SYSTEMD_DIR=/run/systemd/system
 COMMAND=install
 TAG=
 PORT=
+RESTORE_FILE=
+PASSPHRASE_FILE=
 NON_INTERACTIVE=false
 DRY_RUN=false
 YES=false
@@ -29,6 +31,8 @@ usage() {
 用法：bash install.sh [install|update|uninstall] [选项]
   --version <vX.Y.Z[-rc.N]>  指定 Release tag；省略使用最新稳定版
   --port <1-65535>           仅用于首次初始化；省略由 CLI 随机选择
+  --restore <文件>           仅全新安装：直接恢复，不生成新账号或密钥
+  --passphrase-file <文件>   恢复口令文件（口令不出现在参数中）
   --non-interactive         不读取输入；安装时默认尝试开启 BBR
   --yes                     确认卸载（非交互卸载必需）
   --purge                   卸载时删除 /etc/boxpanel（默认保留）
@@ -51,9 +55,12 @@ parse_args() {
             --yes) YES=true; shift ;;
             --purge) PURGE=true; shift ;;
             --dry-run) DRY_RUN=true; shift ;;
-            --version|--port)
+            --version|--port|--restore|--passphrase-file)
                 [[ $# -ge 2 && -n $2 ]] || die '选项缺少值；运行 --help 查看用法。'
-                if [[ $1 == --version ]]; then TAG=$2; else PORT=$2; fi
+                case "$1" in
+                  --version) TAG=$2 ;; --port) PORT=$2 ;;
+                  --restore) RESTORE_FILE=$2 ;; --passphrase-file) PASSPHRASE_FILE=$2 ;;
+                esac
                 shift 2 ;;
             --help|-h) usage; exit 0 ;;
             *) die "未知参数 $1；运行 --help 查看用法。" ;;
@@ -69,6 +76,11 @@ parse_args() {
     fi
     [[ $COMMAND != uninstall || -z $TAG ]] || die '卸载不接受 --version；请移除此选项。'
     [[ $COMMAND == uninstall || ( $YES == false && $PURGE == false ) ]] || die '--yes/--purge 仅用于 uninstall；请检查参数。'
+    if [[ -n $RESTORE_FILE ]]; then
+        [[ $COMMAND == install && -z $PORT ]] || die '--restore 仅用于全新 install，且不能与 --port 同用。'
+        [[ -r $RESTORE_FILE && -f $RESTORE_FILE ]] || die '请提供可读的备份文件。'
+    fi
+    [[ -z $PASSPHRASE_FILE || ( -n $RESTORE_FILE && -f $PASSPHRASE_FILE && -r $PASSPHRASE_FILE ) ]] || die '--passphrase-file 需要 --restore 及可读的口令文件。'
     # Piped input is never treated as a confirmation.
     if [[ ! -t 0 ]]; then NON_INTERACTIVE=true; fi
 }
@@ -255,6 +267,9 @@ confirm() {
 
 install_panel() {
     local marker="$DATA_DIR/.installing"
+    if [[ -n $RESTORE_FILE && -e $DATA_DIR/boxpanel.db ]]; then
+        die '--restore 仅用于无数据库的全新安装；已有实例请使用 boxpanel restore。'
+    fi
     if [[ -x $BINARY && -f $CORE_BINARY && -f $UNIT_DIR/boxpanel.service && -f $UNIT_DIR/boxpanel-singbox.service && ! -e $marker ]] && "$BINARY" info >/dev/null 2>&1; then
         say 'boxpanel 已安装；升级请运行 install.sh update。'
         "$BINARY" info
@@ -270,18 +285,22 @@ install_panel() {
     touch "$marker"
     replace_binary
     progress 5 '初始化或续接已有数据库（凭证只显示一次，请保存）'
-    if ! "$BINARY" info >/dev/null 2>&1; then
+    if [[ -n $RESTORE_FILE ]]; then
+        local restore_args=(restore "$RESTORE_FILE" --install)
+        [[ -z $PASSPHRASE_FILE ]] || restore_args+=(--passphrase-file "$PASSPHRASE_FILE")
+        "$BINARY" "${restore_args[@]}"
+    elif ! "$BINARY" info >/dev/null 2>&1; then
         if [[ -n $PORT ]]; then "$BINARY" init --port "$PORT"; else "$BINARY" init; fi
     else
         say '已初始化，沿用原账号、证书和设置；忘记密码请运行 boxpanel reset-admin。'
     fi
     progress 6 '通过 CLI 安装并校验锁定的 sing-box'
-    "$BINARY" singbox install --preserve-version
+    if [[ -z $RESTORE_FILE ]]; then "$BINARY" singbox install --preserve-version; fi
     progress 7 '校验生效、放行面板端口并启用服务'
-    "$BINARY" apply
+    if [[ -z $RESTORE_FILE ]]; then "$BINARY" apply; fi
     "$BINARY" system firewall-open
     systemctl enable boxpanel-singbox.service boxpanel.service
-    systemctl restart boxpanel.service
+    if [[ -z $RESTORE_FILE ]]; then systemctl restart boxpanel.service; fi
     wait_panel || die '面板服务未存活；请运行 journalctl -u boxpanel 检查后重试 install。'
     progress 8 '完成安装及可选 BBR 设置'
     if [[ $NON_INTERACTIVE == true ]] || confirm '是否开启 BBR？'; then
@@ -369,6 +388,7 @@ main() {
     detect_platform
     if [[ $DRY_RUN == true ]]; then
         say "DRY-RUN: $COMMAND repo=$REPO version=${TAG:-latest} arch=$ARCH port=${PORT:-random}"
+        if [[ -n $RESTORE_FILE ]]; then say 'restore: install verified binary → restore --install → original credentials/certificates → validate/apply → start panel'; fi
         say 'install: dependencies → download + SHA-256 → init → singbox install → apply → firewall-open → enable/restart → bbr → info'
         say 'update: download + SHA-256 → atomic replace → restart → health check (restore binary on failure)'
         say "uninstall: confirmation → stop/disable → firewall-cleanup → remove units/binaries → purge=$PURGE"

@@ -1,4 +1,28 @@
 export const zhCN = {
+  backup: {
+    title: '备份与恢复',
+    hint: '保留用户凭证、订阅地址、Reality 密钥和 Hysteria2 证书指纹。迁移域名后请更新 DNS；IP 地址改变时需更新客户端地址。',
+    localWarning: '自动备份与服务器在同一台机器上，请定期下载加密备份到别处。',
+    passphrase: '备份口令',
+    passphraseHint: '至少 12 字符，最多 1024 字节。口令不保存，请与备份分别妥善保管；遗失后无法解密。',
+    passphraseError: '请输入至少 12 字符且不超过 1024 字节的口令。',
+    download: '下载加密备份',
+    restorePassphrase: '恢复口令',
+    file: '加密备份文件',
+    fileHint: '请选择原样保存的 .tar.gz.enc 文件，最大 64 MiB。',
+    fileError: '请选择不超过 64 MiB 的加密备份文件。',
+    restore: '恢复备份',
+    confirmTitle: '覆盖全部数据并恢复？',
+    confirmHint: '此操作会覆盖当前全部数据并中断代理连接。恢复后所有旧会话失效，请使用备份中的管理员凭证登录；原数据目录会完整留存。',
+    restoring: '恢复中，约 30 秒后重新登录。若面板地址改变，请使用备份中的面板地址；失败时系统会尝试回滚，请查看服务器上的恢复服务日志。',
+    automatic: '最近一次自动备份',
+    never: '尚未执行',
+    success: '成功',
+    failed: '失败，请检查服务器磁盘空间和 backups 目录权限。',
+    lastSuccess: '最近成功时间',
+    login: '重新登录',
+  },
+
   app: {
     name: 'boxpanel',
     description: 'sing-box 服务端管理面板',

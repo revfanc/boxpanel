@@ -20,6 +20,8 @@ Commands:
   apply    Regenerate, validate and apply sing-box configuration
   singbox  Install or inspect the managed sing-box binary
   system   Manage installer firewall rules and enable BBR
+  backup   Create an encrypted database and certificate backup
+  restore <file>  Restore a backup and reapply configuration (Linux/systemd)
   version  Print the boxpanel version
   help     Show this help
 `
@@ -32,6 +34,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stdout, usage)
 		return 0
+	}
+	if args[0] == "backup" || args[0] == "restore" || args[0] == "restore-staged" {
+		return runBackup(args[0], args[1:], stdout, stderr)
 	}
 	if args[0] == "serve" {
 		return runServe(args[1:], stdout, stderr)

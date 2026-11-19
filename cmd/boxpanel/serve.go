@@ -21,6 +21,7 @@ import (
 	"github.com/revfanc/boxpanel/internal/acme"
 	"github.com/revfanc/boxpanel/internal/app"
 	"github.com/revfanc/boxpanel/internal/auth"
+	"github.com/revfanc/boxpanel/internal/backup"
 	"github.com/revfanc/boxpanel/internal/db"
 	"github.com/revfanc/boxpanel/internal/firewall"
 	"github.com/revfanc/boxpanel/internal/httpapi"
@@ -187,8 +188,18 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	if err != nil {
 		return fmt.Errorf("prepare panel certificates: %w", err)
 	}
+	var backups *panelBackups
+	if backupLayout(opts.paths, opts.core) == nil {
+		backupOpts := opts
+		backupOpts.paths, backupOpts.core, _ = absoluteBackupPaths(opts.paths, opts.core)
+		backups = &panelBackups{service: &backup.Service{DB: conn, DataDir: opts.paths.DataDir, Version: version}, opts: backupOpts}
+	}
+	var backupAPI httpapi.Backups
+	if backups != nil {
+		backupAPI = backups
+	}
 	panel.build = func(settings httpapi.PanelSettings) (http.Handler, error) {
-		api := httpapi.New(service, httpapi.Options{WebPath: settings.WebPath, Dev: opts.dev, Logger: logger, System: system, Singbox: manager, DB: conn, ReadDB: reader, Applier: manager, PanelPort: settings.WebPort, Subscriptions: store, PreparePanel: panel.prepare, Certificates: certificates})
+		api := httpapi.New(service, httpapi.Options{WebPath: settings.WebPath, Dev: opts.dev, Logger: logger, System: system, Singbox: manager, DB: conn, ReadDB: reader, Applier: manager, PanelPort: settings.WebPort, Subscriptions: store, PreparePanel: panel.prepare, Certificates: certificates, Backups: backupAPI})
 		spaHandler, err := spa.New(web.Assets, spa.Options{WebPath: settings.WebPath, Version: version, API: api})
 		if err != nil {
 			return nil, fmt.Errorf("prepare HTTP server: %w", err)
@@ -222,6 +233,17 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	workerCtx, cancelWorker := context.WithCancel(ctx)
 	workerDone := make(chan struct{})
 	go func() { defer close(workerDone); certificates.Run(workerCtx) }()
+	backupDone := make(chan struct{})
+	if backups != nil && !opts.dev {
+		go func() {
+			defer close(backupDone)
+			backups.service.Run(workerCtx, func(error) {
+				logger.Warn("自动备份失败；请检查磁盘空间与备份目录权限，并在设置页查看状态。")
+			})
+		}()
+	} else {
+		close(backupDone)
+	}
 	trafficDone := make(chan struct{})
 	if !opts.dev && runtime.GOOS == "linux" {
 		scheduler := traffic.NewScheduler(traffic.NewCollector(conn, reader, nil), manager, nil, logger)
@@ -229,6 +251,6 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	} else {
 		close(trafficDone)
 	}
-	defer func() { cancelWorker(); <-workerDone; <-trafficDone }()
+	defer func() { cancelWorker(); <-workerDone; <-trafficDone; <-backupDone }()
 	return panel.run(listener, handler)
 }

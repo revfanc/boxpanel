@@ -368,3 +368,17 @@ web/
   重置订阅 token 不显示。节点表单仅服务端/防火墙字段变化时提醒，节点备注、Reality 客户端 fingerprint
   不提醒；节点启停及删除启用节点同样提醒。disabled 用户/节点编辑不改变实际配置时不提醒。
 - 新增表单日期边界、条件保存提醒、清零确认/取消/错误/成功刷新测试；分享页 golden 与头部/页面真实用量集成测试同步。
+
+
+## 11. T7.5 设置页备份与恢复
+
+- 新增独立备份卡片：每日备份最近尝试/成功时间、成功/失败结果，每 60 秒刷新，离页停止。
+  明确同机自动备份风险；失败显示磁盘空间/目录权限的下一步建议。
+- 下载表单校验口令，POST JSON 后接收 Blob，通过临时 object URL 下载 .tar.gz.enc 并回收 URL。
+  恢复表单选择 ≤64 MiB 加密文件与口令；alert-dialog 明确覆盖全部数据、连接中断和重新登录后果。
+  确认前不上传；multipart/form-data 包含 file/passphrase/confirm=true，由浏览器生成 boundary。
+- 使用现有 useOperation 禁止重复发送，loading/错误/取消确认均保留输入；成功下载或受理恢复清空对应口令。
+  口令只在组件表单/请求闭包中，不写 TanStack mutation/query 缓存或浏览器持久存储。
+  202 后显示「恢复中，约 30 秒后重新登录」及备份地址说明，不把排队当作完成。
+- 复用现有 shadcn 包装组件、history/basename 和统一 API 的认证/错误处理；所有新增文案在 zh-CN.ts，
+  不修改生成组件、依赖或 pnpm 供应链保护。API 封装增加成功 Blob 和 FormData 支持，错误仍统一 JSON。

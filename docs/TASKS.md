@@ -832,9 +832,18 @@ sing-box 配置，已导入的设备可继续使用。本任务补齐两者，�
 - make lint test build 通过；文档（INSTALL/API/SPEC/README）同步。
 
 - **验收**：
-  - [ ] CLI/面板/安装脚本三种恢复路径与测试。
-  - [ ] 自动备份与轮转。
-  - [ ] make lint test build 通过；文档同步。
+  - [x] CLI/面板/安装脚本三种恢复路径与测试（注入 systemd/防火墙，Linux 实机待复核）。
+  - [x] 自动备份与轮转（每日 UTC、最近 7 份、状态和权限测试）。
+  - [ ] 完整 make lint test build 通过；文档已同步。lint/build、其余 Go 包、安装脚本 19 项及前端 124 项通过；
+    make test 的两个既有 e2e 仍因 macOS 沙箱 DNS 通知 status 9 失败，未修改或跳过。
+
+**T7.5 实现与验证记录（2026-11-18）**：
+- 详细格式、规格缺口、实现及验收记录见 [T7.5.md](T7.5.md)、SPEC §15、INSTALL §8。
+- 一致性快照、完整证书归档、scrypt + XChaCha20-Poly1305、manifest/SHA/schema 校验与受限解包。
+- 三条恢复入口共用候选验证和目录回滚；面板使用独立 systemd-run，不在打开 DB 的进程中替换文件。
+  恢复时完整 Manager.Apply，保留 pre-restore、撤销会话，身份/固定指纹不变；新 schema 拒绝、旧库迁移。
+- 每日自动备份与保留 7 份、状态展示；成功证书切换后仅保留当前/上一份 bundle，归档与清理跨进程互斥。
+- 无新依赖/迁移/锁文件/供应链变更，未修改 internal/e2e，未执行 commit/push/切换分支，未推进后续任务。
 
 ## M7 后续增强（MVP 之后，按需排期）
 

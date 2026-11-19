@@ -19,6 +19,7 @@ import (
 
 	"github.com/revfanc/boxpanel/internal/certs"
 	"github.com/revfanc/boxpanel/internal/db"
+	"github.com/revfanc/boxpanel/internal/filelock"
 	"github.com/revfanc/boxpanel/internal/rules"
 )
 
@@ -43,8 +44,9 @@ type Status struct {
 
 type savedState struct {
 	Status
-	File      string `json:"file"`
-	Directory string `json:"directory"`
+	File         string `json:"file"`
+	PreviousFile string `json:"previous_file,omitempty"`
+	Directory    string `json:"directory"`
 }
 
 type Options struct {
@@ -253,6 +255,11 @@ func (m *Manager) reconcileLocal(ctx context.Context) error {
 // reference. A crash cannot expose a certificate paired with a different key.
 // Recheck desired policy under the DB write lock to discard stale issuance.
 func (m *Manager) activate(ctx context.Context, state savedState, material Material, pair *tls.Certificate) error {
+	unlock, err := filelock.Acquire(ctx, m.opts.Dir+".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	data := append(append([]byte{}, material.Certificate...), material.Key...)
 	state.File = fmt.Sprintf("panel-%x.pem", sha256.Sum256(data))
 	if err := privateFile(filepath.Join(m.opts.Dir, state.File), data); err != nil {
@@ -261,7 +268,11 @@ func (m *Manager) activate(ctx context.Context, state savedState, material Mater
 	state.Issuer = pair.Leaf.Issuer.String()
 	state.NotBefore = pair.Leaf.NotBefore.Unix()
 	state.NotAfter = pair.Leaf.NotAfter.Unix()
-	return m.persist(ctx, state, pair)
+	if err := m.persist(ctx, state, pair); err != nil {
+		return err
+	}
+	m.pruneBundles()
+	return nil
 }
 
 func (m *Manager) persist(ctx context.Context, state savedState, pair *tls.Certificate) error {
@@ -276,6 +287,17 @@ func (m *Manager) persist(ctx context.Context, state savedState, pair *tls.Certi
 	}
 	if name != state.Host || mode != state.Mode {
 		return fmt.Errorf("certificate policy changed; retry with the current public_host")
+	}
+	if pair != nil {
+		previous, e := readState(ctx, tx)
+		if e != nil {
+			return e
+		}
+		if previous.File != state.File {
+			state.PreviousFile = previous.File
+		} else {
+			state.PreviousFile = previous.PreviousFile
+		}
 	}
 	raw, err := json.Marshal(state)
 	if err != nil {
@@ -466,5 +488,24 @@ func Failure(err error) (string, string) {
 		return "acme_invalid_host", "请将节点地址设为本机公网 IP 或解析到本机的域名；私网、回环和保留地址不能申请可信证书。"
 	default:
 		return "acme_issue_failed", "请放行本机防火墙和云安全组 TCP 80，确认域名 A/AAAA 均指向本机且关闭 CDN，并检查出站 HTTPS、系统时间和证书目录权限；CA 限流时请等待自动重试。"
+	}
+}
+
+// Called only after the new reference and live certificate have been committed.
+// Keep the previous bundle across process restarts; never prune account/hy2 keys.
+func (m *Manager) pruneBundles() {
+	m.mu.Lock()
+	current, previous := m.state.File, m.state.PreviousFile
+	m.mu.Unlock()
+	entries, err := os.ReadDir(m.opts.Dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if validFile(e.Name()) && e.Name() != current && e.Name() != previous && e.Type().IsRegular() {
+			if err := os.Remove(filepath.Join(m.opts.Dir, e.Name())); err != nil {
+				m.opts.Logger.Warn("旧面板证书清理失败；请检查证书目录权限。")
+			}
+		}
 	}
 }

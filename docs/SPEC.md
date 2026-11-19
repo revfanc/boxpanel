@@ -431,7 +431,7 @@ Hysteria2=true 读取，首次保存时写入，不修改已发布迁移。setup
   可供卸载清理；不修改云安全组。改回自签停止签发和续期，保留已登记放行规则供卸载清理。
 - 账号按 directory 哈希隔离；材料在 `<data-dir>/certs/`，目录 0700、文件 0600。
   每次证书链和私钥作为一个 PEM bundle，临时文件 → fsync → rename → 目录 fsync，
-  名称按内容 SHA-256 生成；原 `panel.crt/key` 不覆盖，历史材料不自动删除。
+  名称按内容 SHA-256 生成；原 `panel.crt/key` 不覆盖；T7.5 在成功切换后仅保留当前和上一份 panel-*.pem。
   切换主机/原证书到期时，为当前主机另存自签备用材料，Hysteria2 的生成和指纹不变。
 - 可选 settings 键 `panel_certificate` 保存实际类型、主机、签发者、有效期、上次尝试/成功、
   固定错误码及下一步提示、连续失败数、下次重试、内部 bundle 文件名及 directory；没有新迁移。
@@ -513,3 +513,65 @@ T7.1 的 Clash `/connections` 快照在真机 20 MB 下载中只计到约 26%，
   多用户清零、到期、超额共用一次 Apply；失败时计数、reset_at、epoch、applied_users 一起回滚。
 
 完整评审说明与验收记录见 [T7.1c.md](T7.1c.md)；前序记录见 T7.1/T7.1b。无新依赖。
+
+
+## 15. T7.5 备份与恢复
+
+实现集中在 `internal/backup`，CLI、HTTP 下载、每日 worker 共用归档生成；CLI 和面板后台共用恢复事务。
+不增加依赖、迁移或 sing-box 配置入口，不涉及多服务器、告警和升级任务。
+
+### 格式与密钥
+
+- 归档 v1 为单个 gzip 压缩 tar，只有 `manifest.json`、`boxpanel.db` 和 `certs/<普通文件名>`。
+  DB 使用参数绑定的 `VACUUM INTO ?` 生成一致性快照，不复制活动 db/wal。
+  全部 certs 材料包括 Hysteria2、ACME 账号、当前/上一份面板 bundle 及原自签备用材料。
+  不含服务端 JSON、WAL/SHM、备份目录、锁或 bak/pending。manifest 记录 format=1、boxpanel_version、
+  schema_version、created_at、public_host 及 files 的 SHA-256 小写 hex。
+- 手动导出全部加密：外层文件 `.tar.gz.enc`，固定头 `BOXPANEL-BACKUP` + 0x00 + 0x01，
+  接 16 字节随机盐、24 字节随机 nonce、XChaCha20-Poly1305 密文（含 tag）。整个头作为 AEAD AAD。
+  scrypt 固定 N=32768、r=8、p=1，导出 32 字节密钥；不接受文件指定的任意 KDF 资源参数。
+  使用现有 x/crypto/scrypt、chacha20poly1305.NewX；盐/nonce 均来自 crypto/rand。
+  口令至少 12 个 Unicode 字符且不超过 1024 UTF-8 字节，不 trim、不保存，不通过进程参数传递。
+- 输入上限 64 MiB，解压总量 256 MiB，至多 512 个数据文件加一份 manifest；单文件不超过 64 MiB，
+  manifest 不超过 128 KiB。拒绝重复路径、路径穿越、绝对/Windows 路径、反斜杠、链接、目录、设备等非普通条目。
+  要求 gzip CRC/尾部完整，拒绝多流/额外尾随内容；每个数据文件与 manifest 一一对应且 SHA-256 匹配。
+- 本任务采用可迁移的标准目录布局：DB 为 `<data-dir>/boxpanel.db`，所有证书在 `<data-dir>/certs/`，
+  fallback 为 panel.crt/key，配置为 `<data-dir>/sing-box.json`；内核二进制在数据目录之外。
+  数据目录可覆盖；独立外置路径拒绝操作并给迁移建议，避免悄悄漏备份固定指纹材料。
+
+### 生命周期与回滚
+
+- 解密和验证在目标数据目录的同级 0700 临时目录完成；核对 manifest 与 DB 实际迁移号，
+  新 schema 拒绝并提示升级，旧 schema 运行现有迁移。检查 integrity_check、foreign_key_check、
+  管理员与面板配置，并验证引用的面板/Hysteria2 证书和匹配私钥、固定指纹，拒绝缺失材料。
+  在候选库清空 sessions、checkpoint 并关闭 DB；现有库尚不修改。
+- 用数据目录同级 `.restore-lock` 互斥恢复（中断遗留时，确认无恢复进程后才人工移除）。
+  systemctl stop 面板和内核，等待退出；读旧生效计划/已登记面板端口并关闭 CLI 连接，
+  按既有 CleanupFirewall 清理目标旧规则（含 pending），不删除原恢复材料。
+  原数据目录整体 rename 为 `.pre-restore-<UTC时间>-<随机后缀>`，候选目录 rename 到原位置并同步父目录。
+- 备份中的 applied_firewall 是源机器运行记账，在目标先重置为空，再通过唯一的 Manager.Restart
+  从 DB 生成 → 临时文件 → check → 原子替换 → 重启/存活 → 防火墙 → 提交；绝不恢复备份的 JSON。
+  恢复面板端口，启动面板，其正常 Startup 同样完整生效；使用本机信任材料校验 HTTPS readiness。
+  所有 SQLite 连接在目录替换前关闭；面板上传通过独立 systemd-run 工作进程完成上述操作。
+- 停止、目录替换、生效或启动任一步失败，独立最多 90 秒恢复预算：再次停服务，失败候选另存 `.failed`，
+  原目录移回，清理候选端口/计数器并恢复旧计划；原先运行的内核经 Manager.Restart 校验恢复，
+  原先运行的面板重新启动并检查就绪。自动恢复也失败时明确报告需人工修复，不声称已恢复；保留诊断材料。
+  普通失败有自动回滚；断电/SIGKILL 下不声称硬件级事务原子性，应使用完整 pre-restore 目录人工核对恢复。
+- 成功保留整个原目录供审查/人工取回；备份身份保持不变，全部会话失效。
+  public_host 为 IP 时尽力探测当前公网地址，不同或探测失败给出 set-host/DNS 提示；
+  IP 迁移不能保持旧 IP 链接可达，使用域名并切 DNS 可保持客户端订阅地址。
+
+### 每日与证书清理
+
+- 生产 serve 每分钟检查，在 UTC 日期首次运行时备份（启动补当天一次），失败当天不重复，次日再试。
+  `<data-dir>/backups/` 为 0700，自动 tar.gz 和状态文件为 0600；成功写完并 fsync 后才轮转，保留最近 7 份。
+  状态 `{last_attempt,last_success,result}` 原子持久化，重启不重复当天任务；失败保留上次成功时间。
+  不含该状态与自动备份自身，避免递归归档。面板提醒同机风险，建议定期异机保存加密文件。
+- 成功切换证书后清理未引用的旧 panel-*.pem，DB panel_certificate.previous_file 记录上一份，跨重启保留。
+  只删除文件名严格匹配的普通 bundle，不删除 fallback、账号或 Hysteria2 材料。
+  备份快照/证书读取与证书激活/清理使用 certs.lock 的跨进程 flock，防止归档引用的 bundle 被并发清理。
+
+依据：[SQLite VACUUM INTO](https://www.sqlite.org/lang_vacuum.html#vacuum_with_an_into_clause)、
+[x/crypto scrypt](https://pkg.go.dev/golang.org/x/crypto/scrypt)、
+[XChaCha20-Poly1305](https://pkg.go.dev/golang.org/x/crypto/chacha20poly1305)、
+[systemd-run](https://www.freedesktop.org/software/systemd/man/latest/systemd-run.html)。

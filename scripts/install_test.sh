@@ -108,6 +108,12 @@ case "$1" in
         mkdir -p "${BOXPANEL_SINGBOX_PATH%/*}"
         echo core >"$BOXPANEL_SINGBOX_PATH"
         touch "$BOXPANEL_UNIT_DIR/boxpanel.service" "$BOXPANEL_UNIT_DIR/boxpanel-singbox.service" ;;
+    restore)
+        [[ $* == *--install* ]] || exit 1
+        echo restored >"$BOXPANEL_DB_PATH"
+        mkdir -p "${BOXPANEL_SINGBOX_PATH%/*}"
+        echo original-core >"$BOXPANEL_SINGBOX_PATH"
+        touch "$BOXPANEL_UNIT_DIR/boxpanel.service" "$BOXPANEL_UNIT_DIR/boxpanel-singbox.service" ;;
     apply|system) : ;;
     *) exit 99 ;;
 esac
@@ -367,12 +373,37 @@ command() { if [[ $* == "-v nft" ]]; then return 1; fi; builtin command "$@"; }\
     absent "$FIXTURE/calls" 'singbox install'
 }
 
+test_restore_install() {
+    echo encrypted-fixture >"$FIXTURE/backup.enc"
+    echo 'secret-passphrase-never-log' >"$FIXTURE/pass"
+    chmod 0600 "$FIXTURE/pass"
+    run_install --restore "$FIXTURE/backup.enc" --passphrase-file "$FIXTURE/pass" --non-interactive
+    contains "$FIXTURE/calls" "restore $FIXTURE/backup.enc --install --passphrase-file $FIXTURE/pass"
+    contains "$FIXTURE/data/boxpanel.db" restored
+    absent "$FIXTURE/calls" ' init'
+    absent "$FIXTURE/calls" ' apply'
+    absent "$FIXTURE/output" 'secret-passphrase-never-log'
+    reject --restore "$FIXTURE/backup.enc" --non-interactive
+    contains "$FIXTURE/output" '已有实例请使用 boxpanel restore'
+}
+
+test_restore_failure() {
+    echo encrypted-fixture >"$FIXTURE/backup.enc"
+    export FAIL_CLI="restore $FIXTURE/backup.enc --install"
+    reject --restore "$FIXTURE/backup.enc" --non-interactive
+    [[ ! -e $FIXTURE/data/boxpanel.db ]] || fail 'failed restore initialized DB'
+    absent "$FIXTURE/calls" ' init'
+    absent "$FIXTURE/calls" 'singbox install'
+    reject update --restore "$FIXTURE/backup.enc"
+    reject --restore "$FIXTURE/backup.enc" --port 2053
+}
+
 if [[ ${1:-} == --case ]]; then
     fixture
     "test_$2"
     exit 0
 fi
-for scenario in nft_dependency update_nft_dependency install resume update uninstall rejections download_safety optional_bbr_and_lock piped_entry package_locks apt_install_lock package_lock_timeout dnf_locks dnf_lock_timeout package_permission_error package_nonlock_error; do
+for scenario in restore_install restore_failure nft_dependency update_nft_dependency install resume update uninstall rejections download_safety optional_bbr_and_lock piped_entry package_locks apt_install_lock package_lock_timeout dnf_locks dnf_lock_timeout package_permission_error package_nonlock_error; do
     # A separate bash process preserves errexit in the installer under test.
     output=$(mktemp)
     if bash "$0" --case "$scenario" >"$output" 2>&1; then

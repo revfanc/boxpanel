@@ -27,6 +27,7 @@ import (
 const CookieName = "boxpanel_session"
 
 type Options struct {
+	Backups        Backups
 	Certificates   Certificates
 	WebPath        string
 	Dev            bool
@@ -131,6 +132,9 @@ func New(service *auth.Service, opts Options) http.Handler {
 	register("POST", "/api/v1/system/port-probe", a.portProbe, true)
 	register("GET", "/api/v1/cert", a.certGet, true)
 	register("POST", "/api/v1/cert/issue", a.certIssue, true)
+	register("POST", "/api/v1/backup", a.backupPost, true)
+	register("GET", "/api/v1/backup/status", a.backupStatus, true)
+	register("POST", "/api/v1/restore", a.restorePost, true)
 	a.registerResources(register)
 	a.registerSubscriptions(register)
 	mux.HandleFunc("/", notFound)

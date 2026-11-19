@@ -19,7 +19,7 @@ export const failure = (status = 500, code = 'internal_error') => Response.json(
 export function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((done) => { resolve = done }); return { promise, resolve } }
 type Responder = (init: RequestInit) => Response | Promise<Response>
 export function mockAPI(overrides: Record<string, Responder> = {}) {
-  const defaults: Record<string, unknown> = { '/cert': certificate, '/settings': settings, '/auth/me': { username: 'admin' }, '/system/status': status, '/inbounds': [], '/users': [], '/inbounds/1': inbound, '/users/1': proxyUser, '/users/1/links': links, '/rules': rules, '/singbox/logs?lines=200': { lines: [] } }
+  const defaults: Record<string, unknown> = { '/backup/status': { last_attempt: 0, last_success: 0, result: '' }, '/cert': certificate, '/settings': settings, '/auth/me': { username: 'admin' }, '/system/status': status, '/inbounds': [], '/users': [], '/inbounds/1': inbound, '/users/1': proxyUser, '/users/1/links': links, '/rules': rules, '/singbox/logs?lines=200': { lines: [] } }
   const fetch = vi.fn(async (url: string, init: RequestInit = {}) => {
     const path = url.replace(/^.*\/api\/v1/, '')
     const respond = overrides[`${init.method ?? 'GET'} ${path}`] ?? overrides[path]

@@ -435,7 +435,7 @@ CI/release 都锁定其完整 commit SHA（详见工作流注释）：
   申请立即失败并给出提示。:80 仅在签发/续期期间监听，其余时间 TCP 自连失败是正常现象。
 - 单次申请最多 2 分钟；首次失败回退自签，续期失败保留有效可信证书。按实际寿命一半续期，
   5 分钟起指数退避至最多 6 小时；证书热替换不重启面板，不改变 Hysteria2 自签/指纹。
-  设置改回 self_signed 后停止续期；原自签文件及历史 bundle/账号均保留。
+  设置改回 self_signed 后停止续期；原自签文件和账号保留；T7.5 成功切换后清理更早的 bundle，仅保留当前和上一份。
 - `system ready` 读取 `panel_certificate` 指向的当前 PEM bundle（旧实例无状态则使用原 cert-file），
   仍只连接 127.0.0.1，不走外部网络/代理，使用安装材料作为本机信任锚并校验 SAN、有效期及 TLS 链，
   不用 insecure；因此能检查自签、正式或 staging 证书，**就绪成功不等于 staging 获得公开信任**。
@@ -455,3 +455,40 @@ Linux 生产统计必须有 `nft` 及 NET_ADMIN 权限，安装/更新在缺失�
 `TestTrafficLoopback` 同样隔离执行真实计数，缺条件只跳过计数子断言，仍测试两协议连通性。
 原 `TestLoopback`、原 Skip 条件不变；macOS status 9 仍需沙箱外复跑。平台专用 routing_mark
 在 macOS check 的明确限制及校验副本规则见 CONFIG §7。统计口径/重启和删除边界见 SPEC §14。
+
+
+## 8. T7.5 备份与迁移
+
+```bash
+boxpanel backup --output /root/boxpanel-backup.tar.gz.enc   # 从 /dev/tty 隐藏回显读取口令
+boxpanel backup --output /root/boxpanel-backup.tar.gz.enc --passphrase-file /root/backup.pass
+boxpanel restore /root/boxpanel-backup.tar.gz.enc --passphrase-file /root/backup.pass
+boxpanel restore /etc/boxpanel/backups/boxpanel-auto-<时间>.tar.gz  # 本地自动备份无需口令
+# 新 VPS（已有数据库时拒绝，避免误覆盖）：
+bash scripts/install.sh --restore /root/boxpanel-backup.tar.gz.enc --passphrase-file /root/backup.pass
+```
+
+- 口令 ≥12 字符、≤1024 UTF-8 字节；交互从控制终端读取且隐藏回显。口令文件建议 0600，
+  可有一个结尾 LF/CRLF（仅去掉这一行结束符）；不支持 `--passphrase`，不通过参数/环境变量保存口令。
+  导出不覆盖已有文件，目录需事先存在；输出为 0600。手动备份固定加密；口令丢失无法恢复。
+- `--data-dir` 及现有路径环境变量继续生效，但 T7.5 要求标准布局：boxpanel.db、certs/panel.crt/key、
+  certs 下全部材料、sing-box.json 均在同一 data-dir；内核二进制在其外。独立外置 DB/证书/配置请先迁移到标准布局。
+  CLI backup 可在 macOS 离线生成；restore 需要 Linux/systemd，不提供 dev 模拟恢复。
+- CLI 先完成口令/manifest/文件 SHA-256/DB/schema/证书校验再停服务。schema 更新时先升级 boxpanel；
+  旧 schema 使用现有迁移。停止两个服务并关闭连接，原数据目录整体留存 pre-restore，再恢复、完整校验生效、启动和本机 HTTPS 检查。
+  恢复失败自动回到旧数据和原服务状态；回滚失败会明确提示检查 systemd、防火墙和保留目录，不报成功。
+  成功后所有会话失效，使用备份中的管理员账号密码；用 `boxpanel info` 查看备份中的地址。
+- 新机器 `install.sh --restore` 下载已校验面板后直接运行 CLI 恢复的安装模式，跳过 init，不生成管理员、
+  UUID、token、Reality 密钥或替代 Hysteria2 证书。恢复的 singbox_version 决定缺失内核的安装版本，
+  复用现有下载校验/单元生成；完成后仍走 Manager.Apply，不推进 T7.6。`--restore` 不可与 update/uninstall/--port 混用。
+  内部 `restore --install` 仅用于此新机器流程，`restore-staged` 为面板工作进程交接命令，不是用户上传入口。
+- 面板设置页输入口令下载加密备份；上传加密文件、输入口令并确认覆盖后提交，3 秒后独立 systemd-run
+  服务开始恢复，页面提示约 30 秒后重新登录。可用 `journalctl -u 'boxpanel-restore-*'` 查看后台结果；
+  恢复时间取决于 DB 大小与启动速度。任务不在当前面板进程内替换打开的数据库。
+- 生产每日自动备份到 `<data-dir>/backups/`，UTC 每天首次运行一次，保留最近 7 份（0700/0600）。
+  **自动备份与服务器同机**，请定期下载加密备份到别处；数据目录损坏时同机备份也会丢失。
+- 换服务器并使用原域名：将 A/AAAA 指向新 VPS，放行原面板/节点/跳跃端口及 TCP 80，原订阅无需重新导入。
+  public_host 是旧 IP 时 CLI 提示 `boxpanel set-host <新IP或域名>`；IP 链接随 IP 改变，需在客户端修改订阅地址。
+- pre-restore 和失败候选包含完整敏感数据，不自动轮转删除。中断恢复锁在数据目录同级 `.restore-lock`；
+  确认没有恢复进程后再移除，SIGKILL/断电时检查原目录与完整 pre-restore 目录并人工恢复。
+  仅在新数据、服务与订阅验证正常后按需清理旧目录。

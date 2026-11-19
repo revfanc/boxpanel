@@ -16,6 +16,7 @@
 - **持续更新的分流规则**：远程规则集自动更新，预设「绕过大陆 / 仅 GFW / 全局」，支持自定义直连和代理域名。
 - **防 DNS 泄漏**：境外域名交给服务端解析，DNS 查询不从本地网络发出（已用 ipleak.net 实测）。
 - **简单的节点菜单**：客户端里只有一个「节点选择」列表，点哪个节点就用哪个。
+- **备份与恢复**：口令加密下载、每日自动备份保留 7 份，CLI/面板/安装器恢复时保持订阅和节点身份。
 - **按用户统计流量**：由 Linux 内核按用户计数，实测误差约 0.4%（包头开销）；可设流量上限、到期时间和每月重置日，到期或超额自动停用。
 
 ## 安装
@@ -35,6 +36,22 @@ bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/main/script
 | TCP 面板端口 | 安装时随机生成，见安装输出 |
 | TCP 80 | 申请和续期 Let's Encrypt 证书 |
 | 节点端口 | 引导「放行端口」一步会列出，如 Reality 的 TCP 443、Hysteria2 的 UDP 端口 |
+
+## 备份与恢复
+
+在面板「设置 → 备份与恢复」下载口令加密备份，并把文件和口令分别保存到服务器之外。
+服务每天自动备份一次，保留最近 7 份；自动备份与 VPS 同机，不能替代异机保存。
+
+```bash
+boxpanel backup --output /root/boxpanel-backup.tar.gz.enc   # 交互读取口令，不回显
+boxpanel restore /root/boxpanel-backup.tar.gz.enc          # 在 Linux VPS 上恢复
+# 全新 VPS 安装后直接恢复，不生成新管理员或节点密钥：
+bash scripts/install.sh --restore /root/boxpanel-backup.tar.gz.enc
+```
+
+恢复覆盖当前全部数据并中断连接，原数据目录整体保留，普通失败自动回滚；成功后用备份中的管理员凭证重新登录。
+UUID、密码、订阅 token、Reality 密钥、Hysteria2 证书指纹保持。使用原域名时只需改 DNS；
+旧 IP 改变时需更新 public_host 和客户端订阅地址。标准目录布局、口令文件和回滚排障见 [INSTALL.md §8](docs/INSTALL.md#8-t75-备份与迁移)。
 
 ## 推荐客户端
 

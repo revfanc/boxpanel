@@ -162,3 +162,9 @@ export type RulesPreview =
   | { format: 'singbox'; config: Record<string, unknown> }
   | { format: 'clash'; config: string }
 export interface SingboxLogs { lines: string[] }
+
+export interface BackupStatus {
+  last_attempt: number
+  last_success: number
+  result: '' | 'success' | 'failed'
+}
