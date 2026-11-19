@@ -17,6 +17,8 @@ Commands:
   reset-admin  Reset administrator credentials and revoke sessions
   set-host <IP|domain>  Change the public host and print the new panel URL
   server add <name>    Issue a one-time join command for a new node (master only)
+  server list          List servers with status, version and last heartbeat
+  server remove <id>   Remove a node: revoke its key and drop it from subscriptions
   join     Register this machine with a master panel
   leave    Clear the local node identity
   serve    Run the panel or the agent (see 'boxpanel serve --help')
