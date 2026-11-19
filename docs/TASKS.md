@@ -890,9 +890,13 @@ sing-box 配置，已导入的设备可继续使用。本任务补齐两者，�
 - 不访问外网；make lint test build 通过；SPEC/API/FRONTEND/README 同步（README 常见问题补充两类流量口径）。
 
 - **验收**：
-  - [ ] 服务器流量统计与周期/口径设置。
-  - [ ] 告警事件与去重；三通道 + 测试发送；发件箱重试。
-  - [ ] make lint test build 通过；文档同步。
+  - [x] 服务器流量统计与周期、口径设置。覆盖增量、重启基线、计数回退、UTC 周期和四种计费口径。
+  - [x] 告警事件与去重、三通道及测试发送、发件箱重试与合并、概览兜底。用本地 HTTPS 假服务验证请求和脱敏。
+  - [ ] 完整 make lint test build 通过。make lint 和 make build 通过，文档已同步。安装脚本 19 项、
+    除 `internal/e2e` 外的 Go 测试、前端 typecheck/lint 和 127 项测试均通过。两个原回环用例执行时均遇到 macOS
+    沙箱 DNS 通知注册 `status 9`，待沙箱外复跑。
+
+官方请求格式、规格补齐和详细验收见 [T7.9.md](T7.9.md)。
 
 ## M7 后续增强（MVP 之后，按需排期）
 

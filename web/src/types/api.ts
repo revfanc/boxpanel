@@ -168,3 +168,70 @@ export interface BackupStatus {
   last_success: number
   result: '' | 'success' | 'failed'
 }
+
+export type BillingMode = 'out' | 'both' | 'max' | 'in'
+export type NotificationChannel = 'bark' | 'server_chan' | 'telegram'
+export type AlertKind = 'user_quota_80' | 'user_quota_100' | 'user_expiring' | 'user_expired' | 'user_stopped'
+  | 'server_quota_80' | 'server_quota_90' | 'server_quota_100' | 'certificate_warning' | 'core_down' | 'core_recovered'
+
+export interface AlertConfig {
+  interface: string
+  quota_gb: number
+  billing_day: number
+  billing_mode: BillingMode
+  events: Record<AlertKind, boolean>
+}
+
+export interface NotificationChannelSettings {
+  enabled: boolean
+  url?: string
+  credential_mask: string
+  chat_id_mask?: string
+}
+
+export interface AlertSettings {
+  config: AlertConfig
+  channels: Record<NotificationChannel, NotificationChannelSettings>
+  interfaces: string[]
+}
+
+export interface AlertEvent {
+  key: string
+  kind: AlertKind
+  address: string
+  username?: string
+  used: number
+  limit: number
+  deadline?: number
+  created_at: number
+}
+
+export interface NotificationDelivery {
+  id: number
+  channel: NotificationChannel
+  kind: AlertKind | 'test'
+  username?: string
+  status: 'pending' | 'sent' | 'failed'
+  attempts: number
+  updated_at: number
+  error?: string
+  grouped: boolean
+}
+
+export interface AlertOverview {
+  billing: {
+    supported: boolean
+    interface: string
+    sampled_at: number
+    stale: boolean
+    starts_at: number
+    ends_at: number
+    billing_mode: BillingMode
+    used: number
+    quota: number
+    percent: number
+  }
+  unread: AlertEvent[]
+  unread_count: number
+  recent: NotificationDelivery[]
+}

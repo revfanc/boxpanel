@@ -32,9 +32,35 @@ var (
 	ClashAPISecret        = SettingKey[string]{"clash_api_secret"}
 	AppliedFirewall       = SettingKey[json.RawMessage]{"applied_firewall"}
 	PanelFirewallPorts    = SettingKey[[]int]{"panel_firewall_ports"}
+	AlertPreferences      = SettingKey[AlertConfig]{"alert_preferences"}
+	AlertChannels         = SettingKey[map[string]AlertChannel]{"alert_channels"}
+	AlertCore             = SettingKey[CoreAlertState]{"alert_core"}
 	PanelCertificate      = SettingKey[json.RawMessage]{"panel_certificate"}
 	Hysteria2Fingerprints = SettingKey[map[string]string]{"hysteria2_fingerprints"}
 )
+
+// AlertConfig stores local billing settings and per-event switches.
+type AlertConfig struct {
+	Interface string          `json:"interface"`
+	QuotaGB   int64           `json:"quota_gb"`
+	Day       int             `json:"billing_day"`
+	Mode      string          `json:"billing_mode"`
+	Events    map[string]bool `json:"events"`
+}
+
+// AlertChannel contains secrets and must never be serialized into API responses.
+type AlertChannel struct {
+	Enabled    bool   `json:"enabled"`
+	URL        string `json:"url,omitempty"`
+	Credential string `json:"credential,omitempty"`
+	ChatID     string `json:"chat_id,omitempty"`
+}
+
+type CoreAlertState struct {
+	Failures int
+	Incident int64
+	Alerted  bool
+}
 
 // RulesSettings is the JSON storage shape defined in docs/CONFIG.md section 3.
 type RulesSettings struct {

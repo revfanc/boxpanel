@@ -25,7 +25,7 @@ type Status struct {
 }
 type sample struct {
 	cpu cpuCounters
-	net map[string]netCounters
+	net map[string]NetworkCounters
 	at  time.Time
 }
 
@@ -70,11 +70,7 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 	if err != nil {
 		return result, err
 	}
-	data, err = read("/proc/net/dev")
-	if err != nil {
-		return result, err
-	}
-	network, err := parseNetwork(data)
+	network, err := ReadNetworkCounters(s.opts.Files)
 	if err != nil {
 		return result, err
 	}
@@ -103,11 +99,11 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 			if !ok {
 				continue
 			}
-			if counters.rx >= old.rx {
-				result.Net.RX += float64(counters.rx-old.rx) / seconds
+			if counters.RX >= old.RX {
+				result.Net.RX += float64(counters.RX-old.RX) / seconds
 			}
-			if counters.tx >= old.tx {
-				result.Net.TX += float64(counters.tx-old.tx) / seconds
+			if counters.TX >= old.TX {
+				result.Net.TX += float64(counters.TX-old.TX) / seconds
 			}
 		}
 	}

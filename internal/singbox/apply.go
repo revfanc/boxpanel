@@ -289,7 +289,7 @@ func (m *Manager) Apply(ctx context.Context, mutate Mutation) (result error) {
 	// the core: a restart drops every other user's connections. Only commit the
 	// DB change when the running core is already active with this exact config.
 	// A nil mutation is an explicit restart request and always restarts.
-	if mutate != nil && hadConfig && bytes.Equal(config, oldConfig) && reflect.DeepEqual(previous, desired) && m.coreActive(ctx) {
+	if mutate != nil && hadConfig && bytes.Equal(config, oldConfig) && reflect.DeepEqual(previous, desired) && m.CoreActive(ctx) {
 		if err := m.commitUnchanged(ctx, recoveryBase, connection, tx, current, opts, desired); err != nil {
 			return err
 		}
@@ -383,8 +383,8 @@ func (m *Manager) Apply(ctx context.Context, mutate Mutation) (result error) {
 	return nil
 }
 
-// coreActive reports whether the core unit is currently active.
-func (m *Manager) coreActive(ctx context.Context) bool {
+// CoreActive reports whether the core unit is currently active.
+func (m *Manager) CoreActive(ctx context.Context) bool {
 	output, err := m.runner.Run(ctx, "systemctl", "is-active", "--", SingboxUnit)
 	return err == nil && ctx.Err() == nil && stringTrim(output) == "active"
 }
@@ -448,8 +448,7 @@ func (m *Manager) restartHealthy(ctx context.Context) error {
 	health, cancel := context.WithTimeout(ctx, m.healthTimeout)
 	defer cancel()
 	for {
-		output, err := m.runner.Run(health, "systemctl", "is-active", "--", SingboxUnit)
-		if err == nil && health.Err() == nil && stringTrim(output) == "active" {
+		if m.CoreActive(health) {
 			return nil
 		}
 		timer := time.NewTimer(100 * time.Millisecond)

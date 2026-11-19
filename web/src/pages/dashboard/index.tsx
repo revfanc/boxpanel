@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { AlertOverviewPanels } from '@/components/AlertOverview'
 import { Button } from '@/components/ui/button'
 import { ErrorNotice, Loading } from '@/components/Feedback'
 import { Page, Panel, Empty, Notice, Confirm } from '@/components/ResourceUI'
@@ -36,6 +37,7 @@ export function DashboardPage() {
         {restart.success && <Notice>{t.dashboard.restarted}</Notice>}
       </Panel>
     </>)}
+    <AlertOverviewPanels />
     <div className="grid min-w-0 gap-4 sm:grid-cols-2">
       <Panel title={t.dashboard.nodes}>{inbounds.isPending ? <Loading /> : inbounds.isError ? <ErrorNotice error={inbounds.error} retry={() => { void inbounds.refetch() }} /> : <p className="text-3xl font-semibold tabular-nums">{inbounds.data.length}</p>}</Panel>
       <Panel title={t.dashboard.users}>{users.isPending ? <Loading /> : users.isError ? <ErrorNotice error={users.error} retry={() => { void users.refetch() }} /> : <p className="text-3xl font-semibold tabular-nums">{users.data.length}</p>}</Panel>

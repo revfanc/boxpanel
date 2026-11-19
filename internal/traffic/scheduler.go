@@ -17,6 +17,8 @@ type Applier interface {
 	Apply(context.Context, singbox.Mutation) error
 }
 type Scheduler struct {
+	// OnStopped runs within Apply and must only write through its transaction.
+	OnStopped   func(context.Context, *sql.Tx, int64, string, time.Time) error
 	collector   *Collector
 	applier     Applier
 	now         func() time.Time
@@ -135,7 +137,13 @@ func (s *Scheduler) Check(ctx context.Context) error {
 				changed = true
 			}
 			if applied[u.ID] && !confgen.UserEligible(u.User, now.Unix()) {
-				stopped[u.ID] = reason(u, now.Unix())
+				why := reason(u, now.Unix())
+				if s.OnStopped != nil {
+					if err := s.OnStopped(ctx, tx, u.ID, why, now); err != nil {
+						return fmt.Errorf("record scheduled stop: %w", err)
+					}
+				}
+				stopped[u.ID] = why
 				changed = true
 			}
 		}

@@ -5,6 +5,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/revfanc/boxpanel/internal/host"
 )
 
 func parseOSRelease(data []byte) (string, error) {
@@ -87,10 +89,20 @@ func parseMemory(data []byte) (Usage, error) {
 	return Usage{Used: total - available, Total: total}, nil
 }
 
-type netCounters struct{ rx, tx uint64 }
+// NetworkCounters holds cumulative bytes for one interface.
+type NetworkCounters struct{ RX, TX uint64 }
 
-func parseNetwork(data []byte) (map[string]netCounters, error) {
-	result := map[string]netCounters{}
+// ReadNetworkCounters reads Linux interface byte counters (excluding loopback).
+func ReadNetworkCounters(files host.Files) (map[string]NetworkCounters, error) {
+	data, err := files.ReadFile("/proc/net/dev")
+	if err != nil {
+		return nil, fmt.Errorf("read /proc/net/dev: %w", err)
+	}
+	return parseNetwork(data)
+}
+
+func parseNetwork(data []byte) (map[string]NetworkCounters, error) {
+	result := map[string]NetworkCounters{}
 	header := false
 	for _, line := range strings.Split(string(data), "\n") {
 		if strings.Contains(line, "Inter-") && strings.Contains(line, "Receive") {
@@ -111,7 +123,7 @@ func parseNetwork(data []byte) (map[string]netCounters, error) {
 			return nil, fmt.Errorf("invalid network bytes")
 		}
 		if name != "lo" {
-			result[name] = netCounters{rx, tx}
+			result[name] = NetworkCounters{rx, tx}
 		}
 	}
 	if !header {

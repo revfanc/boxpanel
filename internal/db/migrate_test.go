@@ -32,7 +32,7 @@ func TestMigrationsIdempotent(t *testing.T) {
 	conn = openTestPath(t, path)
 	var count int
 	var timestamp int64
-	if err := conn.QueryRow("SELECT count(*), min(applied_at) FROM schema_migrations").Scan(&count, &timestamp); err != nil || count != 2 || timestamp != appliedAt {
+	if err := conn.QueryRow("SELECT count(*), min(applied_at) FROM schema_migrations").Scan(&count, &timestamp); err != nil || count != CurrentSchema() || timestamp != appliedAt {
 		t.Fatalf("migration history changed: count=%d timestamp=%d err=%v", count, timestamp, err)
 	}
 	if err := conn.QueryRow("SELECT count(*) FROM admins WHERE username = 'admin'").Scan(&count); err != nil || count != 1 {
@@ -50,20 +50,21 @@ func TestMigrationOrderRollbackAndRetry(t *testing.T) {
 	source := fstest.MapFS{
 		"migrations/0001_initial.sql": {Data: []byte("SELECT 1;")},
 		"migrations/0002_traffic.sql": {Data: []byte("SELECT 1;")},
-		"migrations/0003_next.sql":    {Data: []byte("CREATE TABLE upgrade_probe (value TEXT); INSERT INTO upgrade_probe VALUES ('before');")},
-		"migrations/0004_next.sql":    {Data: []byte("UPDATE upgrade_probe SET value = 'after'; INSERT INTO missing_table VALUES (1);")},
+		"migrations/0003_alerts.sql":  {Data: []byte("SELECT 1;")},
+		"migrations/0004_next.sql":    {Data: []byte("CREATE TABLE upgrade_probe (value TEXT); INSERT INTO upgrade_probe VALUES ('before');")},
+		"migrations/0005_next.sql":    {Data: []byte("UPDATE upgrade_probe SET value = 'after'; INSERT INTO missing_table VALUES (1);")},
 	}
-	if err := migrate(ctx, conn, source); err == nil || !strings.Contains(err.Error(), "0004_next.sql") {
+	if err := migrate(ctx, conn, source); err == nil || !strings.Contains(err.Error(), "0005_next.sql") {
 		t.Fatalf("expected contextual migration failure, got %v", err)
 	}
 	var count int
 	if err := conn.QueryRow("SELECT count(*) FROM sqlite_master WHERE name = 'upgrade_probe'").Scan(&count); err != nil || count != 0 {
 		t.Fatalf("DDL not rolled back: count=%d err=%v", count, err)
 	}
-	if err := conn.QueryRow("SELECT count(*) FROM schema_migrations").Scan(&count); err != nil || count != 2 {
+	if err := conn.QueryRow("SELECT count(*) FROM schema_migrations").Scan(&count); err != nil || count != CurrentSchema() {
 		t.Fatalf("version not rolled back: count=%d err=%v", count, err)
 	}
-	source["migrations/0004_next.sql"].Data = []byte("UPDATE upgrade_probe SET value = 'after';")
+	source["migrations/0005_next.sql"].Data = []byte("UPDATE upgrade_probe SET value = 'after';")
 	for range 2 {
 		if err := migrate(ctx, conn, source); err != nil {
 			t.Fatal(err)
@@ -73,7 +74,7 @@ func TestMigrationOrderRollbackAndRetry(t *testing.T) {
 	if err := conn.QueryRow("SELECT value FROM upgrade_probe").Scan(&value); err != nil || value != "after" {
 		t.Fatalf("migration order: value=%q err=%v", value, err)
 	}
-	if err := conn.QueryRow("SELECT count(*) FROM schema_migrations").Scan(&count); err != nil || count != 4 {
+	if err := conn.QueryRow("SELECT count(*) FROM schema_migrations").Scan(&count); err != nil || count != 5 {
 		t.Fatalf("versions after retry: count=%d err=%v", count, err)
 	}
 	if err := conn.QueryRow("SELECT value FROM settings WHERE key = 'keep'").Scan(&value); err != nil || value != "true" {
@@ -101,7 +102,7 @@ func TestMigrationRejectsInvalidSequence(t *testing.T) {
 }
 
 func TestOpenRejectsUnsupportedHistory(t *testing.T) {
-	for _, version := range []int{0, 3, 99} {
+	for _, version := range []int{0, CurrentSchema(), CurrentSchema() + 1, 99} {
 		path := filepath.Join(t.TempDir(), "panel.db")
 		conn := openTestPath(t, path)
 		mustExec(t, conn, "DELETE FROM schema_migrations")
@@ -137,7 +138,7 @@ func TestConcurrentOpen(t *testing.T) {
 	}
 	conn := openTestPath(t, path)
 	var count int
-	if err := conn.QueryRow("SELECT count(*) FROM schema_migrations").Scan(&count); err != nil || count != 2 {
+	if err := conn.QueryRow("SELECT count(*) FROM schema_migrations").Scan(&count); err != nil || count != CurrentSchema() {
 		t.Fatalf("concurrent migrations: count=%d err=%v", count, err)
 	}
 }
@@ -175,5 +176,39 @@ func TestTrafficMigrationPreservesExistingUser(t *testing.T) {
 	}
 	if err := Migrate(ctx, conn); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAlertsMigrationPreservesUserTrafficAndIdentity(t *testing.T) {
+	ctx := context.Background()
+	conn, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "v2.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	legacy := fstest.MapFS{}
+	for _, filename := range []string{"migrations/0001_initial.sql", "migrations/0002_user_traffic.sql"} {
+		data, err := migrations.ReadFile(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		legacy[filename] = &fstest.MapFile{Data: data}
+	}
+	if err := migrate(ctx, conn, legacy); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, conn, `INSERT INTO users(name,uuid,password,sub_token,created_at,traffic_up,traffic_epoch) VALUES ('legacy','id','secret','token',1,123,42)`)
+	if err := Migrate(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+	var up, epoch, identity int
+	if err := conn.QueryRow("SELECT traffic_up,traffic_epoch,alert_identity FROM users").Scan(&up, &epoch, &identity); err != nil || up != 123 || epoch != 42 || identity != 42 {
+		t.Fatalf("legacy user changed: %d %d %d, %v", up, epoch, identity, err)
+	}
+	for _, table := range []string{"server_traffic_samples", "alert_events", "alert_outbox", "alert_attempts"} {
+		var count int
+		if err := conn.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("%s not empty after migrating: %d, %v", table, count, err)
+		}
 	}
 }

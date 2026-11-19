@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/revfanc/boxpanel/internal/alerts"
 	"github.com/revfanc/boxpanel/internal/auth"
 	"github.com/revfanc/boxpanel/internal/host"
 	"github.com/revfanc/boxpanel/internal/reality"
@@ -27,6 +28,7 @@ import (
 const CookieName = "boxpanel_session"
 
 type Options struct {
+	Alerts         *alerts.Service
 	Backups        Backups
 	Certificates   Certificates
 	WebPath        string
@@ -135,6 +137,7 @@ func New(service *auth.Service, opts Options) http.Handler {
 	register("POST", "/api/v1/backup", a.backupPost, true)
 	register("GET", "/api/v1/backup/status", a.backupStatus, true)
 	register("POST", "/api/v1/restore", a.restorePost, true)
+	a.registerAlerts(register)
 	a.registerResources(register)
 	a.registerSubscriptions(register)
 	mux.HandleFunc("/", notFound)

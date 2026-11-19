@@ -131,7 +131,7 @@ func TestParsers(t *testing.T) {
 		t.Fatalf("memory=%+v %v", mem, err)
 	}
 	net, err := parseNetwork([]byte(networkFixture(42, 84)))
-	if err != nil || len(net) != 1 || net["eth0"] != (netCounters{42, 84}) {
+	if err != nil || len(net) != 1 || net["eth0"] != (NetworkCounters{42, 84}) {
 		t.Fatalf("network=%+v %v", net, err)
 	}
 	for _, input := range []string{"", "cpu 0 1", "cpu 1 -1 3 4", "cpu 18446744073709551615 1 0 0"} {

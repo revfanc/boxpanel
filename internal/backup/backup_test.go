@@ -297,8 +297,8 @@ func TestSchemaValidationAndOldMigration(t *testing.T) {
 	if _, err := Stage(context.Background(), a, t.TempDir()); !errors.Is(err, ErrInvalid) {
 		t.Fatal("manifest/schema mismatch", err)
 	}
-	// Build a real v1 snapshot, omitting only v2 columns and migration record.
-	if _, err := conn.Exec(`ALTER TABLE users DROP COLUMN traffic_reset_day; ALTER TABLE users DROP COLUMN traffic_reset_at; ALTER TABLE users DROP COLUMN traffic_epoch; DELETE FROM schema_migrations WHERE version=2`); err != nil {
+	// Build a v1 snapshot by removing the v2 columns and v3 tables.
+	if _, err := conn.Exec(`ALTER TABLE users DROP COLUMN traffic_reset_day; ALTER TABLE users DROP COLUMN traffic_reset_at; ALTER TABLE users DROP COLUMN traffic_epoch; ALTER TABLE users DROP COLUMN alert_identity; DROP TABLE alert_outbox; DROP TABLE alert_attempts; DROP TABLE alert_events; DROP TABLE server_traffic_samples; DELETE FROM schema_migrations WHERE version>1`); err != nil {
 		t.Fatal(err)
 	}
 	snapshot := filepath.Join(t.TempDir(), "old.db")

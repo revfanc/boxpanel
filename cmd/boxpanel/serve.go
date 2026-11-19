@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"flag"
@@ -16,14 +17,16 @@ import (
 	"runtime"
 	"strconv"
 	"syscall"
+	"time"
 
-	"crypto/sha256"
 	"github.com/revfanc/boxpanel/internal/acme"
+	"github.com/revfanc/boxpanel/internal/alerts"
 	"github.com/revfanc/boxpanel/internal/app"
 	"github.com/revfanc/boxpanel/internal/auth"
 	"github.com/revfanc/boxpanel/internal/backup"
 	"github.com/revfanc/boxpanel/internal/db"
 	"github.com/revfanc/boxpanel/internal/firewall"
+	"github.com/revfanc/boxpanel/internal/host"
 	"github.com/revfanc/boxpanel/internal/httpapi"
 	"github.com/revfanc/boxpanel/internal/singbox"
 	"github.com/revfanc/boxpanel/internal/spa"
@@ -31,7 +34,6 @@ import (
 	"github.com/revfanc/boxpanel/internal/sysinfo"
 	"github.com/revfanc/boxpanel/internal/traffic"
 	"github.com/revfanc/boxpanel/web"
-	"time"
 )
 
 type serveOptions struct {
@@ -188,6 +190,14 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	if err != nil {
 		return fmt.Errorf("prepare panel certificates: %w", err)
 	}
+	monitorHost := !opts.dev && runtime.GOOS == "linux"
+	alertOptions := alerts.Options{Certificate: certificates.Status, Logger: logger}
+	if monitorHost {
+		native := host.Native{}
+		alertOptions.Network = &alerts.Network{Files: native, Runner: native}
+		alertOptions.CoreRunning = manager.CoreActive
+	}
+	alertService := alerts.New(conn, reader, alertOptions)
 	var backups *panelBackups
 	if backupLayout(opts.paths, opts.core) == nil {
 		backupOpts := opts
@@ -199,7 +209,7 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 		backupAPI = backups
 	}
 	panel.build = func(settings httpapi.PanelSettings) (http.Handler, error) {
-		api := httpapi.New(service, httpapi.Options{WebPath: settings.WebPath, Dev: opts.dev, Logger: logger, System: system, Singbox: manager, DB: conn, ReadDB: reader, Applier: manager, PanelPort: settings.WebPort, Subscriptions: store, PreparePanel: panel.prepare, Certificates: certificates, Backups: backupAPI})
+		api := httpapi.New(service, httpapi.Options{WebPath: settings.WebPath, Dev: opts.dev, Logger: logger, System: system, Singbox: manager, DB: conn, ReadDB: reader, Applier: manager, PanelPort: settings.WebPort, Subscriptions: store, PreparePanel: panel.prepare, Certificates: certificates, Backups: backupAPI, Alerts: alertService})
 		spaHandler, err := spa.New(web.Assets, spa.Options{WebPath: settings.WebPath, Version: version, API: api})
 		if err != nil {
 			return nil, fmt.Errorf("prepare HTTP server: %w", err)
@@ -244,13 +254,16 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	} else {
 		close(backupDone)
 	}
+	alertsDone := make(chan struct{})
+	go func() { defer close(alertsDone); alertService.Run(workerCtx) }()
 	trafficDone := make(chan struct{})
-	if !opts.dev && runtime.GOOS == "linux" {
+	if monitorHost {
 		scheduler := traffic.NewScheduler(traffic.NewCollector(conn, reader, nil), manager, nil, logger)
+		scheduler.OnStopped = alertService.UserStopped
 		go func() { defer close(trafficDone); scheduler.Run(workerCtx) }()
 	} else {
 		close(trafficDone)
 	}
-	defer func() { cancelWorker(); <-workerDone; <-trafficDone; <-backupDone }()
+	defer func() { cancelWorker(); <-workerDone; <-trafficDone; <-backupDone; <-alertsDone }()
 	return panel.run(listener, handler)
 }

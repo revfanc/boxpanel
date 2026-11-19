@@ -530,3 +530,37 @@ JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未�
   均不重启；修改姓名/连接凭证、增删启停有效用户，或因限额/到期/清零改变有效用户集合仍可能重启。
   显式 restart 永远走完整流程；成功标记不区分两条路径。面板仅对预计改变配置的操作提醒全连接中断。
   约 1 秒为正常体验提示，慢生效/恢复的有界预算保持 T6.10 契约；完整边界见 SPEC §7。
+
+## T7.9 通知与告警
+
+所有路由要求登录。写操作沿用 CSRF、严格 JSON 和 `Cache-Control: no-store` 规则。GET 支持 HEAD。
+以下额度设置用十进制 GB，查询中的流量单位为字节，时间均为 UTC Unix 秒。
+
+| 方法 | 路径 | 请求与成功响应 |
+|---|---|---|
+| GET | `/alerts` | 200 `{billing,unread,unread_count,recent}` |
+| GET | `/alerts/settings` | 200 `{config,channels,interfaces}`，interfaces 是可选网卡名称数组 |
+| PUT | `/alerts/settings` | 接受 config 的部分字段，200 返回更新后的 config |
+| PUT | `/alerts/channels/{channel}` | 接受通道部分字段，200 返回该通道的脱敏配置 |
+| POST | `/alerts/channels/{channel}/test` | 空请求体，202 `{id}` 表示已把测试通知加入持久化队列 |
+| POST | `/alerts/events/{key}/read` | 空请求体，204 标记已读，可重复请求。key 取自 unread，未知 key 返回 404 |
+
+- `config` 包含 `interface`（空表示自动检测）、`quota_gb`（整数 0–9223372036）、`billing_day`（整数 1–28）、
+  `billing_mode`（`out` / `both` / `max` / `in`）及 `events`（事件类型到布尔值的映射）。
+  PUT 中省略的字段和事件保持原值。事件类型有 `user_quota_80`、`user_quota_100`、`user_expiring`、
+  `user_expired`、`user_stopped`、`server_quota_80`、`server_quota_90`、`server_quota_100`、
+  `certificate_warning`、`core_down`、`core_recovered`。
+- `channels` 按 `bark`、`server_chan`、`telegram` 为键。写入字段为 `enabled`、`credential`，Bark 可传
+  `url`（空用默认 `https://api.day.app`），Telegram 可传 `chat_id`（数字 ID 字符串或 `@频道名`）。
+  每次省略凭证字段保留原值，显式空字符串清除凭证。启用和测试需已有完整凭证。通道读取返回
+  `enabled`、`credential_mask`，适用时返回 `url` 与 `chat_id_mask`。1–4 位的凭证仅返回 `****`，更长的附尾四位。
+  测试使用已保存的配置，可在已保存凭证的停用通道执行。通过 `/alerts` 的 recent 查看同一 id 的投递结果。
+- `billing` 包含 `supported`、`interface`（最近采样的网卡）、`sampled_at`（0 为尚无样本）、`stale`、
+  `starts_at`、`ends_at`、`billing_mode`、`rx`、`tx`、`used`、`quota`、`percent`。未设额度时最后两项为 0。
+  当最近样本超过三分钟或与手选网卡不一致时返回 `stale: true`。
+- `unread_count` 是未读总数，`unread` 按最新优先最多 30 条，字段为 `key`、`kind`、`address`、`used`、
+  `limit`、`created_at`，适用时包含 `username`、`threshold`、`deadline`。key 是稳定的去重键，作为不透明标识使用。
+- `recent` 取最近更新的至多 30 条投递。每条包含 `id`、`channel`、`kind`（测试为 `test`）、`status`（`pending`、
+  `sent`、`failed`）、`attempts`、`updated_at`、`grouped`，适用时包含 `username` 和固定的 `error` 代码。
+  失败代码包括 `unsafe_destination`、`timeout`、`network_error`、`http_error`、`invalid_response`、
+  `provider_rejected`、`retry_expired` 或 `channel_disabled`。响应省略服务商正文和请求 URL。

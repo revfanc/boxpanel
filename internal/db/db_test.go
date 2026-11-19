@@ -125,7 +125,7 @@ func TestSchemaColumns(t *testing.T) {
 		"sessions": {"id", "admin_id", "expires_at", "created_at"},
 		"settings": {"key", "value"},
 		"inbounds": {"id", "tag", "protocol", "port", "enabled", "remark", "options", "created_at", "updated_at"},
-		"users":    {"id", "name", "uuid", "password", "sub_token", "enabled", "traffic_limit", "traffic_up", "traffic_down", "expire_at", "remark", "created_at", "traffic_reset_day", "traffic_reset_at", "traffic_epoch"},
+		"users":    {"id", "name", "uuid", "password", "sub_token", "enabled", "traffic_limit", "traffic_up", "traffic_down", "expire_at", "remark", "created_at", "traffic_reset_day", "traffic_reset_at", "traffic_epoch", "alert_identity"},
 	}
 	for table, want := range tables {
 		rows, err := conn.Query("SELECT name FROM pragma_table_info(?) ORDER BY cid", table)

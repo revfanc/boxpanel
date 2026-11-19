@@ -188,7 +188,7 @@ func (a *api) userCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		u := userView{Name: *input.Name, Enabled: true, CreatedAt: time.Now().Unix()}
 		patchUser(&u, input)
-		res, err := tx.ExecContext(ctx, "INSERT INTO users (name,uuid,password,sub_token,traffic_limit,expire_at,remark,created_at,traffic_reset_day,traffic_epoch) VALUES (?,?,?,?,?,?,?,?,?,?)", u.Name, uuid, password, token, u.TrafficLimit, u.ExpireAt, u.Remark, u.CreatedAt, u.TrafficResetDay, epoch)
+		res, err := tx.ExecContext(ctx, "INSERT INTO users (name,uuid,password,sub_token,traffic_limit,expire_at,remark,created_at,traffic_reset_day,traffic_epoch,alert_identity) VALUES (?,?,?,?,?,?,?,?,?,?,?)", u.Name, uuid, password, token, u.TrafficLimit, u.ExpireAt, u.Remark, u.CreatedAt, u.TrafficResetDay, epoch, epoch)
 		if err != nil {
 			return fmt.Errorf("create user: %w", err)
 		}
