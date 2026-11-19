@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"reflect"
@@ -234,5 +235,36 @@ func TestMutationErrorsAreNotMissingRules(t *testing.T) {
 	m, _ = fake(t, []string{"ufw"}, cmd("Status: active", nil, "ufw", "status"), cmd("denied", fs.ErrPermission, "ufw", "allow", "443/tcp", "comment", "boxpanel:tcp:443"))
 	if err := m.Open(context.Background(), 443, "tcp"); !errors.Is(err, fs.ErrPermission) {
 		t.Fatal("lost mutation error")
+	}
+}
+
+// Accept-only input chains from other software (LXD here) are not a firewall;
+// only drop policies or drop/reject rules make nftables "active".
+func TestNFTInputsIgnoreAcceptOnlyChains(t *testing.T) {
+	parse := func(raw string) nftRuleset {
+		var r nftRuleset
+		if err := json.Unmarshal([]byte(raw), &r); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	lxd := `{"nftables":[{"chain":{"family":"inet","table":"lxd","name":"in.lxdbr0","type":"filter","hook":"input","policy":"accept"}},
+{"rule":{"family":"inet","table":"lxd","chain":"in.lxdbr0","expr":[{"match":{"op":"==","left":{"meta":{"key":"iifname"}},"right":"lxdbr0"}},{"accept":null}]}},
+{"chain":{"family":"inet","table":"boxpanel_traffic","name":"input","type":"filter","hook":"input","policy":"accept"}}]}`
+	if got := parse(lxd).inputs(); len(got) != 0 {
+		t.Fatalf("accept-only chains treated as firewall: %+v", got)
+	}
+	reject := `{"nftables":[{"chain":{"family":"inet","table":"fw","name":"in","type":"filter","hook":"input","policy":"accept"}},
+{"rule":{"family":"inet","table":"fw","chain":"in","expr":[{"reject":{"type":"icmpx"}}]}}]}`
+	if got := parse(reject).inputs(); len(got) != 1 || got[0].Table != "fw" {
+		t.Fatalf("reject rule chain not detected: %+v", got)
+	}
+	if got := parse(nftInput).inputs(); len(got) != 1 || got[0].Name != "incoming" {
+		t.Fatalf("drop policy chain not detected: %+v", got)
+	}
+	ours := `{"nftables":[{"chain":{"family":"inet","table":"fw","name":"in","type":"filter","hook":"input","policy":"accept"}},
+{"rule":{"family":"inet","table":"fw","chain":"in","comment":"boxpanel:tcp:443","expr":[{"drop":null}]}}]}`
+	if got := parse(ours).inputs(); len(got) != 0 {
+		t.Fatalf("own rules must not make a chain restrictive: %+v", got)
 	}
 }

@@ -229,14 +229,16 @@ func (m *Manager) changeLocked(ctx context.Context, port int, proto string, open
 }
 
 type nftObject struct {
-	Family  string `json:"family"`
-	Table   string `json:"table"`
-	Name    string `json:"name"`
-	Chain   string `json:"chain"`
-	Type    string `json:"type"`
-	Hook    string `json:"hook"`
-	Comment string `json:"comment"`
-	Handle  uint64 `json:"handle"`
+	Family  string            `json:"family"`
+	Table   string            `json:"table"`
+	Name    string            `json:"name"`
+	Chain   string            `json:"chain"`
+	Type    string            `json:"type"`
+	Hook    string            `json:"hook"`
+	Comment string            `json:"comment"`
+	Handle  uint64            `json:"handle"`
+	Policy  string            `json:"policy"`
+	Expr    []json.RawMessage `json:"expr"`
 }
 
 type nftRuleset struct {
@@ -246,15 +248,43 @@ type nftRuleset struct {
 	} `json:"nftables"`
 }
 
+// inputs returns IP input filter base chains that actually restrict traffic:
+// a drop policy, or at least one drop/reject rule. Accept-only chains owned by
+// other software (LXD, Docker, Tailscale…) are not a firewall to open ports in;
+// treating them as one made apply fail on hosts running LXD.
 func (r nftRuleset) inputs() []nftObject {
+	restricts := map[[3]string]bool{}
+	for _, obj := range r.NFTables {
+		if rule := obj.Rule; rule != nil && !strings.HasPrefix(rule.Comment, "boxpanel:") && dropsTraffic(rule.Expr) {
+			restricts[[3]string{rule.Family, rule.Table, rule.Chain}] = true
+		}
+	}
 	chains := []nftObject{}
 	for _, obj := range r.NFTables {
 		c := obj.Chain
-		if c != nil && c.Table != TrafficTable && c.Hook == "input" && c.Type == "filter" && (c.Family == "inet" || c.Family == "ip" || c.Family == "ip6") {
+		if c != nil && c.Table != TrafficTable && c.Hook == "input" && c.Type == "filter" && (c.Family == "inet" || c.Family == "ip" || c.Family == "ip6") &&
+			(c.Policy == "drop" || restricts[[3]string{c.Family, c.Table, c.Name}]) {
 			chains = append(chains, *c)
 		}
 	}
 	return chains
+}
+
+// dropsTraffic reports whether a rule's statements include a drop or reject verdict.
+func dropsTraffic(expr []json.RawMessage) bool {
+	for _, statement := range expr {
+		var verdict map[string]json.RawMessage
+		if json.Unmarshal(statement, &verdict) != nil {
+			continue
+		}
+		if _, ok := verdict["drop"]; ok {
+			return true
+		}
+		if _, ok := verdict["reject"]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) nftRules(ctx context.Context) (nftRuleset, error) {
