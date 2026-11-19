@@ -2,6 +2,7 @@ package singbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -32,6 +33,9 @@ type Controller interface {
 	State(context.Context, string) (ServiceState, error)
 }
 
+// errNoMonotonic selects the /proc/uptime fallback (tests and non-Linux).
+var errNoMonotonic = errors.New("monotonic clock unavailable")
+
 type SystemdOptions struct {
 	OS     string
 	Dev    bool
@@ -43,6 +47,10 @@ type systemd struct {
 	runner host.Runner
 	files  host.Files
 	mock   bool
+	// monotonic returns CLOCK_MONOTONIC seconds, the clock systemd uses for
+	// *TimestampMonotonic. /proc/uptime is virtualised by LXCFS inside LXC/LXD
+	// containers (common on cheap VPS), which made service uptime negative.
+	monotonic func() (float64, error)
 }
 
 func NewSystemd(opts SystemdOptions) Controller {
@@ -52,10 +60,12 @@ func NewSystemd(opts SystemdOptions) Controller {
 	if opts.Runner == nil {
 		opts.Runner = host.Native{}
 	}
+	monotonic := func() (float64, error) { return 0, errNoMonotonic }
 	if opts.Files == nil {
+		monotonic = monotonicSeconds
 		opts.Files = host.Native{}
 	}
-	return &systemd{runner: opts.Runner, files: opts.Files, mock: opts.Dev || opts.OS != "linux"}
+	return &systemd{runner: opts.Runner, files: opts.Files, mock: opts.Dev || opts.OS != "linux", monotonic: monotonic}
 }
 
 func managedUnit(unit string) error {
@@ -137,15 +147,18 @@ func (s *systemd) State(ctx context.Context, unit string) (ServiceState, error) 
 	if err != nil || started == 0 {
 		return ServiceState{}, fmt.Errorf("invalid systemd start timestamp")
 	}
-	data, err := s.files.ReadFile("/proc/uptime")
-	if err != nil {
-		return ServiceState{}, fmt.Errorf("read service uptime: %w", err)
+	uptime, err := s.monotonic()
+	if errors.Is(err, errNoMonotonic) {
+		data, readErr := s.files.ReadFile("/proc/uptime")
+		if readErr != nil {
+			return ServiceState{}, fmt.Errorf("read service uptime: %w", readErr)
+		}
+		fields := strings.Fields(string(data))
+		if len(fields) == 0 {
+			return ServiceState{}, fmt.Errorf("missing system uptime")
+		}
+		uptime, err = strconv.ParseFloat(fields[0], 64)
 	}
-	fields := strings.Fields(string(data))
-	if len(fields) == 0 {
-		return ServiceState{}, fmt.Errorf("missing system uptime")
-	}
-	uptime, err := strconv.ParseFloat(fields[0], 64)
 	elapsed := uptime - float64(started)/1e6
 	if err != nil || math.IsNaN(elapsed) || math.IsInf(elapsed, 0) || elapsed < 0 || elapsed >= math.MaxInt64 {
 		return ServiceState{}, fmt.Errorf("invalid service uptime")
