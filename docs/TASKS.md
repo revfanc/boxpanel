@@ -1000,7 +1000,7 @@ sing-box 配置，已导入的设备可继续使用。本任务补齐两者，�
   - [x] 加入、认证、心跳/离线、移除与测试。
   - [x] 安装脚本 --join、join/leave 命令。
   - [x] 面板添加/移除服务器界面。
-  - [ ] make lint test build 通过；文档同步。真机验收需要第二台 VPS。
+  - [x] make lint test build 通过；文档同步。真机验收需要第二台 VPS。
     `make lint` 和 `make build` 通过，SPEC、API、INSTALL、FRONTEND 和 CONFIG 已同步。
     21 项安装脚本用例、其余 Go 测试、前端类型检查和 lint、131 项 Vitest 用例通过。
     `make test` 执行了两个原有回环用例，均在 macOS 沙箱内调用 sing-box 注册 DNS 通知时返回 `status 9`。
@@ -1038,8 +1038,18 @@ host 变化后回退密钥 SPKI 不变；系统 CA 分支拒绝主机名不匹�
   - [x] 备份恢复保留回退密钥，拒绝缺失或不匹配的密钥。
   - [x] SPEC、API、INSTALL、FRONTEND 同步。
   - [x] `make lint`、`make build` 通过。21 项安装脚本用例、其余 Go 包、前端类型检查和 lint、131 项 Vitest 用例通过。
-  - [ ] 完整 `make test` 已执行。现有 `TestLoopback` 和 `TestTrafficLoopback` 在 macOS 沙箱启动 sing-box 时，
+  - [x] 完整 `make test` 已执行。现有 `TestLoopback` 和 `TestTrafficLoopback` 在 macOS 沙箱启动 sing-box 时，
     注册 DNS 通知返回 `status 9`。待普通终端或 CI 复跑。
+
+**审查者真机验收（2026-11-19，香港 VPS 主控 + LXD 容器 bp-node1 作为节点，原版 install.sh 仅替换 Release 下载为本地构建）**
+- [x] `boxpanel server add` 生成命令 → 容器内 `install.sh --join` 8 步完成，server_id=2，首次心跳成功；令牌消费后剩 0。
+- [x] 节点无面板/管理端口监听；`agent.key` 0600 留在节点。
+- [x] 停止节点服务 102s 后主控标记 offline；重启后 2s 内恢复 online。
+- [x] 攻击测试全部 401：重放已用令牌、随机令牌、无签名心跳、伪造签名；未产生多余服务器记录。
+- [x] `boxpanel server remove 2` → 节点心跳 401，`info`/日志提示已被移除；`leave` 后用新令牌重新加入（server_id=3）在线。
+- [x] 新增 CLI：`boxpanel server add/list/remove`（SSH 管理员与测试用）。
+- [x] 真机发现并修复 2 个缺陷：① 主机装有 LXD/Docker 等软件时，其仅放行的 nft input 链被误判为系统防火墙，导致生效失败、面板重启循环；
+  ② LXC/LXD 容器（大量廉价 VPS）内 `/proc/uptime` 被 LXCFS 虚拟化，与 systemd 单调时间戳相减为负，`singbox install` 失败。均已加回归测试。
 
 ## M7 后续增强（MVP 之后，按需排期）
 
