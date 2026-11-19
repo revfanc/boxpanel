@@ -949,6 +949,60 @@ sing-box 配置，已导入的设备可继续使用。本任务补齐两者，�
 - [x] 升级前后 3 用户 × 3 种订阅格式、`sing-box.json`、nft 计数规则**逐字节一致**；角色 master。
 - [x] `integrity_check` ok、外键违规 0；本机服务器行与两个入站 server_id=1；迁移版本 1–4。
 
+### T8.2 节点加入与安全通道（心跳，不含配置同步）
+
+**原则**：节点永远**主动**连主控（出站 HTTPS），主控不连节点；节点不跑面板、不开管理端口、不申请面板证书（不需要 TCP 80）。
+本任务完成：加入、身份认证、心跳与在线状态、移除。配置同步在 T8.3。
+
+**1. 加入令牌**
+- 主控面板「服务器 → 添加服务器」：输入名称，生成一次性加入令牌（32 字节随机，**只存 SHA-256**，1 小时过期，单次使用），
+  界面显示可复制的加入命令：
+  `bash <(curl -fsSL …/install.sh) --join <主控面板 URL> --token <令牌>`
+- 主控面板证书若为自签（ACME 未生效），命令额外带 `--master-pin <主控证书 SPKI SHA-256>`，节点据此固定校验；
+  主控为可信证书时只用系统 CA 校验（Let's Encrypt IP 证书 6 天轮换，不能固定叶证书）。
+- 令牌可在面板撤销；过期/已用令牌一律拒绝，返回统一的「加入令牌无效或已过期，请在主控重新生成」。
+
+**2. 注册**
+- 节点本地生成 Ed25519 密钥对（私钥 0600，存数据目录，**不离开节点**）。
+- `POST <主控>/{web_path}/api/agent/v1/join`：`{token, public_key, hostname, public_ip, version}`。主控在事务内校验并消费令牌，
+  创建 servers 行（名称取令牌上的名称，status=pending→首次心跳后 online，保存 agent_public_key），返回 `{server_id}`。
+- 注册接口单独限流（每 IP 每分钟 10 次），不走面板会话/CSRF（无 cookie），只接受 JSON。
+
+**3. 请求认证（注册之后的所有节点请求）**
+- 请求头：`X-Boxpanel-Server`（server_id）、`X-Boxpanel-Timestamp`（Unix 秒）、`X-Boxpanel-Nonce`（16 字节随机 base64url）、
+  `X-Boxpanel-Signature` = Ed25519(私钥, `method\npath\ntimestamp\nnonce\nsha256(body)`)。
+- 主控校验：服务器存在且未移除、公钥匹配、时间差 ≤ 120s、nonce 5 分钟内不重复（内存 LRU，有上限）、签名有效；
+  失败统一 401 不区分原因。使用标准库 `crypto/ed25519`，不手写密码学。
+- 节点访问主控：TLS 1.2+；按第 1 条校验证书；不跟随跨主机重定向。
+
+**4. 节点运行模式**
+- `boxpanel join --master <URL> --token <令牌> [--master-pin ...]`：注册并写入 `node_role=agent`、主控 URL、server_id、pin。
+- 节点运行 `boxpanel serve` 时若 `node_role=agent`：**不启动面板监听**，只运行 sing-box 管理、流量计数（T7.1c）、网卡统计，
+  以及每 30 秒心跳 `POST /api/agent/v1/heartbeat`（`{version, singbox_active, uptime}`）。主控记录 `last_seen_at`、版本，
+  status=online；超过 90 秒无心跳标记 offline（主控后台每 30s 检查）。
+- 主控离线时节点只重试（指数退避上限 60s），不改变本地运行状态。
+- 安装脚本 `--join`：安装依赖、boxpanel、sing-box 后执行 join；不打开面板端口与 TCP 80，不申请 ACME；
+  `boxpanel info` 在节点上显示「节点模式，主控：<URL>，server_id，最近心跳结果」。
+
+**5. 移除**
+- 主控面板「移除服务器」：删除公钥（之后该节点所有请求 401），servers 行标记 removed（保留历史流量，不再出现在订阅）；
+  节点连续收到 401 后在日志与 `boxpanel info` 中提示「已被主控移除，可执行 boxpanel leave 清理或重新加入」。
+- `boxpanel leave`：节点清除主控信息与密钥，回到未初始化状态（不卸载）。
+
+**测试**
+- 令牌：过期、重复使用、撤销、哈希存储；注册限流。
+- 认证：正确签名、篡改 body/path/时间、时间偏差、nonce 重放、移除后 401、错误 server_id。
+- 进程内端到端：启动主控 handler + 节点客户端，完成 join → 心跳 → online → 停止心跳 → offline → 移除 → 401。
+- 安装脚本 `--join` 参数与非交互、dry-run；install_test 覆盖。
+- 主控为自签证书时 pin 生效、pin 不匹配拒绝。
+- make lint test build 通过；SPEC（通信协议章节）、API（agent 接口）、INSTALL、FRONTEND 同步。
+
+- **验收**：
+  - [ ] 加入、认证、心跳/离线、移除与测试。
+  - [ ] 安装脚本 --join、join/leave 命令。
+  - [ ] 面板添加/移除服务器界面。
+  - [ ] make lint test build 通过；文档同步。真机验收需要第二台 VPS。
+
 ## M7 后续增强（MVP 之后，按需排期）
 
 - T7.1 见上方详细任务（已排期）
