@@ -110,17 +110,24 @@ func runBackup(command string, args []string, stdout, stderr io.Writer) int {
 	} else {
 		flags.BoolVar(&install, "install", false, "install missing core and units on a fresh machine (installer only)")
 	}
-	// Permit the documented 'restore FILE --passphrase-file FILE' order.
-	if command != "backup" && len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		args = append(append([]string{}, args[1:]...), args[0])
-	}
-	if err := flags.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
+	// Options may appear before, after or around the file (as with set-host):
+	// flag stops at a positional argument, so resume parsing after each one.
+	var positional []string
+	for {
+		if err := flags.Parse(args); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return 0
+			}
+			return 2
 		}
-		return 2
+		args = flags.Args()
+		if len(args) == 0 {
+			break
+		}
+		positional = append(positional, args[0])
+		args = args[1:]
 	}
-	if command == "backup" && flags.NArg() != 0 || command != "backup" && flags.NArg() != 1 {
+	if command == "backup" && len(positional) != 0 || command != "backup" && len(positional) != 1 {
 		fmt.Fprintln(stderr, "参数有误；请运行 boxpanel "+command+" --help。")
 		return 2
 	}
@@ -168,7 +175,7 @@ func runBackup(command string, args []string, stdout, stderr io.Writer) int {
 			if command == "restore-staged" {
 				// This private handoff contains no passphrase and is owned by root. Validate
 				// again using the same snapshot/archive pipeline before stopping services.
-				incoming := flags.Arg(0)
+				incoming := positional[0]
 				if filepath.Dir(incoming) != filepath.Dir(p.DataDir) || !strings.HasPrefix(filepath.Base(incoming), ".boxpanel-restore-") {
 					err = backup.ErrInvalid
 				} else {
@@ -177,7 +184,7 @@ func runBackup(command string, args []string, stdout, stderr io.Writer) int {
 				}
 			} else {
 				var data []byte
-				data, err = readBackupFile(flags.Arg(0))
+				data, err = readBackupFile(positional[0])
 				pass := ""
 				if err == nil && (backup.IsEncrypted(data) || *passfile != "") {
 					pass, err = readPassphrase(*passfile, stderr)

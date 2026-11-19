@@ -362,3 +362,28 @@ func TestFreshInstallRestoreSkipsInitializationAndRollsBackFailure(t *testing.T)
 		})
 	}
 }
+
+// Options may come before, after or around the backup file (found on a real VPS).
+func TestRestoreAcceptsOptionsAroundFile(t *testing.T) {
+	clearEnvironment(t)
+	p, _ := backupPaths(t)
+	dir := t.TempDir()
+	file, pass := filepath.Join(dir, "x.bpk"), filepath.Join(dir, "pass")
+	os.WriteFile(file, []byte("not a backup"), 0600)
+	os.WriteFile(pass, []byte("a-long-enough-passphrase"), 0600)
+	for _, args := range [][]string{
+		{"restore", "--data-dir", p.DataDir, "--passphrase-file", pass, file},
+		{"restore", file, "--data-dir", p.DataDir, "--passphrase-file", pass},
+		{"restore", "--data-dir", p.DataDir, file, "--passphrase-file", pass},
+	} {
+		var stderr bytes.Buffer
+		run(args, io.Discard, &stderr)
+		if strings.Contains(stderr.String(), "参数有误") {
+			t.Fatalf("%v rejected as bad arguments: %s", args, stderr.String())
+		}
+	}
+	var stderr bytes.Buffer
+	if run([]string{"restore", "--data-dir", p.DataDir, file, file}, io.Discard, &stderr) != 2 || !strings.Contains(stderr.String(), "参数有误") {
+		t.Fatal("two files must be rejected")
+	}
+}
