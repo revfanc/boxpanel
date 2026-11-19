@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -47,15 +48,16 @@ func TestMigrationOrderRollbackAndRetry(t *testing.T) {
 	ctx := context.Background()
 	conn := openTestDB(t)
 	mustExec(t, conn, `INSERT INTO settings VALUES ('keep', 'true')`)
-	source := fstest.MapFS{
-		"migrations/0001_initial.sql": {Data: []byte("SELECT 1;")},
-		"migrations/0002_traffic.sql": {Data: []byte("SELECT 1;")},
-		"migrations/0003_alerts.sql":  {Data: []byte("SELECT 1;")},
-		"migrations/0004_servers.sql": {Data: []byte("SELECT 1;")},
-		"migrations/0005_next.sql":    {Data: []byte("CREATE TABLE upgrade_probe (value TEXT); INSERT INTO upgrade_probe VALUES ('before');")},
-		"migrations/0006_next.sql":    {Data: []byte("UPDATE upgrade_probe SET value = 'after'; INSERT INTO missing_table VALUES (1);")},
+	source := fstest.MapFS{}
+	for i := 1; i <= CurrentSchema(); i++ {
+		source[fmt.Sprintf("migrations/%04d_done.sql", i)] = &fstest.MapFile{Data: []byte("SELECT 1;")}
 	}
-	if err := migrate(ctx, conn, source); err == nil || !strings.Contains(err.Error(), "0006_next.sql") {
+	source[fmt.Sprintf("migrations/%04d_next.sql", CurrentSchema()+1)] = &fstest.MapFile{
+		Data: []byte("CREATE TABLE upgrade_probe (value TEXT); INSERT INTO upgrade_probe VALUES ('before');"),
+	}
+	last := fmt.Sprintf("migrations/%04d_next.sql", CurrentSchema()+2)
+	source[last] = &fstest.MapFile{Data: []byte("UPDATE upgrade_probe SET value = 'after'; INSERT INTO missing_table VALUES (1);")}
+	if err := migrate(ctx, conn, source); err == nil || !strings.Contains(err.Error(), last) {
 		t.Fatalf("expected contextual migration failure, got %v", err)
 	}
 	var count int
@@ -65,7 +67,7 @@ func TestMigrationOrderRollbackAndRetry(t *testing.T) {
 	if err := conn.QueryRow("SELECT count(*) FROM schema_migrations").Scan(&count); err != nil || count != CurrentSchema() {
 		t.Fatalf("version not rolled back: count=%d err=%v", count, err)
 	}
-	source["migrations/0006_next.sql"].Data = []byte("UPDATE upgrade_probe SET value = 'after';")
+	source[last].Data = []byte("UPDATE upgrade_probe SET value = 'after';")
 	for range 2 {
 		if err := migrate(ctx, conn, source); err != nil {
 			t.Fatal(err)
@@ -75,7 +77,7 @@ func TestMigrationOrderRollbackAndRetry(t *testing.T) {
 	if err := conn.QueryRow("SELECT value FROM upgrade_probe").Scan(&value); err != nil || value != "after" {
 		t.Fatalf("migration order: value=%q err=%v", value, err)
 	}
-	if err := conn.QueryRow("SELECT count(*) FROM schema_migrations").Scan(&count); err != nil || count != 6 {
+	if err := conn.QueryRow("SELECT count(*) FROM schema_migrations").Scan(&count); err != nil || count != CurrentSchema()+2 {
 		t.Fatalf("versions after retry: count=%d err=%v", count, err)
 	}
 	if err := conn.QueryRow("SELECT value FROM settings WHERE key = 'keep'").Scan(&value); err != nil || value != "true" {

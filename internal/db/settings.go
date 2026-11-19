@@ -17,6 +17,8 @@ var (
 	WebPath               = SettingKey[string]{"web_path"}
 	SubPath               = SettingKey[string]{"sub_path"}
 	NodeRole              = SettingKey[string]{"node_role"}
+	AgentMaster           = SettingKey[AgentConnection]{"agent_master"}
+	AgentLastHeartbeat    = SettingKey[AgentHeartbeatResult]{"agent_last_heartbeat"}
 	PublicHost            = SettingKey[string]{"public_host"}
 	PanelTLSMode          = SettingKey[string]{"panel_tls_mode"}
 	SetupCompleted        = SettingKey[bool]{"setup_completed"}
@@ -38,6 +40,19 @@ var (
 	PanelCertificate      = SettingKey[json.RawMessage]{"panel_certificate"}
 	Hysteria2Fingerprints = SettingKey[map[string]string]{"hysteria2_fingerprints"}
 )
+
+type AgentConnection struct {
+	MasterURL string `json:"master_url"`
+	Pin       string `json:"pin,omitempty"`
+	ServerID  int64  `json:"server_id"`
+	PublicKey string `json:"public_key"`
+}
+
+type AgentHeartbeatResult struct {
+	At                   int64  `json:"at"`
+	Status               string `json:"status"`
+	RepeatedUnauthorized bool   `json:"repeated_unauthorized,omitempty"`
+}
 
 // AlertConfig stores local billing settings and per-event switches.
 type AlertConfig struct {

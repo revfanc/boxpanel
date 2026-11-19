@@ -117,6 +117,22 @@ func configCommand(ctx context.Context, command string, opts app.InitOptions, st
 		return err
 	}
 	defer conn.Close()
+	role, err := db.GetSetting(ctx, conn, db.NodeRole)
+	if errors.Is(err, sql.ErrNoRows) {
+		role = db.RoleMaster
+	} else if err != nil {
+		return err
+	}
+	switch role {
+	case db.RoleAgent:
+		if command == "reset-admin" {
+			return fmt.Errorf("节点模式没有管理员，请在主控执行 boxpanel reset-admin")
+		}
+		return printAgentInfo(ctx, conn, stdout)
+	case db.RoleMaster:
+	default:
+		return fmt.Errorf("read node role: restore node_role to master or agent")
+	}
 	if command == "reset-admin" {
 		credentials, err := app.ResetAdmin(ctx, conn)
 		if err != nil {
@@ -133,15 +149,6 @@ func configCommand(ctx context.Context, command string, opts app.InitOptions, st
 	username, err := app.AdminUsername(ctx, conn)
 	if err != nil {
 		return err
-	}
-	role, err := db.GetSetting(ctx, conn, db.NodeRole)
-	if errors.Is(err, sql.ErrNoRows) {
-		role = db.RoleMaster
-	} else if err != nil {
-		return err
-	}
-	if role != db.RoleMaster && role != db.RoleAgent {
-		return fmt.Errorf("read node role: restore node_role to master or agent")
 	}
 	fmt.Fprintf(stdout, "面板地址: %s\n用户名:   %s\n角色:     %s\n", cfg.URL(), username, role)
 	if cfg.TLSMode != "http" {

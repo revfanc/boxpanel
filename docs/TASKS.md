@@ -998,10 +998,13 @@ sing-box 配置，已导入的设备可继续使用。本任务补齐两者，�
 - make lint test build 通过；SPEC（通信协议章节）、API（agent 接口）、INSTALL、FRONTEND 同步。
 
 - **验收**：
-  - [ ] 加入、认证、心跳/离线、移除与测试。
-  - [ ] 安装脚本 --join、join/leave 命令。
-  - [ ] 面板添加/移除服务器界面。
+  - [x] 加入、认证、心跳/离线、移除与测试。
+  - [x] 安装脚本 --join、join/leave 命令。
+  - [x] 面板添加/移除服务器界面。
   - [ ] make lint test build 通过；文档同步。真机验收需要第二台 VPS。
+    `make lint` 和 `make build` 通过，SPEC、API、INSTALL、FRONTEND 和 CONFIG 已同步。
+    21 项安装脚本用例、其余 Go 测试、前端类型检查和 lint、131 项 Vitest 用例通过。
+    `make test` 执行了两个原有回环用例，均在 macOS 沙箱内调用 sing-box 注册 DNS 通知时返回 `status 9`。
 
 ## M7 后续增强（MVP 之后，按需排期）
 

@@ -13,6 +13,9 @@ COMMAND=install
 TAG=
 PORT=
 RESTORE_FILE=
+JOIN_MASTER=
+JOIN_TOKEN=
+MASTER_PIN=
 PASSPHRASE_FILE=
 NON_INTERACTIVE=false
 DRY_RUN=false
@@ -33,6 +36,9 @@ usage() {
   --port <1-65535>           仅用于首次初始化；省略由 CLI 随机选择
   --restore <文件>           仅全新安装：直接恢复，不生成新账号或密钥
   --passphrase-file <文件>   恢复口令文件（口令不出现在参数中）
+  --join <主控 HTTPS URL>    将空实例作为节点安装，自动采用非交互模式
+  --token <令牌>             主控生成的一次性加入令牌
+  --master-pin <指纹>        自签主控的 SPKI SHA-256 指纹
   --non-interactive         不读取输入；安装时默认尝试开启 BBR
   --yes                     确认卸载（非交互卸载必需）
   --purge                   卸载时删除 /etc/boxpanel（默认保留）
@@ -55,15 +61,16 @@ parse_args() {
             --yes) YES=true; shift ;;
             --purge) PURGE=true; shift ;;
             --dry-run) DRY_RUN=true; shift ;;
-            --version|--port|--restore|--passphrase-file)
+            --version|--port|--restore|--passphrase-file|--join|--token|--master-pin)
                 [[ $# -ge 2 && -n $2 ]] || die '选项缺少值；运行 --help 查看用法。'
                 case "$1" in
                   --version) TAG=$2 ;; --port) PORT=$2 ;;
                   --restore) RESTORE_FILE=$2 ;; --passphrase-file) PASSPHRASE_FILE=$2 ;;
+                  --join) JOIN_MASTER=$2 ;; --token) JOIN_TOKEN=$2 ;; --master-pin) MASTER_PIN=$2 ;;
                 esac
                 shift 2 ;;
             --help|-h) usage; exit 0 ;;
-            *) die "未知参数 $1；运行 --help 查看用法。" ;;
+            *) die '未知参数；运行 --help 查看用法。' ;;
         esac
     done
     [[ $REPO =~ ^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$ ]] || die '仓库名无效；请将 BOXPANEL_REPO 设为 owner/repo。'
@@ -81,6 +88,21 @@ parse_args() {
         [[ -r $RESTORE_FILE && -f $RESTORE_FILE ]] || die '请提供可读的备份文件。'
     fi
     [[ -z $PASSPHRASE_FILE || ( -n $RESTORE_FILE && -f $PASSPHRASE_FILE && -r $PASSPHRASE_FILE ) ]] || die '--passphrase-file 需要 --restore 及可读的口令文件。'
+    if [[ -n $JOIN_MASTER ]]; then
+        [[ $COMMAND == install && -z $PORT && -z $RESTORE_FILE ]] || die '--join 仅用于 install，且不能与 --port 或 --restore 同用。'
+        local master_pattern='^https://([A-Za-z0-9.-]+|\[[A-Fa-f0-9:.]+\])(:[0-9]{1,5})?(/[a-z0-9]+)?/?$'
+        [[ $JOIN_MASTER =~ $master_pattern ]] || die '请复制包含随机面板路径的主控 HTTPS 地址。'
+        local master_port=${BASH_REMATCH[2]:-}
+        if [[ -n $master_port ]]; then
+            master_port=$((10#${master_port#:}))
+            ((master_port >= 1 && master_port <= 65535)) || die '主控端口无效；请从主控复制加入命令。'
+        fi
+        [[ $JOIN_TOKEN =~ ^[A-Za-z0-9_-]{43}$ ]] || die '缺少有效 --token；请从主控复制新的加入命令。'
+        [[ -z $MASTER_PIN || $MASTER_PIN =~ ^[A-Za-z0-9_-]{43}$ ]] || die '--master-pin 格式错误；请从主控复制加入命令。'
+        NON_INTERACTIVE=true
+    elif [[ -n $JOIN_TOKEN || -n $MASTER_PIN ]]; then
+        die '--token 和 --master-pin 需要 --join；请从主控复制加入命令。'
+    fi
     # Piped input is never treated as a confirmation.
     if [[ ! -t 0 ]]; then NON_INTERACTIVE=true; fi
 }
@@ -135,7 +157,11 @@ cleanup() {
     [[ -z $TEMP_DIR ]] || rm -rf -- "$TEMP_DIR"
     if [[ $LOCKED == true ]]; then rmdir -- "$LOCK_DIR"; fi
     if ((status != 0)); then
-        say '操作未完成。请按上方提示修复后重试相同命令；安装可续接，忘记初始密码可运行 boxpanel reset-admin。' >&2
+        if [[ -n $JOIN_MASTER ]]; then
+            say '节点安装未完成。请按上方提示检查主控服务器记录及本机服务状态，令牌已失效时请生成新命令。' >&2
+        else
+            say '操作未完成。请按上方提示修复后重试相同命令；安装可续接，忘记初始密码可运行 boxpanel reset-admin。' >&2
+        fi
     fi
     exit "$status"
 }
@@ -313,6 +339,32 @@ install_panel() {
     say '地址不对或无法打开面板时，可运行 boxpanel set-host <IP或域名> 修正节点地址；请将占位内容替换为实际地址。'
 }
 
+install_agent() {
+    if [[ -x $BINARY ]] && "$BINARY" info >/dev/null 2>&1; then
+        die '实例已初始化。请在空节点安装；若已成功加入，可运行 systemctl enable --now boxpanel.service boxpanel-singbox.service。'
+    fi
+    progress 3 '安装节点依赖'
+    install_dependencies
+    progress 4 '下载并校验 boxpanel'
+    stage_release
+    mkdir -p -- "$DATA_DIR"
+    chmod 0700 "$DATA_DIR"
+    progress 5 '安装并校验锁定的 sing-box'
+    # Prepare against the checked binary before overwriting any existing CLI.
+    "$STAGED_BINARY" singbox install --for-join --preserve-version
+    replace_binary
+    progress 6 '向主控注册节点'
+    local join_args=(join --master "$JOIN_MASTER" --token "$JOIN_TOKEN")
+    [[ -z $MASTER_PIN ]] || join_args+=(--master-pin "$MASTER_PIN")
+    "$BINARY" "${join_args[@]}"
+    progress 7 '启用并启动节点服务'
+    systemctl enable boxpanel-singbox.service boxpanel.service
+    systemctl restart boxpanel.service
+    wait_panel || die '节点服务未就绪；请运行 journalctl -u boxpanel 排查，再运行 systemctl restart boxpanel.service。'
+    progress 8 '完成节点安装'
+    "$BINARY" info
+}
+
 update_panel() {
     [[ -x $BINARY && -f $UNIT_DIR/boxpanel.service && ! -e $DATA_DIR/.installing ]] || die '安装尚未完成；请先运行 install。'
     "$BINARY" info >/dev/null
@@ -388,6 +440,10 @@ main() {
     detect_platform
     if [[ $DRY_RUN == true ]]; then
         say "DRY-RUN: $COMMAND repo=$REPO version=${TAG:-latest} arch=$ARCH port=${PORT:-random}"
+        if [[ -n $JOIN_MASTER ]]; then
+            say 'join: dependencies → download + SHA-256 → singbox install → join → enable/restart → node readiness → info (non-interactive)'
+            return
+        fi
         if [[ -n $RESTORE_FILE ]]; then say 'restore: install verified binary → restore --install → original credentials/certificates → validate/apply → start panel'; fi
         say 'install: dependencies → download + SHA-256 → init → singbox install → apply → firewall-open → enable/restart → bbr → info'
         say 'update: download + SHA-256 → atomic replace → restart → health check (restore binary on failure)'
@@ -403,7 +459,7 @@ main() {
     trap 'exit 143' TERM
     configure_cli
     case "$COMMAND" in
-        install) install_panel ;;
+        install) if [[ -n $JOIN_MASTER ]]; then install_agent; else install_panel; fi ;;
         update) update_panel ;;
         uninstall) uninstall_panel ;;
     esac

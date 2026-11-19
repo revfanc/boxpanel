@@ -29,6 +29,7 @@
 /usr/local/share/boxpanel/sing-box     # 受管的 sing-box 二进制（版本由面板管理）
 /etc/boxpanel/
   boxpanel.db                          # SQLite
+  agent.key                            # 节点专用 Ed25519 种子（0600）
   sing-box.json                        # 当前生效的服务端配置（面板生成，用户勿手改）
   sing-box.json.bak                    # 上一份可用配置，用于回滚
   certs/panel.{crt,key}                # 初始化的自签备用证书（保留）
@@ -50,6 +51,7 @@
 |---|---|
 | `/{web_path}/` | 面板 SPA（history 模式，深链接回退到 index.html） |
 | `/{web_path}/api/v1/...` | 管理 API（需登录） |
+| `/{web_path}/api/agent/v1/...` | 节点注册与心跳（HTTPS，见 §17） |
 | `/{sub_path}/{token}` | 订阅（无需登录，凭 token） |
 | 其他任何路径 | 返回空白 404，不暴露面板特征 |
 
@@ -63,6 +65,7 @@ internal/
   app/                        # 依赖装配、启动、优雅退出
   db/                         # 连接、迁移（embed SQL 文件）、查询
   auth/                       # 密码哈希(argon2id)、会话、登录限流、TOTP(后期)
+  agent/                      # 节点注册、签名、TLS、心跳状态
   httpapi/                    # handler、中间件、错误格式
   spa/                        # 静态资源 + history 回退 + index.html 注入
   singbox/                    # 二进制安装/升级、systemd 控制、check、apply+回滚、日志
@@ -653,3 +656,25 @@ T7.1 的 Clash `/connections` 快照在真机 20 MB 下载中只计到约 26%，
 - 开发与非 Linux 环境可配置通道及发送测试。网卡和 systemd 探针仅在 Linux 生产模式启用。
   API 和页面行为见 [API.md](API.md#t79-通知与告警)、[FRONTEND.md](FRONTEND.md#12-t79-服务器流量与通知)，
   请求格式依据和评审记录见 [T7.9.md](T7.9.md)。
+
+## 17. T8.2 节点注册与心跳
+
+- 同一个二进制按 `node_role` 运行主控或节点。节点的 `serve` 启动本机受管 sing-box、用户计数与网卡采样，
+  并主动连接主控。节点没有管理监听、面板用户或 ACME worker。主控通过节点主动发起的 HTTPS 请求进行双向身份校验。
+- 迁移 0005 扩展 `servers.status`，加入 `removed` 并保留原 ID、外键和历史流量。主控移除节点时清空公钥，
+  保留服务器行及其历史，服务器列表和订阅忽略该行。离线节点仍沿用 T8.1 的订阅规则。
+- `agent_join_tokens` 保存令牌的 SHA-256 摘要、服务器名称、过期秒数和用于撤销的编号。令牌是 32 字节随机值，
+  以无填充 base64url 传输，主控对 UTF-8 令牌字符串计算摘要。消耗令牌与写入 `pending` 服务器行在同一事务完成。
+  备份恢复会清空尚存的加入令牌，防止快照恢复已使用或已撤销的令牌。
+- Ed25519 密钥在节点生成。私钥种子存数据目录 `agent.key`（0600），公钥随注册发送。
+  节点 SQLite 保存角色、主控 URL、可选证书 pin、服务器 ID、公钥和最近心跳结果。
+- 节点以主控面板首页 HTTPS URL 为基地址，拒绝重定向。TLS 最低 1.2。自签模式的 pin 是叶证书
+  `SubjectPublicKeyInfo` DER 的 SHA-256，无填充 base64url。节点核对精确公钥和证书有效期，
+  以该公钥作为信任锚。其余证书走系统 CA 与主机名验证，ACME 轮换沿用系统信任。
+- 签名覆盖 HTTP 方法、含面板路径的完整 URL 路径、Unix 秒、nonce 和原始请求体 SHA-256。
+  主控校验时间偏差上限 120 秒，公钥取自活动服务器行。每个节点的 nonce 在进程内缓存 5 分钟。
+  缓存按最近成功用时清理过期项，最多 65,536 条。缓存已满时拒绝新 nonce，活动项保留到期。
+  重放、时间偏差、未知或已移除节点、验签失败均返回同一 401。
+- 首次心跳使服务器变为 `online`，更新版本及最近联系时间。主控每 30 秒检查，超过 90 秒未成功联系则标为
+  `offline`，重新联系时转为 `online`。`pending` 等待首次联系。断线只影响节点心跳重试，本地内核和计数继续运行。
+- T8.2 的心跳携带内核是否运行及节点进程运行秒数，主控更新联系时间和版本。入站、用户、规则和配置版本同步留在 T8.3。

@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/revfanc/boxpanel/internal/app"
+	"github.com/revfanc/boxpanel/internal/db"
 	"github.com/revfanc/boxpanel/internal/singbox"
 )
 
@@ -42,7 +43,12 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 	conn, err := app.OpenExisting(ctx, resolved.Database)
 	if err == nil {
 		defer conn.Close()
-		if _, err = app.LoadConfig(ctx, conn); err == nil {
+		role, roleErr := db.GetSetting(ctx, conn, db.NodeRole)
+		err = roleErr
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && role != db.RoleAgent) {
+			_, err = app.LoadConfig(ctx, conn)
+		}
+		if err == nil {
 			var manager *singbox.Manager
 			manager, err = newApplyManager(conn, resolved, core.resolve(paths, *dev), singbox.ApplyOptions{Dev: *dev})
 			if err == nil {
@@ -69,7 +75,7 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 func newApplyManager(conn *sql.DB, paths app.Paths, core singboxPaths, opts singbox.ApplyOptions) (*singbox.Manager, error) {
 	// Include auxiliary files in collision checks: apply must never replace the
 	// database, panel TLS keys, executable, or either systemd unit.
-	protected := []string{paths.Database, paths.Database + "-wal", paths.Database + "-shm", paths.CertFile, paths.KeyFile, core.binary}
+	protected := []string{paths.Database, paths.Database + "-wal", paths.Database + "-shm", paths.CertFile, paths.KeyFile, core.binary, app.AgentKeyPath(paths)}
 	for _, unit := range []string{singbox.PanelUnit, singbox.SingboxUnit} {
 		protected = append(protected, filepath.Join(singbox.DefaultUnitDir, unit))
 	}

@@ -232,5 +232,18 @@ func TestInfoShowsMasterAndAgentRole(t *testing.T) {
 	if err := db.SetSetting(context.Background(), conn, db.NodeRole, db.RoleAgent); err != nil {
 		t.Fatal(err)
 	}
-	check(db.RoleAgent)
+	if err := db.SetSetting(context.Background(), conn, db.AgentMaster, db.AgentConnection{
+		MasterURL: "https://master.example/panel/", ServerID: 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := configCommand(context.Background(), "info", app.InitOptions{Paths: paths}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); !strings.Contains(got, "节点模式（agent）") ||
+		!strings.Contains(got, "https://master.example/panel/") || !strings.Contains(got, "server_id: 2") ||
+		strings.Contains(got, "用户名") {
+		t.Fatalf("agent info = %q", got)
+	}
 }

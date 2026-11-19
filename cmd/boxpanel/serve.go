@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/revfanc/boxpanel/internal/acme"
+	"github.com/revfanc/boxpanel/internal/agent"
 	"github.com/revfanc/boxpanel/internal/alerts"
 	"github.com/revfanc/boxpanel/internal/app"
 	"github.com/revfanc/boxpanel/internal/auth"
@@ -129,7 +130,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := serve(ctx, opts, logger, stdout); err != nil {
-		logger.Error("无法启动面板，请按错误提示修复后重试。", "error", err)
+		logger.Error("无法启动 boxpanel 服务，请按错误提示修复后重试。", "error", err)
 		return 1
 	}
 	return 0
@@ -150,6 +151,16 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 		return err
 	}
 	defer conn.Close()
+	role, err := db.GetSetting(ctx, conn, db.NodeRole)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if role == db.RoleAgent {
+		return serveAgent(ctx, conn, opts, logger)
+	}
+	if role != "" && role != db.RoleMaster {
+		return fmt.Errorf("节点角色无效，请检查数据库中的 node_role 设置")
+	}
 	cfg, err := resolveServeConfig(ctx, conn, opts)
 	if err != nil {
 		return fmt.Errorf("load panel settings (check the data directory and initialized database): %w", err)
@@ -211,8 +222,15 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	if backups != nil {
 		backupAPI = backups
 	}
+	nodes := agent.NewMaster(conn, reader, nil)
 	panel.build = func(settings httpapi.PanelSettings) (http.Handler, error) {
-		api := httpapi.New(service, httpapi.Options{WebPath: settings.WebPath, Dev: opts.dev, Logger: logger, System: system, Singbox: manager, DB: conn, ReadDB: reader, Applier: manager, PanelPort: settings.WebPort, Subscriptions: store, PreparePanel: panel.prepare, Certificates: certificates, Backups: backupAPI, Alerts: alertService})
+		api := httpapi.New(service, httpapi.Options{WebPath: settings.WebPath, Dev: opts.dev, Logger: logger, System: system, Singbox: manager, DB: conn, ReadDB: reader, Applier: manager, PanelPort: settings.WebPort, Subscriptions: store, PreparePanel: panel.prepare, Certificates: certificates, Backups: backupAPI, Alerts: alertService, Agents: nodes, AgentPin: func() (string, error) {
+			pair, err := certificates.GetCertificate(nil)
+			if err != nil {
+				return "", err
+			}
+			return agent.CertificatePin(pair)
+		}})
 		spaHandler, err := spa.New(web.Assets, spa.Options{WebPath: settings.WebPath, Version: version, API: api})
 		if err != nil {
 			return nil, fmt.Errorf("prepare HTTP server: %w", err)
@@ -257,6 +275,8 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	} else {
 		close(backupDone)
 	}
+	nodesDone := make(chan struct{})
+	go func() { defer close(nodesDone); nodes.Run(workerCtx, logger) }()
 	alertsDone := make(chan struct{})
 	go func() { defer close(alertsDone); alertService.Run(workerCtx) }()
 	trafficDone := make(chan struct{})
@@ -267,6 +287,13 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	} else {
 		close(trafficDone)
 	}
-	defer func() { cancelWorker(); <-workerDone; <-trafficDone; <-backupDone; <-alertsDone }()
+	defer func() {
+		cancelWorker()
+		<-workerDone
+		<-trafficDone
+		<-backupDone
+		<-alertsDone
+		<-nodesDone
+	}()
 	return panel.run(listener, handler)
 }

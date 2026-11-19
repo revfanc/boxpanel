@@ -36,7 +36,7 @@ func (a *api) serverList(w http.ResponseWriter, r *http.Request) {
 		a.resourceError(w, err)
 		return
 	}
-	rows, err := conn.QueryContext(r.Context(), "SELECT "+serverColumns+" FROM servers ORDER BY is_local DESC, id")
+	rows, err := conn.QueryContext(r.Context(), "SELECT "+serverColumns+" FROM servers WHERE status<>'removed' ORDER BY is_local DESC, id")
 	if err != nil {
 		a.resourceError(w, fmt.Errorf("list servers: %w", err))
 		return
@@ -64,15 +64,8 @@ func (a *api) serverRename(w http.ResponseWriter, r *http.Request) {
 		a.resourceError(w, err)
 		return
 	}
-	var input struct {
-		Name string `json:"name"`
-	}
-	if !decodeResource(w, r, &input) {
-		return
-	}
-	name := strings.TrimSpace(input.Name)
-	if name == "" || utf8.RuneCountInString(name) > 64 || strings.ContainsFunc(input.Name, unicode.IsControl) {
-		a.resourceError(w, invalid("name", "请输入 1–64 个字符的服务器名称，且不要包含控制字符。"))
+	name, ok := a.readServerName(w, r)
+	if !ok {
 		return
 	}
 	conn, err := a.writeDB()
@@ -81,10 +74,25 @@ func (a *api) serverRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Renaming changes subscription metadata. It does not require kernel Apply.
-	s, err := scanServer(conn.QueryRowContext(r.Context(), "UPDATE servers SET name=?, updated_at=unixepoch() WHERE id=? RETURNING "+serverColumns, name, id))
+	s, err := scanServer(conn.QueryRowContext(r.Context(), "UPDATE servers SET name=?, updated_at=unixepoch() WHERE id=? AND status<>'removed' RETURNING "+serverColumns, name, id))
 	if err != nil {
 		a.resourceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, s)
+}
+
+func (a *api) readServerName(w http.ResponseWriter, r *http.Request) (string, bool) {
+	var input struct {
+		Name string `json:"name"`
+	}
+	if !decodeResource(w, r, &input) {
+		return "", false
+	}
+	name := strings.TrimSpace(input.Name)
+	if name == "" || utf8.RuneCountInString(name) > 64 || strings.ContainsFunc(input.Name, unicode.IsControl) {
+		a.resourceError(w, invalid("name", "请输入 1–64 个字符的服务器名称，且不要包含控制字符。"))
+		return "", false
+	}
+	return name, true
 }

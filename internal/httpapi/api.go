@@ -14,9 +14,11 @@ import (
 	"net/netip"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/revfanc/boxpanel/internal/agent"
 	"github.com/revfanc/boxpanel/internal/alerts"
 	"github.com/revfanc/boxpanel/internal/auth"
 	"github.com/revfanc/boxpanel/internal/host"
@@ -28,6 +30,8 @@ import (
 const CookieName = "boxpanel_session"
 
 type Options struct {
+	Agents         *agent.Master
+	AgentPin       func() (string, error)
 	Alerts         *alerts.Service
 	Backups        Backups
 	Certificates   Certificates
@@ -140,8 +144,25 @@ func New(service *auth.Service, opts Options) http.Handler {
 	a.registerAlerts(register)
 	a.registerResources(register)
 	a.registerSubscriptions(register)
+	if opts.Agents != nil {
+		register("GET", "/api/v1/servers/join-tokens", a.joinTokenList, true)
+		register("POST", "/api/v1/servers/join-tokens", a.joinTokenCreate, true)
+		register("DELETE", "/api/v1/servers/join-tokens/{id}", a.joinTokenRevoke, true)
+		register("DELETE", "/api/v1/servers/{id}", a.serverRemove, true)
+	}
 	mux.HandleFunc("/", notFound)
-	return middleware(csrf(mux), opts.Logger, routes)
+	panel := middleware(csrf(mux), opts.Logger, routes)
+	if opts.Agents == nil {
+		return panel
+	}
+	nodes := a.agentEndpoints()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == agent.Prefix || strings.HasPrefix(r.URL.Path, agent.Prefix+"/") {
+			nodes.ServeHTTP(w, r)
+			return
+		}
+		panel.ServeHTTP(w, r)
+	})
 }
 
 func (a *api) authenticate(next http.Handler) http.Handler {

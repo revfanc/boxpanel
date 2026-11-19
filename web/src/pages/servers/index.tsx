@@ -3,14 +3,15 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
+import { CopyField } from '@/components/CopyField'
 import { ErrorNotice, Loading } from '@/components/Feedback'
-import { Empty, Field, Page, Panel, Submit } from '@/components/ResourceUI'
+import { Confirm, Empty, Field, Page, Panel, Submit } from '@/components/ResourceUI'
 import { Button } from '@/components/ui/button'
 import { useOperation } from '@/hooks/use-operation'
 import { zhCN as t } from '@/i18n/zh-CN'
 import { api } from '@/lib/api'
-import { serversQuery } from '@/lib/resources'
-import type { Server } from '@/types/api'
+import { refreshResources, serversQuery } from '@/lib/resources'
+import type { IssuedJoinToken, JoinToken, Server } from '@/types/api'
 
 const renameSchema = z.object({
   name: z.string().refine((name) => {
@@ -43,10 +44,82 @@ function RenameForm({ server, close }: { server: Server; close: () => void }) {
   </form>
 }
 
+const tokenKey = ['servers', 'join-tokens'] as const
+
+function joinCommand(issued: IssuedJoinToken) {
+  const version = window.__BOXPANEL__?.version ?? ''
+  const tag = /^v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*)?$/.test(version) ? version : ''
+  const script = `https://raw.githubusercontent.com/revfanc/boxpanel/${tag || 'main'}/scripts/install.sh`
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'"
+  return `bash <(curl -fsSL ${script}) --join ${quote(issued.master_url)} --token ${quote(issued.token)}`
+    + (issued.master_pin ? ` --master-pin ${quote(issued.master_pin)}` : '')
+    + (tag ? ` --version ${tag}` : '')
+}
+
+function JoinForm() {
+  const client = useQueryClient()
+  const operation = useOperation()
+  const revoke = useOperation()
+  const tokens = useQuery({
+    queryKey: tokenKey,
+    queryFn: ({ signal }) => api<JoinToken[]>('/servers/join-tokens', { signal }),
+    refetchInterval: 30_000,
+  })
+  const [issued, setIssued] = useState<IssuedJoinToken | null>(null)
+  const form = useForm<z.infer<typeof renameSchema>>({ resolver: zodResolver(renameSchema), defaultValues: { name: '' } })
+  const active = tokens.data ?? []
+  return <Panel title={t.servers.add} hint={t.servers.addHint}>
+    <form className="space-y-3" onSubmit={form.handleSubmit((body) => operation.run(
+      () => api<IssuedJoinToken>('/servers/join-tokens', { method: 'POST', body }),
+      async (result) => {
+        const { id, name, expires_at } = result
+        await client.cancelQueries({ queryKey: tokenKey })
+        client.setQueryData<JoinToken[]>(tokenKey, (current) => [{ id, name, expires_at }, ...(current ?? [])])
+        setIssued(result)
+        form.reset()
+        await client.invalidateQueries({ queryKey: tokenKey })
+      },
+    ))}>
+      <Field label={t.servers.name} error={form.formState.errors.name?.message} disabled={operation.pending} {...form.register('name')} />
+      {operation.error != null && <ErrorNotice error={operation.error} />}
+      <Submit pending={operation.pending} label={t.servers.generate} />
+    </form>
+    {issued && active.some((token) => token.id === issued.id) &&
+      <CopyField key={issued.id} label={t.servers.command} value={joinCommand(issued)} />}
+    <div className="space-y-2 border-t pt-4">
+      <h2 className="text-sm font-medium">{t.servers.activeTokens}</h2>
+      {tokens.isPending ? <Loading /> : tokens.isError ? <ErrorNotice error={tokens.error} retry={() => { void tokens.refetch() }} />
+        : active.length === 0 ? <p className="text-sm text-muted-foreground">{t.servers.noTokens}</p>
+          : <ul className="divide-y">
+            {active.map((token) => <li key={token.id} className="flex flex-wrap items-center justify-between gap-3 py-2">
+              <div className="min-w-0">
+                <p className="text-sm font-medium">{token.name}</p>
+                <p className="text-xs text-muted-foreground">{t.servers.expires} {new Date(token.expires_at * 1000).toLocaleString('zh-CN')}</p>
+              </div>
+              <Button type="button" size="sm" variant="outline" disabled={revoke.pending} aria-label={`${t.servers.revoke} ${token.name}`} onClick={() => {
+                void revoke.run(() => api<void>(`/servers/join-tokens/${token.id}`, { method: 'DELETE' }), async () => {
+                  if (issued?.id === token.id) setIssued(null)
+                  await client.cancelQueries({ queryKey: tokenKey })
+                  client.setQueryData<JoinToken[]>(tokenKey, (current) => current?.filter((row) => row.id !== token.id))
+                  await client.invalidateQueries({ queryKey: tokenKey })
+                })
+              }}>{t.servers.revoke}</Button>
+            </li>)}
+          </ul>}
+      {revoke.error != null && <ErrorNotice error={revoke.error} />}
+    </div>
+  </Panel>
+}
+
 export function ServersPage() {
-  const query = useQuery(serversQuery)
+  const client = useQueryClient()
+  const query = useQuery({ ...serversQuery, refetchInterval: 30_000 })
+  const operation = useOperation()
+  const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<number | null>(null)
-  return <Page title={t.pages.servers}>
+  const [removing, setRemoving] = useState<Server | null>(null)
+  return <Page title={t.pages.servers} actions={<Button aria-expanded={adding} onClick={() => setAdding(!adding)}>{adding ? t.servers.closeAdd : t.servers.add}</Button>}>
+    {adding && <JoinForm />}
     {query.isPending ? <Loading /> : query.isError ? <ErrorNotice error={query.error} retry={() => { void query.refetch() }} />
       : query.data.length === 0 ? <Empty>{t.servers.empty}</Empty> : <div className="grid min-w-0 gap-4 lg:grid-cols-2">
         {query.data.map((server) => <Panel key={server.id} title={server.name}>
@@ -54,11 +127,23 @@ export function ServersPage() {
             <dt className="text-muted-foreground">{t.servers.address}</dt><dd>{server.public_host || t.common.unknown}</dd>
             <dt className="text-muted-foreground">{t.servers.status}</dt><dd>{t.servers.statuses[server.status]}</dd>
             <dt className="text-muted-foreground">{t.servers.version}</dt><dd>{server.version || t.common.unknown}</dd>
+            {!server.is_local && <>
+              <dt className="text-muted-foreground">{t.servers.lastSeen}</dt><dd>{server.last_seen_at === null ? t.servers.noHeartbeat : new Date(server.last_seen_at * 1000).toLocaleString('zh-CN')}</dd>
+            </>}
           </dl>
-          {editing === server.id
-            ? <RenameForm server={server} close={() => setEditing(null)} />
-            : <Button variant="outline" disabled={editing !== null} onClick={() => setEditing(server.id)}>{t.servers.rename}</Button>}
+          {editing === server.id ? <RenameForm server={server} close={() => setEditing(null)} />
+            : <div className="flex flex-wrap gap-2">
+              <Button variant="outline" disabled={editing !== null} onClick={() => setEditing(server.id)}>{t.servers.rename}</Button>
+              {!server.is_local && <Button variant="outline" disabled={editing !== null} onClick={() => { operation.reset(); setRemoving(server) }}>{t.servers.remove}</Button>}
+            </div>}
         </Panel>)}
       </div>}
+    {removing && <Confirm open onOpenChange={(open) => { if (!open) setRemoving(null) }}
+      title={t.servers.remove} description={t.servers.removeHint(removing.name)} pending={operation.pending} error={operation.error} onConfirm={() => {
+        void operation.run(() => api<void>(`/servers/${removing.id}`, { method: 'DELETE' }), async () => {
+          await refreshResources(client)
+          setRemoving(null)
+        })
+      }} />}
   </Page>
 }

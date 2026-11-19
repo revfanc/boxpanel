@@ -23,7 +23,10 @@ func Migrate(ctx context.Context, conn *sql.DB) error {
 	return migrate(ctx, conn, migrations)
 }
 
-const serversMigration = "migrations/0004_servers.sql"
+const (
+	serversMigration = "migrations/0004_servers.sql"
+	agentsMigration  = "migrations/0005_agents.sql"
+)
 
 func migrate(ctx context.Context, pool *sql.DB, source fs.FS) error {
 	names, err := fs.Glob(source, "migrations/*.sql")
@@ -55,7 +58,7 @@ func migrate(ctx context.Context, pool *sql.DB, source fs.FS) error {
 		return fmt.Errorf("reserve database migration connection: %w", err)
 	}
 	defer conn.Close()
-	if slices.Contains(names, serversMigration) {
+	if slices.Contains(names, serversMigration) || slices.Contains(names, agentsMigration) {
 		restore, err := prepareTableRebuild(ctx, conn)
 		if err != nil {
 			return err
@@ -147,13 +150,18 @@ func prepareTableRebuild(ctx context.Context, conn *sql.Conn) (func(), error) {
 }
 
 func applyMigration(ctx context.Context, tx *sql.Tx, name, script string) error {
-	if name != serversMigration {
+	var tables string
+	switch name {
+	case serversMigration:
+		tables = "('inbounds','server_traffic_samples','alert_events')"
+	case agentsMigration:
+		tables = "('servers')"
+	default:
 		_, err := tx.ExecContext(ctx, script)
 		return err
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT sql FROM sqlite_schema
-		WHERE tbl_name IN ('inbounds','server_traffic_samples','alert_events')
-		AND type IN ('index','trigger') AND sql IS NOT NULL ORDER BY rowid`)
+		WHERE tbl_name IN `+tables+` AND type IN ('index','trigger') AND sql IS NOT NULL ORDER BY rowid`)
 	if err != nil {
 		return fmt.Errorf("read schema objects for table rebuild: %w", err)
 	}

@@ -146,7 +146,7 @@ func (a *api) prepareInbound(ctx context.Context, protocol string, patch json.Ra
 	return mergeInboundOptions(protocol, defaults, patch)
 }
 func localInboundOnly() error {
-	return &resourceError{422, "server_not_local", "server_id", "多服务器加入功能尚未开放，请选择本机。"}
+	return &resourceError{422, "server_not_local", "server_id", "当前版本仅支持管理本机入站，请选择本机。"}
 }
 
 // Reject explicit remote IDs before probing local sockets or Reality targets.

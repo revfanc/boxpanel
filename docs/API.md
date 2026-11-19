@@ -227,18 +227,44 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 | GET | `/reality/recommend` | `{targets: [{server, tls13, h2, latency_ms, ok}]}`，前 3 个推荐 |
 | POST | `/reality/check` | `{server, port?}` → 单个检测结果 |
 
-## 服务器（T8.1）
+## 服务器（T8.1 / T8.2）
 
 | 方法 | 路径 | 请求与成功响应 |
 |---|---|---|
 | GET | `/servers` | 200，服务器数组，本机优先，其余按 ID 升序 |
 | PUT | `/servers/{id}` | `{"name":"新名称"}`，200 返回改名后的服务器 |
+| DELETE | `/servers/{id}` | 移除远程服务器并撤销它的公钥，204 |
+| GET | `/servers/join-tokens` | 200，未过期且未使用令牌的元数据数组 |
+| POST | `/servers/join-tokens` | `{"name":"服务器名称"}`，201，返回元数据、`token`、`master_url` 及可选 `master_pin` |
+| DELETE | `/servers/join-tokens/{id}` | 撤销该编号的令牌，204（含已不存在） |
 
 每项返回 `id`、`name`、`public_host`、`is_local`、`status`、`last_seen_at`、`version`、`created_at` 和
 `updated_at`。状态为 `local`、`online`、`offline` 或 `pending`。时间使用 UTC Unix 秒，`last_seen_at` 可为 `null`。
 `version` 为已记录的 boxpanel 版本，未记录时为空。接口要求登录，改名沿用 CSRF 校验。
 名称去首尾空白后须为 1–64 个字符，且原值中不得包含控制字符。无效名称返回 400，未知 ID 返回 404。
 改名直接更新服务器记录，下一次订阅使用新名称。公网地址在本机设置页修改。
+服务器列表排除 `removed`；本机、已移除或不存在的服务器无法通过 DELETE 移除，返回 404。
+令牌元数据为 `id`、`name`、`expires_at`。只有签发响应含令牌明文，使用和撤销后从列表消失。
+签发要求 HTTPS，HTTP 面板返回 `409 agent_requires_https`。令牌管理和服务器移除沿用管理员会话与 CSRF 校验。
+
+### 节点 API（T8.2）
+
+前缀为 `/{web_path}/api/agent/v1`，只接受 HTTPS 和 `application/json`。节点不使用面板会话或 CSRF。
+请求体限 8 KiB、路径不含查询参数。所有 base64url 值均不带填充。
+
+| 方法 | 路径 | 请求与成功响应 |
+|---|---|---|
+| POST | `/join` | `{token, public_key, hostname, public_ip, version}`，201 `{server_id}` |
+| POST | `/heartbeat` | `{version, singbox_active, uptime}`，204。uptime 是节点进程运行秒数 |
+
+注册按 TCP 对端 IP 限流，每分钟 10 次，返回 429 时带 `Retry-After`。`public_ip` 为空时记录连接对端 IP，
+不会采用转发头。失效、已使用、过期或撤销的令牌统一返回 `401 invalid_join_token`。
+
+心跳请求头为 `X-Boxpanel-Server`（十进制 ID）、`X-Boxpanel-Timestamp`（Unix 秒）、
+`X-Boxpanel-Nonce`（16 字节随机数的 base64url）和 `X-Boxpanel-Signature`（Ed25519 签名的 base64url）。
+签名原文为 `method\npath\ntimestamp\nnonce\nsha256(body)`，使用原始请求体字节和小写十六进制 SHA-256。
+`path` 包含面板路径，例如 `/k3m9x2p7q1ab/api/agent/v1/heartbeat`。
+签名认证失败统一返回 `401 agent_unauthorized`。
 
 ## 入站
 
@@ -263,7 +289,7 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 创建返回 201，修改/启停返回 200 最新脱敏对象，删除成功返回 204；失败按错误表返回。
 `/inbounds/suggest` 只提供本机推荐参数，不写 DB、不触发生效。
 入站响应含 `server_id`。创建省略该字段时使用本机，更新省略时保持归属。
-写入指定非本机 ID，或尝试修改、启停、删除非本机入站，返回 `422 server_not_local`，提示「多服务器加入功能尚未开放」。
+写入指定非本机 ID，或尝试修改、启停、删除非本机入站，返回 `422 server_not_local`，提示「当前版本仅支持管理本机入站」。
 
 ## 用户
 

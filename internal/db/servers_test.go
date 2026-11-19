@@ -126,3 +126,37 @@ func TestServersMigrationRollsBackOnOrphanedSample(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestAgentMigrationPreservesRemoteServerReferences(t *testing.T) {
+	ctx := t.Context()
+	conn := legacyServersDB(t)
+	source := fstest.MapFS{}
+	for _, name := range []string{"migrations/0001_initial.sql", "migrations/0002_user_traffic.sql", "migrations/0003_alerts.sql", serversMigration} {
+		raw, err := migrations.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		source[name] = &fstest.MapFile{Data: raw}
+	}
+	if err := migrate(ctx, conn, source); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, conn, `INSERT INTO servers (id,name,public_host,status,agent_public_key) VALUES(2,'edge','edge.example','online','key');
+		INSERT INTO server_traffic_samples VALUES (2,456,'eth0',12,34);
+		UPDATE inbounds SET server_id=2 WHERE id=3;`)
+	if err := Migrate(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []string{"UPDATE servers SET status='removed' WHERE id=2", "UPDATE servers SET status='removed' WHERE is_local=1"} {
+		if _, err := conn.Exec(invalid); err == nil {
+			t.Errorf("invalid removal accepted: %s", invalid)
+		}
+	}
+	mustExec(t, conn, "UPDATE servers SET status='removed',agent_public_key=NULL WHERE id=2")
+	var host string
+	var rx int
+	if err := conn.QueryRow(`SELECT s.public_host,t.rx FROM servers s JOIN inbounds i ON i.server_id=s.id
+		JOIN server_traffic_samples t ON t.server_id=s.id WHERE s.id=2 AND s.status='removed'`).Scan(&host, &rx); err != nil || host != "edge.example" || rx != 12 {
+		t.Fatal("migration or removal changed server data", host, rx, err)
+	}
+}

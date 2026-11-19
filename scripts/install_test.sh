@@ -104,6 +104,7 @@ case "$1" in
     version) echo 'boxpanel @TAG@' ;;
     info) [[ -s $BOXPANEL_DB_PATH ]] || exit 1; echo 'panel address and username' ;;
     init) [[ ! -s $BOXPANEL_DB_PATH ]] || exit 1; echo initialized >"$BOXPANEL_DB_PATH"; echo 'one-time password' ;;
+    join) echo agent >"$BOXPANEL_DB_PATH" ;;
     singbox)
         mkdir -p "${BOXPANEL_SINGBOX_PATH%/*}"
         echo core >"$BOXPANEL_SINGBOX_PATH"
@@ -398,12 +399,52 @@ test_restore_failure() {
     reject --restore "$FIXTURE/backup.enc" --port 2053
 }
 
+test_join_install() {
+    local token pin
+    printf -v token '%043d' 0
+    printf -v pin '%043d' 1
+    run_install --join 'https://[2001:db8::10]:2053/mainpanel/' --token "$token" --master-pin "$pin" </dev/null
+    contains "$FIXTURE/calls" 'singbox install --for-join --preserve-version'
+    contains "$FIXTURE/calls" "join --master https://[2001:db8::10]:2053/mainpanel/ --token $token --master-pin $pin"
+    contains "$FIXTURE/calls" 'systemctl restart boxpanel.service'
+    contains "$FIXTURE/calls" 'system ready'
+    contains "$FIXTURE/data/boxpanel.db" agent
+    absent "$FIXTURE/calls" ' init'
+    absent "$FIXTURE/calls" ' apply'
+    absent "$FIXTURE/calls" 'firewall-open'
+    absent "$FIXTURE/output" "$token"
+    absent "$FIXTURE/output" "$pin"
+    reject --join https://master.test/panel --token "$token"
+    [[ $(grep -c 'cli .* join --master' "$FIXTURE/calls") == 1 ]] || fail 'consumed a second token on an initialized node'
+}
+
+test_join_dry_run() {
+    local token
+    printf -v token '%043d' 0
+    run_install --join https://master.test/panel/ --token "$token" --dry-run
+    contains "$FIXTURE/output" 'join: dependencies'
+    contains "$FIXTURE/output" '(non-interactive)'
+    absent "$FIXTURE/output" "$token"
+    absent "$FIXTURE/output" 'firewall-open'
+    reject --join http://master.test/panel --token "$token" --dry-run
+    reject --join 'https://master.test/panel?x=1' --token "$token" --dry-run
+    reject --join https://master.test:65536/panel --token "$token" --dry-run
+    reject --join https://master.test/panel --dry-run
+    reject --join https://master.test/panel --token "$token" --master-pin short --dry-run
+    reject --join https://master.test/panel --token "$token" --port 2053
+    reject --join https://master.test/panel --token "$token" --restore backup
+    reject update --join https://master.test/panel --token "$token"
+    reject --token "$token" --dry-run
+    reject --master-pin "$token" --dry-run
+    [[ ! -s $FIXTURE/calls && ! -e $FIXTURE/local && ! -e $FIXTURE/lock ]] || fail 'join dry-run modified system'
+}
+
 if [[ ${1:-} == --case ]]; then
     fixture
     "test_$2"
     exit 0
 fi
-for scenario in restore_install restore_failure nft_dependency update_nft_dependency install resume update uninstall rejections download_safety optional_bbr_and_lock piped_entry package_locks apt_install_lock package_lock_timeout dnf_locks dnf_lock_timeout package_permission_error package_nonlock_error; do
+for scenario in join_install join_dry_run restore_install restore_failure nft_dependency update_nft_dependency install resume update uninstall rejections download_safety optional_bbr_and_lock piped_entry package_locks apt_install_lock package_lock_timeout dnf_locks dnf_lock_timeout package_permission_error package_nonlock_error; do
     # A separate bash process preserves errexit in the installer under test.
     output=$(mktemp)
     if bash "$0" --case "$scenario" >"$output" 2>&1; then

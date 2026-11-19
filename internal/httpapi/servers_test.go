@@ -45,7 +45,7 @@ func TestServerListRenameAndLocalInboundWrites(t *testing.T) {
 	}
 
 	w = f.call(t, "POST", "inbounds", `{"server_id":2,"protocol":"vless_reality"}`, 422)
-	if !strings.Contains(w.Body.String(), "多服务器加入功能尚未开放") || f.apply.calls != calls {
+	if !strings.Contains(w.Body.String(), "当前版本仅支持管理本机入站") || f.apply.calls != calls {
 		t.Fatal("remote create proceeded to Apply")
 	}
 	w = f.call(t, "POST", "inbounds", `{"server_id":1,"protocol":"vless_reality","port":443,"options":{"server_name":"www.example.com"}}`, 201)

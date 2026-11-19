@@ -16,7 +16,9 @@ Commands:
   info     Print the panel URL and administrator username
   reset-admin  Reset administrator credentials and revoke sessions
   set-host <IP|domain>  Change the public host and print the new panel URL
-  serve    Serve the panel over HTTPS (see 'boxpanel serve --help')
+  join     Register this machine with a master panel
+  leave    Clear the local node identity
+  serve    Run the panel or the agent (see 'boxpanel serve --help')
   apply    Regenerate, validate and apply sing-box configuration
   singbox  Install or inspect the managed sing-box binary
   system   Manage installer firewall rules and enable BBR
@@ -37,6 +39,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if args[0] == "backup" || args[0] == "restore" || args[0] == "restore-staged" {
 		return runBackup(args[0], args[1:], stdout, stderr)
+	}
+	if args[0] == "join" || args[0] == "leave" {
+		return runAgentCommand(args[0], args[1:], stdout, stderr)
 	}
 	if args[0] == "serve" {
 		return runServe(args[1:], stdout, stderr)

@@ -108,6 +108,19 @@ func counterDelta(previous, current uint64) int64 {
 	return int64(min(current, math.MaxInt64))
 }
 
+// RunTraffic collects local network samples without evaluating or delivering alerts.
+func (s *Service) RunTraffic(ctx context.Context) {
+	tick := time.NewTicker(time.Minute)
+	defer tick.Stop()
+	for ctx.Err() == nil {
+		s.log(s.sampleTraffic(ctx, s.opts.Now()))
+		select {
+		case <-ctx.Done():
+		case <-tick.C:
+		}
+	}
+}
+
 func (s *Service) sampleTraffic(ctx context.Context, now time.Time) error {
 	if s.opts.Network == nil {
 		return nil

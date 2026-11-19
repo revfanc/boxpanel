@@ -11,6 +11,10 @@ import (
 
 func TestMultiServerSubscription(t *testing.T) {
 	_, store := publicFixture(t)
+	original, err := store.Load(context.Background(), 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	legacy := fixture(t)
 	hy := legacy.Nodes[1]
 	remoteOptions, err := json.Marshal(struct {
@@ -86,4 +90,22 @@ func TestMultiServerSubscription(t *testing.T) {
 	if _, err := store.Load(context.Background(), 1, nil); err != ErrUnavailable {
 		t.Fatalf("remote certificate pin mismatch: %v", err)
 	}
+	if _, err := store.DB.Exec("UPDATE servers SET status='removed' WHERE id=2"); err != nil {
+		t.Fatal(err)
+	}
+	filtered, err := store.Load(context.Background(), 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, format := range []Format{Singbox, Clash, Base64} {
+		before, err := Render(original.Snapshot, format)
+		if err != nil {
+			t.Fatal(err)
+		}
+		after, err := Render(filtered.Snapshot, format)
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatalf("removed server affected %s subscription: %v", format, err)
+		}
+	}
+
 }

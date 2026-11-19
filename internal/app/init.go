@@ -100,13 +100,8 @@ func Initialize(ctx context.Context, opts InitOptions) (InitResult, error) {
 		return result, fmt.Errorf("begin initialization: %w", err)
 	}
 	defer tx.Rollback()
-	var count int
-	if err := tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM admins) + (SELECT count(*) FROM settings)
-		+ (SELECT count(*) FROM users) + (SELECT count(*) FROM inbounds) + (SELECT count(*) FROM sessions)`).Scan(&count); err != nil {
-		return result, fmt.Errorf("check initialization state: %w", err)
-	}
-	if count != 0 {
-		return result, ErrInitialized
+	if err := CheckUninitialized(ctx, tx); err != nil {
+		return result, err
 	}
 	// The transaction's IMMEDIATE lock prevents concurrent initializers from
 	// overwriting credentials, settings or certificate files.
@@ -150,11 +145,14 @@ func Initialize(ctx context.Context, opts InitOptions) (InitResult, error) {
 	}
 	for key, value := range map[db.SettingKey[string]]string{
 		db.WebPath: webPath, db.SubPath: subPath, db.PublicHost: ip.String(), db.PanelTLSMode: mode,
-		db.SetupStep: "welcome", db.PanelName: "boxpanel", db.SingboxVersion: "", db.NodeRole: db.RoleMaster,
+		db.SetupStep: "welcome", db.PanelName: "boxpanel", db.NodeRole: db.RoleMaster,
 	} {
 		if err := db.SetSetting(ctx, tx, key, value); err != nil {
 			return result, err
 		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO settings (key,value) VALUES ('singbox_version','""') ON CONFLICT (key) DO NOTHING`); err != nil {
+		return result, fmt.Errorf("initialize core version: %w", err)
 	}
 	if err := db.SetSetting(ctx, tx, db.WebPort, port); err != nil {
 		return result, err
@@ -247,11 +245,11 @@ func randomPort() (int, error) {
 
 func writeNewPrivateFile(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return fmt.Errorf("create certificate directory (choose writable --cert-file/--key-file paths): %w", err)
+		return fmt.Errorf("create private file directory (check data and certificate paths): %w", err)
 	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
-		return fmt.Errorf("create certificate file (preserve existing certificates and choose unused --cert-file/--key-file paths): %w", err)
+		return fmt.Errorf("create private file (check permissions and preserve existing keys): %w", err)
 	}
 	if _, err = file.Write(data); err == nil {
 		err = file.Sync()
@@ -262,7 +260,7 @@ func writeNewPrivateFile(path string, data []byte) error {
 	}
 	if err != nil {
 		_ = os.Remove(path)
-		return fmt.Errorf("write certificate file (check available space and retry): %w", err)
+		return fmt.Errorf("write private file (check available space and retry): %w", err)
 	}
 	return nil
 }

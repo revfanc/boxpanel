@@ -70,6 +70,7 @@ func fixture(t *testing.T) (string, *sql.DB) {
 		{`INSERT INTO inbounds(id,tag,protocol,port,options,created_at,updated_at) VALUES(2,'hy2','hysteria2',8443,?,1,1)`, []any{`{"sni":"www.bing.com","cert_mode":"self_signed","up_mbps":0,"down_mbps":0,"port_hopping":{"enabled":false,"start":20000,"end":30000}}`}},
 		{`INSERT INTO users(name,uuid,password,sub_token,traffic_up,traffic_down,created_at) VALUES('alice','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','retained-password','retained-subscription-token',123,456,1)`, nil},
 		{`INSERT INTO sessions(id,admin_id,expires_at,created_at) VALUES('revoked-after-restore',1,9999999999,1)`, nil},
+		{`INSERT INTO agent_join_tokens (name,token_hash,expires_at) VALUES ('edge',zeroblob(32),9999999999)`, nil},
 	} {
 		if _, err := conn.ExecContext(ctx, q.sql, q.args...); err != nil {
 			t.Fatal(err)
@@ -178,6 +179,9 @@ func TestRoundTripPreservesIdentityAndConfig(t *testing.T) {
 	var count int
 	if err = restored.QueryRow("SELECT count(*) FROM sessions").Scan(&count); err != nil || count != 0 {
 		t.Fatal("sessions survived")
+	}
+	if err = restored.QueryRow("SELECT count(*) FROM agent_join_tokens").Scan(&count); err != nil || count != 0 {
+		t.Fatal("one-time join tokens survived restore")
 	}
 	for name, want := range a.Files {
 		if name == "boxpanel.db" {

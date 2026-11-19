@@ -110,6 +110,18 @@ export interface Server {
   updated_at: number
 }
 
+export interface JoinToken {
+  id: number
+  name: string
+  expires_at: number
+}
+
+export interface IssuedJoinToken extends JoinToken {
+  token: string
+  master_url: string
+  master_pin?: string
+}
+
 interface InboundBase {
   server_id: number
   id: number

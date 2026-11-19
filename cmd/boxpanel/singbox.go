@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
@@ -49,7 +50,7 @@ type singboxOptions struct {
 	acmeDirectory                          string
 	command, version, unitDir, panelBinary string
 	dev                                    bool
-	preserveVersion                        bool
+	preserveVersion, forJoin               bool
 	paths                                  app.Paths
 	core                                   singboxPaths
 }
@@ -72,6 +73,7 @@ func parseSingboxOptions(args []string, output io.Writer) (singboxOptions, error
 	if opts.command == "install" {
 		paths.addACME(flags)
 		flags.StringVar(&opts.version, "version", singbox.PinnedVersion, "stable version published more than seven days ago")
+		flags.BoolVar(&opts.forJoin, "for-join", false, "prepare sing-box on an uninitialized node before boxpanel join")
 		flags.BoolVar(&opts.preserveVersion, "preserve-version", false, "restore the database-recorded core version when present (installer/reinstall)")
 		flags.StringVar(&opts.unitDir, "unit-dir", os.Getenv("BOXPANEL_UNIT_DIR"), "systemd unit directory (BOXPANEL_UNIT_DIR; default /etc/systemd/system)")
 		flags.StringVar(&opts.panelBinary, "panel-binary", os.Getenv("BOXPANEL_BINARY"), "panel executable for systemd (BOXPANEL_BINARY; default /usr/local/bin/boxpanel)")
@@ -207,17 +209,44 @@ func singboxCommand(ctx context.Context, opts singboxOptions, deps singboxDepend
 	if err != nil {
 		return err
 	}
-	conn, err := app.OpenExisting(ctx, opts.paths.Database)
+	var conn *sql.DB
+	if err := checkAgentCorePath(opts.paths, opts.panelBinary, opts.core.binary, opts.core.config); err != nil {
+		return err
+	}
+	if opts.forJoin {
+		conn, err = app.OpenNodeDatabase(ctx, opts.paths)
+	} else {
+		conn, err = app.OpenExisting(ctx, opts.paths.Database)
+	}
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	if _, err := app.LoadConfig(ctx, conn); err != nil {
-		return err
+	var settings db.SettingsDB = conn
+	if opts.forJoin {
+		tx, err := conn.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin preparation for node join: %w", err)
+		}
+		defer tx.Rollback()
+		if err := app.CheckUninitialized(ctx, tx); err != nil {
+			return err
+		}
+		settings = tx
+	} else {
+		role, err := db.GetSetting(ctx, conn, db.NodeRole)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if role != db.RoleAgent {
+			if _, err := app.LoadConfig(ctx, conn); err != nil {
+				return err
+			}
+		}
 	}
 	if opts.preserveVersion {
-		recorded, err := db.GetSetting(ctx, conn, db.SingboxVersion)
-		if err != nil {
+		recorded, err := db.GetSetting(ctx, settings, db.SingboxVersion)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
 		if recorded != "" {
@@ -258,7 +287,7 @@ func singboxCommand(ctx context.Context, opts singboxOptions, deps singboxDepend
 			}
 			// Reinstalling retained data may restore the exact recorded version.
 			// Replacing an existing binary or changing versions still needs T7.6.
-			recorded, err := db.GetSetting(ctx, conn, db.SingboxVersion)
+			recorded, err := db.GetSetting(ctx, settings, db.SingboxVersion)
 			if err != nil || status.Installed || recorded != opts.version {
 				return fmt.Errorf("existing configuration only permits restoring the missing recorded sing-box version; use --version with that version, or use a validated upgrade when available")
 			}
@@ -278,8 +307,13 @@ func singboxCommand(ctx context.Context, opts singboxOptions, deps singboxDepend
 	if err := deps.controller.Reload(ctx); err != nil {
 		return fmt.Errorf("binary and units installed; retry install to finish: %w", err)
 	}
-	if err := db.SetSetting(ctx, conn, db.SingboxVersion, opts.version); err != nil {
+	if err := db.SetSetting(ctx, settings, db.SingboxVersion, opts.version); err != nil {
 		return fmt.Errorf("binary and units installed; record version (retry install to finish): %w", err)
+	}
+	if tx, ok := settings.(*sql.Tx); ok {
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit version after preparing sing-box for join: %w", err)
+		}
 	}
 	fmt.Fprintf(output, "sing-box %s 已安装，systemd 单元已写入。尚未启用或启动服务；请在配置生成与生效流程可用后继续配置节点。\n", opts.version)
 	return nil

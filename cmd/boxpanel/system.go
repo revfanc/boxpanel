@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"database/sql"
 	"encoding/pem"
 	"errors"
 	"flag"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/revfanc/boxpanel/internal/acme"
 	"github.com/revfanc/boxpanel/internal/app"
+	"github.com/revfanc/boxpanel/internal/db"
 	"github.com/revfanc/boxpanel/internal/firewall"
 	"github.com/revfanc/boxpanel/internal/singbox"
 	"github.com/revfanc/boxpanel/internal/sysinfo"
@@ -82,7 +84,20 @@ func systemCommand(ctx context.Context, args []string, deps systemDependencies, 
 		if err == nil {
 			defer conn.Close()
 			var cfg app.Config
-			if command != "firewall-cleanup" {
+			if command == "ready" {
+				role, roleErr := db.GetSetting(ctx, conn, db.NodeRole)
+				if roleErr == nil && role == db.RoleAgent {
+					err = agentReady(ctx, conn, resolved, core.resolve(paths, false), deps)
+					if err == nil {
+						fmt.Fprintln(stdout, "节点内核已运行。")
+						return 0
+					}
+				} else if roleErr != nil && !errors.Is(roleErr, sql.ErrNoRows) {
+					err = roleErr
+				} else {
+					cfg, err = app.LoadConfig(ctx, conn)
+				}
+			} else if command == "firewall-open" {
 				cfg, err = app.LoadConfig(ctx, conn)
 			}
 			if err == nil && command == "firewall-open" {
@@ -113,6 +128,18 @@ func systemCommand(ctx context.Context, args []string, deps systemDependencies, 
 	}
 	fmt.Fprintf(stdout, "系统操作 %s 已完成。\n", command)
 	return 0
+}
+
+func agentReady(ctx context.Context, conn *sql.DB, paths app.Paths, core singboxPaths, deps systemDependencies) error {
+	deps.apply.OS = deps.os
+	manager, err := newApplyManager(conn, paths, core, deps.apply)
+	if err != nil {
+		return err
+	}
+	if !manager.CoreActive(ctx) {
+		return fmt.Errorf("node sing-box service is not active")
+	}
+	return nil
 }
 
 // Probe loopback, never public_host or an environment proxy. Trust the installed
