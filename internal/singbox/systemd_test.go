@@ -82,7 +82,7 @@ func TestSystemdStateAndErrors(t *testing.T) {
 		{"loaded", "active", "1000000000", "100", false, 0, true},
 		{"loaded", "active", "1", "NaN", false, 0, true},
 	} {
-		s := NewSystemd(SystemdOptions{OS: "linux", Files: testFiles{data: tt.uptime}, Runner: testRunner(func(context.Context, string, ...string) ([]byte, error) {
+		s := NewSystemd(SystemdOptions{OS: "linux", Files: testFiles{data: tt.uptime}, Monotonic: func() (float64, error) { return 0, errNoMonotonic }, Runner: testRunner(func(context.Context, string, ...string) ([]byte, error) {
 			return []byte("LoadState=" + tt.load + "\nActiveState=" + tt.active + "\nActiveEnterTimestampMonotonic=" + tt.start + "\n"), nil
 		})})
 		got, err := s.State(context.Background(), SingboxUnit)

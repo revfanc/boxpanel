@@ -41,6 +41,9 @@ type SystemdOptions struct {
 	Dev    bool
 	Runner host.Runner
 	Files  host.Files
+	// Monotonic overrides the CLOCK_MONOTONIC source (tests). Returning
+	// errNoMonotonic selects the /proc/uptime fallback.
+	Monotonic func() (float64, error)
 }
 
 type systemd struct {
@@ -60,9 +63,11 @@ func NewSystemd(opts SystemdOptions) Controller {
 	if opts.Runner == nil {
 		opts.Runner = host.Native{}
 	}
-	monotonic := func() (float64, error) { return 0, errNoMonotonic }
-	if opts.Files == nil {
+	monotonic := opts.Monotonic
+	if monotonic == nil {
 		monotonic = monotonicSeconds
+	}
+	if opts.Files == nil {
 		opts.Files = host.Native{}
 	}
 	return &systemd{runner: opts.Runner, files: opts.Files, mock: opts.Dev || opts.OS != "linux", monotonic: monotonic}
