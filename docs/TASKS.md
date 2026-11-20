@@ -1245,6 +1245,51 @@ T8.2–T8.4 已有：生成加入命令、有效令牌与撤销、状态/版本/
     离线/待连接服务器的同步状态显示「等待节点上线后同步」而非「同步中」；不足 1 小时的时长显示「20 分钟」而非「0 小时 20 分钟」（补测试）。
     加入向导需 HTTPS，dev 模式无法生成令牌，由组件测试覆盖。
 
+### T8.7 版本兼容、全服务器告警与离线告警、多服务器端到端
+
+**1. 协议版本与升级提示**
+- 新常量 `agent.ProtocolVersion`（本任务定为 2；T8.2–T8.3 视为 1，T8.4 起的流量上报属于 2）与 `MinNodeProtocol`/`MinMasterProtocol`。
+  节点在注册与每次心跳中带 `protocol`；主控存 `servers.protocol`，心跳回复带主控的 `protocol` 与 `version`。
+- 节点协议 < 主控最低要求：主控对 desired/traffic 等接口返回 426 `agent_upgrade_required`（心跳仍接受，以便显示状态），
+  面板卡片显示「节点版本过旧，需升级」+ 升级命令；节点保持最后配置继续服务。
+- 主控协议 < 节点最低要求（或新接口 404）：节点把 `sync_error=master_outdated` 报给主控（面板提示「请先升级主控」），继续用最后配置。
+- 面板：任何版本与主控不同的远端卡片显示复制升级命令
+  `bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/<tag>/scripts/install.sh) update --version <主控tag>`
+  （主控为非发布版时用 main 且不带 --version，同 T8.2 加入命令规则）。
+- **确认 `install.sh update` 在节点（node_role=agent）上可用**：保留节点身份、密钥、镜像库与 sing-box 配置，只替换二进制并重启；
+  不得运行面板初始化/引导。若当前不支持则实现，并补 install.sh 测试。
+
+**2. 全部服务器的网卡流量告警**
+- 节点现已在本地采样网卡（`server_traffic_samples`）。新增签名接口 `POST /api/agent/v1/interface-samples`
+  `{samples:[{sampled_at, interface, rx, tx}]}`（rx/tx 为该样本区间增量，≤ 1000 条/批，body ≤ 256 KiB）。主控按
+  `(server_id, sampled_at)` `ON CONFLICT DO NOTHING` 写入（天然幂等），清理 62 天前样本同本机。节点记录已确认的最大 sampled_at，
+  断线期间累积、恢复后按批补报。
+- 告警设置按服务器：现有 `servers.alert_preferences`（interface、quota_gb、billing_day、billing_mode）对远端服务器生效。
+  节点需要知道用哪个网卡：心跳回复带该服务器的 `interface` 偏好（空 = 自动检测）；节点心跳上报可选网卡列表 `interfaces`（≤ 32 个合法名称）
+  供面板选择。修改远端告警设置不递增 desired_generation、不重启节点内核。
+- 主控对每台未移除服务器（本机 + 远端）按其计费日与口径评估 80%/100% 用量告警，事件 server_id 为对应服务器、address 为其公网地址；
+  同一服务器同一周期每档只发一次（沿用 serverKey）。
+- API：告警设置读写接口增加 `server_id`（缺省=本机，向后兼容）；`GET` 返回该服务器的可选网卡与当前周期用量。面板：服务器卡片「流量告警」
+  入口打开该服务器的设置（复用设置页组件），设置页本机部分保持不变。
+
+**3. 服务器离线/恢复通知**
+- 远端服务器由在线变为离线（现有离线判定，90 s 无心跳）时记录事件 `server_offline`（键 `server:<id>:offline:<last_seen_at>`，
+  每次离线一次）；之后恢复心跳时记录 `server_recovered`（同一离线期一次），附离线时长。removed/待连接服务器不告警。
+- 设置项「服务器离线通知」（默认开启），走现有通道与 outbox；面板首页事件列表显示。主控重启后不要对已离线的服务器重复告警。
+
+**4. 多服务器端到端测试**（进程内，真实 HTTPS handler、真实 confgen + `sing-box check`（有二进制时）/假 Apply）：
+主控 + 2 节点：加入 → 每台各建 Reality 与 Hysteria2 → 节点生成密钥 → 订阅含 3 台服务器 6 个节点且顺序正确 → 两节点上报用户流量与
+网卡样本 → 用户超额 → 两节点同步停用 → 一个节点停止心跳 → 离线事件一次 → 恢复 → 恢复事件一次；节点协议过旧 → 426 与面板字段。
+
+**5. 不做**：主控备份复制到节点（路线图「可选」）留到后续，文档注明。
+
+**测试**：上述各项的单元/接口测试；install.sh update 在 agent 角色下的测试；单机 golden 与现有告警测试不变。
+
+- **验收**：
+  - [ ] 以上测试；`make lint test build` 通过；SPEC/API/FRONTEND/INSTALL 同步。
+  - [ ] 实机（主控 + LXD 节点）：节点网卡样本出现在主控并按其设置计算用量；把节点额度设很小触发 80%/100% 事件各一次；
+    停止节点 boxpanel → 约 90 s 后离线事件一次，启动后恢复事件一次；节点 `install.sh update`（本地构建替换下载）后身份与配置保持、继续同步。
+
 ## M7 后续增强（MVP 之后，按需排期）
 
 - T7.1 见上方详细任务（已排期）
