@@ -1,10 +1,13 @@
-import { useForm, useWatch } from 'react-hook-form'
+import { Controller, useForm, useWatch } from 'react-hook-form'
 import { useId } from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { scenarioSchema } from '@/schemas/setup'
 import { useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
-import { Field, Notice, Panel } from '@/components/ResourceUI'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
+import { RadioGroup } from '@/components/ui/radio-group'
+import { Field, Notice, Panel, RadioCard } from '@/components/ResourceUI'
 import { ErrorNotice, Loading } from '@/components/Feedback'
 import { SuggestedForm } from '@/pages/inbounds/editor'
 import { UserForm } from '@/pages/users/components'
@@ -42,9 +45,19 @@ export function ScenarioStep({ status, save }: { status: SetupStatus; save: (pat
   const checkboxID = useId()
   const hasDomain = useWatch({ control: form.control, name: 'hasDomain' })
   return <form noValidate className="space-y-5" onSubmit={form.handleSubmit((values) => save({ step: 'node', domain: values.hasDomain ? values.domain.trim() : '', hysteria2: values.hysteria2 }))}>
-    <div className="grid gap-4 sm:grid-cols-2">{[false, true].map((hasDomain) => <label key={String(hasDomain)} className="flex cursor-pointer items-start gap-3 rounded-xl border p-5"><input type="radio" name="scenario" defaultChecked={hasDomain === !!status.domain} onChange={() => form.setValue('hasDomain', hasDomain)} className="mt-1 shrink-0" /><span><span className="block font-medium">{hasDomain ? t.setup.hasDomain : t.setup.noDomain}</span><span className="mt-2 block text-sm leading-6 text-muted-foreground">{hasDomain ? t.setup.domainHint : t.setup.noDomainHint}</span></span></label>)}</div>
+    <Controller name="hasDomain" control={form.control} render={({ field, fieldState }) => (
+      <RadioGroup aria-label={t.setup.steps.scenario} name={field.name} value={String(field.value)} onValueChange={(value) => field.onChange(value === 'true')} onBlur={field.onBlur} className="gap-4 sm:grid-cols-2">
+        <RadioCard value="false" label={t.setup.noDomain} hint={t.setup.noDomainHint} className="p-5" aria-invalid={fieldState.invalid} ref={!field.value ? field.ref : undefined} />
+        <RadioCard value="true" label={t.setup.hasDomain} hint={t.setup.domainHint} className="p-5" aria-invalid={fieldState.invalid} ref={field.value ? field.ref : undefined} />
+      </RadioGroup>
+    )} />
     {hasDomain && <Field label={t.setup.domain} {...form.register('domain')} error={form.formState.errors.domain?.message} />}
-    <label htmlFor={checkboxID} className="flex items-start gap-3 rounded-lg border p-4 text-sm leading-6"><input id={checkboxID} aria-labelledby={`${checkboxID}-label`} type="checkbox" className="mt-1 shrink-0" {...form.register('hysteria2')} /><span id={`${checkboxID}-label`}>{t.setup.hy2}</span></label>
+    <Label htmlFor={checkboxID} className="cursor-pointer items-start gap-3 rounded-lg border p-4 leading-6 font-normal">
+      <Controller name="hysteria2" control={form.control} render={({ field, fieldState }) => (
+        <Checkbox id={checkboxID} name={field.name} checked={field.value} onCheckedChange={(checked) => field.onChange(checked === true)} onBlur={field.onBlur} ref={field.ref} aria-invalid={fieldState.invalid} className="mt-1" />
+      )} />
+      <span>{t.setup.hy2}</span>
+    </Label>
     <Button type="submit" disabled={form.formState.isSubmitting}>{form.formState.isSubmitting ? t.common.working : t.setup.next}</Button>
   </form>
 }

@@ -82,7 +82,9 @@ createBrowserRouter(routes, { basename: BASE || "/" });
 - 桌面：左侧 Sidebar（shadcn `sidebar`）+ 顶栏（面板名、sing-box 运行状态点、主题切换、退出）。
 - 移动端（<768px）：Sidebar 收为抽屉；表格改卡片列表。手机上用面板是常见场景，必须可用。
 - 主题：亮/暗/跟随系统。
-- 用到的 shadcn 组件：button, card, input, label, form, select, switch, tabs, dialog, alert-dialog, dropdown-menu, table, badge, progress, tooltip, sonner(toast), skeleton, sidebar, sheet, separator, radio-group, accordion, alert。
+- 用到的 shadcn 组件：button, card, input, label, form, select, switch, tabs, dialog, alert-dialog, dropdown-menu, table, badge, progress, tooltip, sonner(toast), skeleton, sidebar, sheet, separator, radio-group, checkbox, textarea, accordion, alert。
+- T9.1：节点筛选与服务器选择、规则预览格式与规则源、流量告警计费口径使用 Select；引导场景、节点协议、分流预设使用整卡可选的 RadioGroup。
+  引导的 Hysteria2 选项使用 Checkbox，复制字段使用只读 Textarea。网卡建议保留 Input + datalist，可直接输入网卡名。
 - 二维码：`qrcode.react`。
 - 所有破坏性操作（删除节点/用户、重置 token）用 alert-dialog 二次确认，并说明后果。
 - 写操作期间按钮 loading；配置生效失败时展示 `error.message` + `hint`，`detail` 放在可展开区域。

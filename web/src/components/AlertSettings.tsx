@@ -1,7 +1,7 @@
 import { useId } from 'react'
 import { Link } from 'react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useForm, useWatch } from 'react-hook-form'
+import { Controller, useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { ServerBilling } from '@/components/AlertOverview'
@@ -9,6 +9,7 @@ import { ErrorNotice, Loading } from '@/components/Feedback'
 import { Field, Notice, Panel, Submit, Toggle } from '@/components/ResourceUI'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useOperation } from '@/hooks/use-operation'
 import { alertOverviewQuery, alertSettingsFor, alertSettingsQuery } from '@/lib/alerts'
 import { api } from '@/lib/api'
@@ -63,9 +64,14 @@ function BillingSettings({ settings, serverID }: { settings: AlertSettings; serv
           </div>
           <div className="space-y-2">
             <Label htmlFor={mode}>{a.mode}</Label>
-            <select id={mode} className="h-9 w-full rounded-md border bg-background px-3 text-sm" {...form.register('billing_mode')}>
-              {billingModes.map((value) => <option key={value} value={value}>{a.modes[value]}</option>)}
-            </select>
+            <Controller name="billing_mode" control={form.control} render={({ field, fieldState }) => (
+              <Select name={field.name} value={field.value} onValueChange={field.onChange} disabled={operation.pending}>
+                <SelectTrigger id={mode} className="w-full" ref={field.ref} onBlur={field.onBlur} aria-invalid={fieldState.invalid}><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {billingModes.map((value) => <SelectItem key={value} value={value}>{a.modes[value]}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            )} />
           </div>
         </div>
         <fieldset className="space-y-2">

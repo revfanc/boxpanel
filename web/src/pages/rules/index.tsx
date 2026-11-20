@@ -1,11 +1,13 @@
 import { useState } from 'react'
-import { useForm, useWatch } from 'react-hook-form'
+import { Controller, useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetTrigger, SheetClose } from '@/components/ui/sheet'
 import { Label } from '@/components/ui/label'
-import { Page, Panel, Field, Toggle, Submit, Notice, Empty } from '@/components/ResourceUI'
+import { RadioGroup } from '@/components/ui/radio-group'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Page, Panel, Field, Toggle, Submit, Notice, Empty, RadioCard } from '@/components/ResourceUI'
 import { DomainTags } from '@/components/DomainTags'
 import { Loading, ErrorNotice } from '@/components/Feedback'
 import { api, APIError } from '@/lib/api'
@@ -26,7 +28,17 @@ function Preview() {
     <SheetContent showCloseButton={false} className="w-full max-w-full overflow-y-auto sm:max-w-2xl">
       <SheetHeader><SheetTitle>{t.rules.preview}</SheetTitle><SheetDescription>{t.rules.previewHint}</SheetDescription></SheetHeader>
       <div className="min-w-0 space-y-4 px-4 pb-6">
-        <div className="flex flex-wrap items-center gap-3"><Label htmlFor="preview-format">{t.rules.format}</Label><select id="preview-format" value={format} onChange={(event) => setFormat(event.target.value as 'singbox' | 'clash')} className="min-w-0 rounded-md border bg-background p-2"><option value="singbox">{t.users.singbox}</option><option value="clash">{t.users.clash}</option></select><SheetClose asChild><Button variant="outline">{t.common.close}</Button></SheetClose></div>
+        <div className="flex flex-wrap items-center gap-3">
+          <Label htmlFor="preview-format">{t.rules.format}</Label>
+          <Select value={format} onValueChange={(value) => setFormat(value as typeof format)}>
+            <SelectTrigger id="preview-format"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="singbox">{t.users.singbox}</SelectItem>
+              <SelectItem value="clash">{t.users.clash}</SelectItem>
+            </SelectContent>
+          </Select>
+          <SheetClose asChild><Button variant="outline">{t.common.close}</Button></SheetClose>
+        </div>
         {preview.isPending || preview.isFetching ? <Loading /> : noUser ? <Empty>{t.rules.noPreview}</Empty> : preview.isError ? <ErrorNotice error={preview.error} retry={() => { void preview.refetch() }} /> : <pre className="min-w-0 rounded-lg border bg-muted/30 p-4 font-mono text-xs leading-6 whitespace-pre-wrap break-all">{typeof preview.data?.config === 'string' ? preview.data.config : JSON.stringify(preview.data?.config, null, 2)}</pre>}
       </div>
     </SheetContent>
@@ -44,9 +56,16 @@ function RulesForm({ rules }: { rules: RulesSettings }) {
     void operation.run(() => api<RulesSettings>('/rules', { method: 'PUT', body: rulesBody(values) }), async (saved) => { form.reset({ ...saved, direct_draft: '', proxy_draft: '' }); client.setQueryData(queryKeys.rules, saved); await refreshResources(client) })
   })}>
     <fieldset disabled={operation.pending} className="min-w-0 space-y-5">
-      <fieldset className="min-w-0"><legend className="mb-3 text-sm font-medium">{t.rules.preset}</legend><div className="grid min-w-0 gap-3 lg:grid-cols-3">
-        {(['bypass_cn', 'gfw_only', 'global'] as const).map((preset) => <label key={preset} className={`flex cursor-pointer items-start gap-3 rounded-xl border p-4 ${values.preset === preset ? 'border-primary bg-muted/50' : ''}`}><input type="radio" value={preset} {...form.register('preset')} className="mt-1 shrink-0 accent-primary" /><span className="space-y-2"><span className="block font-medium">{t.rules[preset]}</span><span className="block text-sm leading-6 text-muted-foreground">{presetHints[preset]}</span></span></label>)}
-      </div></fieldset>
+      <fieldset className="min-w-0">
+        <legend id="rule-preset" className="mb-3 text-sm font-medium">{t.rules.preset}</legend>
+        <Controller name="preset" control={form.control} render={({ field, fieldState }) => (
+          <RadioGroup aria-labelledby="rule-preset" name={field.name} value={field.value} onValueChange={field.onChange} onBlur={field.onBlur} disabled={operation.pending} className="min-w-0 lg:grid-cols-3">
+            {(['bypass_cn', 'gfw_only', 'global'] as const).map((preset) => (
+              <RadioCard key={preset} value={preset} label={t.rules[preset]} hint={presetHints[preset]} aria-invalid={fieldState.invalid} ref={field.value === preset ? field.ref : undefined} />
+            ))}
+          </RadioGroup>
+        )} />
+      </fieldset>
       <Toggle label={t.rules.ads} checked={values.block_ads ?? false} onChange={(value) => form.setValue('block_ads', value, { shouldDirty: true })} />
       <Panel title={t.rules.direct} hint={t.rules.domainHint}>
         {(['direct', 'proxy'] as const).map((kind) => {
@@ -67,7 +86,18 @@ function RulesForm({ rules }: { rules: RulesSettings }) {
         <Toggle label={t.rules.ipv6} checked={values.ipv6 ?? false} onChange={(value) => form.setValue('ipv6', value, { shouldDirty: true })} />
       </Panel>
       <Panel title={t.rules.source} hint={t.rules.sourceHint}>
-        <div className="space-y-2"><Label htmlFor="rule-source">{t.rules.source}</Label><select id="rule-source" className="w-full min-w-0 rounded-md border bg-background p-2 text-sm" {...form.register('source')}><option value="metacubex">MetaCubeX</option><option value="sagernet">SagerNet</option></select></div>
+        <div className="space-y-2">
+          <Label htmlFor="rule-source">{t.rules.source}</Label>
+          <Controller name="source" control={form.control} render={({ field, fieldState }) => (
+            <Select name={field.name} value={field.value} onValueChange={field.onChange} disabled={operation.pending}>
+              <SelectTrigger id="rule-source" className="w-full" ref={field.ref} onBlur={field.onBlur} aria-invalid={fieldState.invalid}><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="metacubex">MetaCubeX</SelectItem>
+                <SelectItem value="sagernet">SagerNet</SelectItem>
+              </SelectContent>
+            </Select>
+          )} />
+        </div>
         <Field label={t.rules.mirror} hint={t.rules.mirrorHint} {...form.register('mirror')} error={errors.mirror?.message} />
         <Field label={t.rules.interval} hint={t.rules.intervalHint} {...form.register('update_interval')} error={errors.update_interval?.message} />
       </Panel>

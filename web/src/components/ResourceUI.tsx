@@ -5,10 +5,12 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { RadioGroupItem } from '@/components/ui/radio-group'
 import { Switch } from '@/components/ui/switch'
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { ErrorNotice } from '@/components/Feedback'
 import { zhCN as t } from '@/i18n/zh-CN'
+import { cn } from 'cn'
 
 export function Page({ title, description, actions, children }: { title: string; description?: string; actions?: ReactNode; children: ReactNode }) {
   return <section className="min-w-0 space-y-6 [overflow-wrap:anywhere]">
@@ -30,6 +32,16 @@ export function Field({ label, hint, error, id: given, ...props }: ComponentProp
   const auto = useId()
   const id = given ?? auto
   return <div className="min-w-0 space-y-2"><Label htmlFor={id}>{label}</Label><Input {...props} id={id} aria-invalid={!!error} aria-describedby={error ? `${id}-error` : hint ? `${id}-hint` : undefined} />{hint && <p id={`${id}-hint`} className="text-xs leading-5 text-muted-foreground">{hint}</p>}{error && <p id={`${id}-error`} role="alert" className="text-sm text-destructive">{error}</p>}</div>
+}
+export function RadioCard({ label, hint, className, ...props }: ComponentProps<typeof RadioGroupItem> & { label: string; hint: string }) {
+  const id = useId()
+  return <Label htmlFor={id} className={cn('min-w-0 cursor-pointer items-start gap-3 rounded-xl border p-4 has-disabled:cursor-not-allowed has-disabled:opacity-50 has-data-checked:border-primary has-data-checked:bg-muted/50', className)}>
+    <RadioGroupItem {...props} id={id} className="mt-1" />
+    <span className="space-y-2">
+      <span className="block text-base font-medium">{label}</span>
+      <span className="block text-sm leading-6 font-normal text-muted-foreground">{hint}</span>
+    </span>
+  </Label>
 }
 export function Toggle({ label, hint, checked, onChange, disabled }: { label: string; hint?: string; checked: boolean; onChange: (checked: boolean) => void; disabled?: boolean }) {
   const id = useId()

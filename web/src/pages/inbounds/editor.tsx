@@ -4,7 +4,10 @@ import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
-import { Page, Panel, Field, Toggle, Submit, Notice, BackLink, Empty } from '@/components/ResourceUI'
+import { Label } from '@/components/ui/label'
+import { RadioGroup } from '@/components/ui/radio-group'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Page, Panel, Field, Toggle, Submit, Notice, BackLink, Empty, RadioCard } from '@/components/ResourceUI'
 import { ErrorNotice, Loading } from '@/components/Feedback'
 import { inboundQuery, refreshResources, serversQuery } from '@/lib/resources'
 import { api } from '@/lib/api'
@@ -126,15 +129,19 @@ function ServerSelect({ servers, selected, onChange }: { servers: Server[]; sele
   const choices = servers.filter((server) => server.is_local || server.status === 'online' || server.status === 'offline')
   if (choices.length < 2 && (selected === undefined || choices.some((server) => server.id === selected))) return null
   const current = selected === undefined ? choices.find((server) => server.is_local)?.id : selected
+  const available = choices.some((server) => server.id === current)
   return <div className="space-y-2">
-    <label htmlFor={id} className="block text-sm font-medium">{t.inbounds.server}</label>
-    <select id={id} className="h-9 max-w-full rounded-md border bg-background px-3 text-sm" value={current ?? ''} onChange={(event) => {
-      const server = choices.find((row) => row.id === Number(event.target.value))
+    <Label htmlFor={id}>{t.inbounds.server}</Label>
+    <Select value={available ? String(current) : 'unknown'} onValueChange={(value) => {
+      const server = choices.find((row) => String(row.id) === value)
       if (server) onChange(server)
     }}>
-      {!choices.some((server) => server.id === current) && <option value={current ?? ''} disabled>{t.common.unknown}</option>}
-      {choices.map((server) => <option key={server.id} value={server.id}>{server.name} · {t.servers.statuses[server.status]}</option>)}
-    </select>
+      <SelectTrigger id={id}><SelectValue /></SelectTrigger>
+      <SelectContent>
+        {!available && <SelectItem value="unknown" disabled>{t.common.unknown}</SelectItem>}
+        {choices.map((server) => <SelectItem key={server.id} value={String(server.id)}>{server.is_local ? server.name : `${server.name} · ${t.servers.statuses[server.status]}`}</SelectItem>)}
+      </SelectContent>
+    </Select>
   </div>
 }
 
@@ -155,9 +162,13 @@ export function NewInboundPage() {
       setParams(next, { replace: true })
     }} />}
     {unavailable && (servers.isPending ? <Loading /> : servers.data && <Notice>{t.inbounds.serverUnavailable}</Notice>)}
-    <fieldset disabled={unavailable} className="min-w-0"><legend className="mb-3 text-sm font-medium">{t.inbounds.protocol}</legend><div className="grid gap-4 sm:grid-cols-2">
-      {(['vless_reality', 'hysteria2'] as const).map((value) => <label key={value} className={`flex cursor-pointer items-start gap-3 rounded-xl border p-5 ${protocol === value ? 'border-primary bg-muted/50' : ''}`}><input type="radio" name="protocol" value={value} checked={protocol === value} onChange={() => setProtocol(value)} className="mt-1 shrink-0 accent-primary" /><span className="space-y-2"><span className="block font-medium">{value === 'vless_reality' ? t.inbounds.reality : t.inbounds.hysteria2}</span><span className="block text-sm leading-6 text-muted-foreground">{value === 'vless_reality' ? t.inbounds.realityHint : t.inbounds.hysteriaHint}</span></span></label>)}
-    </div></fieldset>
+    <fieldset disabled={unavailable} className="min-w-0">
+      <legend id="inbound-protocol" className="mb-3 text-sm font-medium">{t.inbounds.protocol}</legend>
+      <RadioGroup aria-labelledby="inbound-protocol" value={protocol} onValueChange={(value) => setProtocol(value as Protocol)} disabled={unavailable} className="gap-4 sm:grid-cols-2">
+        <RadioCard value="vless_reality" label={t.inbounds.reality} hint={t.inbounds.realityHint} className="p-5" />
+        <RadioCard value="hysteria2" label={t.inbounds.hysteria2} hint={t.inbounds.hysteriaHint} className="p-5" />
+      </RadioGroup>
+    </fieldset>
     {protocol && !unavailable && <SuggestedForm key={`${protocol}:${target?.id ?? ''}`} protocol={protocol} target={target} onSaved={() => navigate(returnTo)} />}
   </Page>
 }
