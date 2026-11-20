@@ -1,5 +1,5 @@
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
-import { expect, it, vi } from 'vitest'
+import { expect, it, onTestFinished, vi } from 'vitest'
 import { ServersPage } from '.'
 import { zhCN as t } from '@/i18n/zh-CN'
 import { alertSettings, failure, mockAPI, mountPage, server } from '@/test/resources'
@@ -243,6 +243,10 @@ it('shows remote sync and traffic totals while updating the subscription host', 
 })
 
 it('counts server states independently and shows the card badges, heartbeat and node links', async () => {
+  // Freeze only the clock so the relative heartbeat time cannot drift on a slow runner.
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date('2026-11-20T04:00:00Z'))
+  onTestFinished(() => { vi.useRealTimers() })
   const now = Math.floor(Date.now() / 1000)
   const online = { ...server, id: 2, name: 'Online', is_local: false, status: 'online', version: 'v0.5.0', last_seen_at: now - 12, uptime: 5, inbound_counts: { ready: 3, pending: 1 } }
   const offline = { ...online, id: 3, name: 'Offline', status: 'offline', sync_status: 'failed', uptime: undefined }
@@ -257,7 +261,7 @@ it('counts server states independently and shows the card badges, heartbeat and 
     expect(screen.getByText(label, { selector: '[data-slot="badge"]' })).toHaveClass(color)
   }
   const card = within(screen.getByText(online.name).closest<HTMLElement>('[data-slot="card"]')!)
-  const time = card.getByText(/1[23] 秒前/)
+  const time = card.getByText(t.servers.secondsAgo(12))
   expect(time).toHaveAttribute('title', new Date((now - 12) * 1000).toLocaleString('zh-CN'))
   expect(card.getByText('3 / 1')).toBeVisible()
   expect(card.getByText(t.servers.uptimeSeconds(5))).toBeVisible()
