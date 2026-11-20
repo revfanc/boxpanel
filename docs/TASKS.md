@@ -1194,16 +1194,13 @@ host 变化后回退密钥 SPKI 不变；系统 CA 分支拒绝主机名不匹�
 - 分享页分组的前端测试。
 
 - **验收**：
-  - [ ] 以上测试；`make lint test build` 通过；SPEC/API/FRONTEND 同步。
-  - [ ] 实机：主控订阅的响应头含正确的汇总流量与到期；节点顺序为本机→远端；开启自动组后 `sing-box check` 通过订阅生成的 sing-box 配置，
-    关闭后恢复原样。
-
-**T8.5 本地验证（2026-11-19）**
-
-- 既有订阅和分享页 golden 通过，新增多服务器分享页及自动组 golden。签名流量上报的集成测试验证公开 HEAD 的远端汇总和到期时间。
-  sing-box 1.14.4 通过自动组配置校验，API 测试验证关闭开关后恢复原配置字节。
-- SPEC、API、CONFIG、FRONTEND 已同步。`make lint`、`make build`、21 项安装脚本用例、前端类型检查及 136 项 Vitest 通过。
-- `make test` 的两个既有 e2e 用例在 macOS 沙箱内启动内核时因 DNS 通知 `status 9` 失败，其余 Go 测试通过。待沙箱外复跑和主控/节点实机验收。
+  - [x] 以上测试；`make lint test build`（审查者沙箱外复跑，含 e2e、136 项 Vitest）通过；SPEC/API/CONFIG/FRONTEND 同步。
+  - [x] 实机（2026-11-19，主控与节点 v0.5.0-test8，用户 test）：
+    - 响应头 `subscription-userinfo: upload=232112; download=65390212; total=0`，与主控汇总值（含 T8.4 远端）一致，不限期时无 expire；
+      `profile-update-interval: 12`；Clash `filename*=UTF-8''boxpanel.yaml`，sing-box 无扩展名；HEAD 返回同样的头。
+    - 节点顺序：本机 Reality 443 → 本机 Hysteria2 8443 → 测试节点2 Reality 20443 → 测试节点2 Hysteria2 28443。
+    - 开启自动组：「自动选择」位于「节点选择」末尾，默认仍为首个节点；Clash url-test 参数正确；订阅 sing-box 配置 `sing-box check` 通过；
+      desired_generation 不变（6→6）。关闭后 Clash 订阅与开启前逐字节一致。
 
 ## M7 后续增强（MVP 之后，按需排期）
 
