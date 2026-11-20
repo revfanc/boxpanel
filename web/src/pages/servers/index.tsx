@@ -11,6 +11,7 @@ import { useOperation } from '@/hooks/use-operation'
 import { zhCN as t } from '@/i18n/zh-CN'
 import { hostSchema } from '@/schemas/settings'
 import { api } from '@/lib/api'
+import { bytes } from '@/lib/format'
 import { refreshResources, serversQuery } from '@/lib/resources'
 import type { IssuedJoinToken, JoinToken, Server } from '@/types/api'
 
@@ -34,7 +35,8 @@ function EditServerForm({ server, close }: { server: Server; close: () => void }
     () => api<Server>(`/servers/${server.id}`, { method: 'PUT', body }),
     async (updated) => {
       await client.cancelQueries({ queryKey: serversQuery.queryKey })
-      client.setQueryData(serversQuery.queryKey, (current) => current?.map((row) => row.id === updated.id ? updated : row))
+      client.setQueryData(serversQuery.queryKey, (current) => current?.map((row) => row.id === updated.id
+        ? { ...updated, traffic_up: row.traffic_up, traffic_down: row.traffic_down } : row))
       close()
       if (updated.public_host !== server.public_host) {
         await Promise.all([
@@ -147,6 +149,9 @@ export function ServersPage() {
                 <dt className="text-muted-foreground">{t.servers.core}</dt><dd>{server.singbox_active ? t.servers.coreActive : t.servers.coreInactive}</dd>
               </>}
               <dt className="text-muted-foreground">{t.servers.lastSeen}</dt><dd>{server.last_seen_at === null ? t.servers.noHeartbeat : new Date(server.last_seen_at * 1000).toLocaleString('zh-CN')}</dd>
+              {server.traffic_up !== undefined && server.traffic_down !== undefined && <>
+                <dt className="text-muted-foreground">{t.servers.traffic}</dt><dd>{bytes(server.traffic_up)} / {bytes(server.traffic_down)}</dd>
+              </>}
             </>}
           </dl>
           {server.sync_error && <p role="status" className="text-sm text-destructive">{syncErrors[server.sync_error] ?? t.servers.syncErrors.apply_failed}</p>}

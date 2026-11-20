@@ -5,8 +5,9 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"time"
+	"math"
 
 	"github.com/revfanc/boxpanel/internal/auth"
 	"github.com/revfanc/boxpanel/internal/confgen"
@@ -187,6 +188,11 @@ func mirrorUsers(ctx context.Context, tx *sql.Tx, users []DesiredUser) error {
 		uuid, token     string
 		up, down, epoch int64
 	}
+	previousEpoch, err := db.GetSetting(ctx, tx, db.AgentTrafficEpoch)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	epoch := previousEpoch
 	old := make(map[int64]counters)
 	rows, err := tx.QueryContext(ctx, "SELECT id,uuid,sub_token,traffic_up,traffic_down,traffic_epoch FROM users")
 	if err != nil {
@@ -200,6 +206,7 @@ func mirrorUsers(ctx context.Context, tx *sql.Tx, users []DesiredUser) error {
 			return fmt.Errorf("scan mirrored user: %w", err)
 		}
 		old[id] = c
+		epoch = max(epoch, c.epoch)
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("read mirrored users: %w", err)
@@ -207,7 +214,6 @@ func mirrorUsers(ctx context.Context, tx *sql.Tx, users []DesiredUser) error {
 	if _, err := tx.ExecContext(ctx, "DELETE FROM users"); err != nil {
 		return fmt.Errorf("replace mirrored users: %w", err)
 	}
-	epoch := time.Now().UnixNano()
 	for _, user := range users {
 		c := old[user.ID]
 		if c.token == "" || c.uuid != user.UUID {
@@ -215,13 +221,31 @@ func mirrorUsers(ctx context.Context, tx *sql.Tx, users []DesiredUser) error {
 			if err != nil {
 				return err
 			}
+			if epoch == math.MaxInt64 {
+				return fmt.Errorf("node traffic epoch exhausted")
+			}
+			epoch++
 			c = counters{token: token, epoch: epoch}
+		} else {
+			delete(old, user.ID)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO users
 			(id,name,uuid,password,sub_token,traffic_up,traffic_down,traffic_epoch,created_at)
 			VALUES (?,?,?,?,?,?,?,?,unixepoch())`, user.ID, user.Name, user.UUID, user.Password, c.token, c.up, c.down, c.epoch); err != nil {
 			return fmt.Errorf("save mirrored user: %w", err)
 		}
+	}
+	for id, c := range old {
+		if c.up == 0 && c.down == 0 {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO agent_retired_traffic (user_id,epoch,up,down) VALUES (?,?,?,?)`,
+			id, c.epoch, c.up, c.down); err != nil {
+			return fmt.Errorf("retain retired node counters: %w", err)
+		}
+	}
+	if epoch != previousEpoch {
+		return db.SetSetting(ctx, tx, db.AgentTrafficEpoch, epoch)
 	}
 	return nil
 }

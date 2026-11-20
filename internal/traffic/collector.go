@@ -9,41 +9,49 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"sync"
 	"time"
 
 	"github.com/revfanc/boxpanel/internal/db"
 	"github.com/revfanc/boxpanel/internal/firewall"
+	"github.com/revfanc/boxpanel/internal/singbox"
 )
 
 type FetchFunc func(context.Context) ([]firewall.Counter, error)
 type account struct{ id, epoch int64 }
 type amount struct{ up, down int64 }
-type sample struct {
-	account
-	amount
-}
 
 type Collector struct {
-	writer, reader *sql.DB
-	fetch          FetchFunc
-	mu             sync.Mutex
-	previous       map[int64]sample
-	initialized    bool
-	pending        map[account]amount
-	batchID        string
-	staged         map[account]amount
+	writer, reader  *sql.DB
+	fetch           FetchFunc
+	mu              sync.Mutex
+	previous        map[int64]db.TrafficSample
+	initialized     bool
+	pending         map[account]amount
+	batchID         string
+	staged          map[account]amount
+	bootID          string
+	checkpointDirty bool
 }
 
 func NewCollector(writer, reader *sql.DB, fetch FetchFunc) *Collector {
 	if fetch == nil {
 		fetch = func(ctx context.Context) ([]firewall.Counter, error) { return firewall.ReadCounters(ctx, nil) }
 	}
-	return &Collector{writer: writer, reader: reader, fetch: fetch, previous: map[int64]sample{}, pending: map[account]amount{}}
+	return &Collector{writer: writer, reader: reader, fetch: fetch, pending: map[account]amount{}}
 }
 
-func add(a, b int64) int64 {
+// NewNodeCollector resumes kernel accounting across a node process restart.
+func NewNodeCollector(writer, reader *sql.DB, fetch FetchFunc, bootID string) *Collector {
+	c := NewCollector(writer, reader, fetch)
+	c.bootID = bootID
+	return c
+}
+
+// AddBytes adds two nonnegative counters without overflowing an int64.
+func AddBytes(a, b int64) int64 {
 	if b > math.MaxInt64-a {
 		return math.MaxInt64
 	}
@@ -51,11 +59,15 @@ func add(a, b int64) int64 {
 }
 
 // Poll reads cumulative kernel counters after releasing the WAL snapshot.
-// The first successful sample establishes a process baseline. New users count
-// from zero; surviving users spanning an epoch change establish a new baseline.
+// The first successful sample establishes a baseline if no checkpoint exists.
+// New users count from zero; surviving users spanning an epoch change establish a new baseline.
 func (c *Collector) Poll(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.poll(ctx)
+}
+
+func (c *Collector) poll(ctx context.Context) error {
 	tx, err := c.reader.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return fmt.Errorf("read accounting snapshot: %w", err)
@@ -69,6 +81,20 @@ func (c *Collector) Poll(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	previous, initialized := c.previous, c.initialized
+	checkpointNeeded := false
+	if !initialized && c.bootID != "" {
+		checkpoint, err := db.GetSetting(ctx, tx, db.AgentTrafficCheckpoint)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		initialized = err == nil
+		if checkpoint.BootID == c.bootID {
+			previous = checkpoint.Samples
+		} else {
+			checkpointNeeded = true
+		}
+	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("close accounting snapshot: %w", err)
 	}
@@ -79,7 +105,7 @@ func (c *Collector) Poll(ctx context.Context) error {
 			return err
 		}
 	}
-	next := make(map[int64]sample, len(counters))
+	next := make(map[int64]db.TrafficSample, len(counters))
 	for _, counter := range counters {
 		key, known := epochs[counter.UserID]
 		if !known {
@@ -91,33 +117,58 @@ func (c *Collector) Poll(ctx context.Context) error {
 		if _, duplicate := next[counter.UserID]; duplicate {
 			return fmt.Errorf("read traffic: duplicate user counter")
 		}
-		next[counter.UserID] = sample{account: key, amount: amount{counter.Upload, counter.Download}}
+		next[counter.UserID] = db.TrafficSample{Epoch: key.epoch, Up: counter.Upload, Down: counter.Download}
 	}
 	for id, current := range next {
-		delta := current.amount
-		if !c.initialized {
+		delta := amount{current.Up, current.Down}
+		if !initialized {
 			delta = amount{}
-		} else if old, ok := c.previous[id]; ok {
+		} else if old, ok := previous[id]; ok {
 			// Counter recreation can affect either direction independently.
-			if current.up >= old.up {
-				delta.up -= old.up
+			if current.Up >= old.Up {
+				delta.up -= old.Up
 			}
-			if current.down >= old.down {
-				delta.down -= old.down
+			if current.Down >= old.Down {
+				delta.down -= old.Down
 			}
-			if old.epoch != current.epoch {
+			if old.Epoch != current.Epoch {
 				delta = amount{}
 			}
 		}
 		if delta.up == 0 && delta.down == 0 {
 			continue
 		}
-		pending := c.pending[current.account]
-		c.pending[current.account] = amount{add(pending.up, delta.up), add(pending.down, delta.down)}
+		key := account{id, current.Epoch}
+		pending := c.pending[key]
+		c.pending[key] = amount{AddBytes(pending.up, delta.up), AddBytes(pending.down, delta.down)}
+	}
+	if c.bootID != "" && (checkpointNeeded || !maps.Equal(previous, next)) {
+		c.checkpointDirty = true
 	}
 	c.previous = next
 	c.initialized = true
 	return nil
+}
+
+// ApplyMirror commits pending usage with the mirror so retiring a user can
+// preserve that user's final counters. A failed apply keeps the pending usage.
+func (c *Collector) ApplyMirror(ctx context.Context, applier Applier, mutation singbox.Mutation) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// Sampling failure must not block the node from applying master policy.
+	_ = c.poll(ctx)
+	err := applier.Apply(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		if len(c.pending) > 0 || c.checkpointDirty {
+			if err := c.writePending(ctx, tx); err != nil {
+				return err
+			}
+		}
+		return mutation(ctx, tx)
+	})
+	if err == nil {
+		c.clearPending()
+	}
+	return err
 }
 func readEpochs(ctx context.Context, tx *sql.Tx) (map[int64]account, error) {
 	rows, err := tx.QueryContext(ctx, "SELECT id,traffic_epoch FROM users")
@@ -174,6 +225,11 @@ func (c *Collector) writePending(ctx context.Context, tx *sql.Tx) error {
 	if err := db.SetSetting(ctx, tx, db.TrafficBatch, batchID); err != nil {
 		return err
 	}
+	if c.checkpointDirty {
+		if err := db.SetSetting(ctx, tx, db.AgentTrafficCheckpoint, db.TrafficCheckpoint{BootID: c.bootID, Samples: c.previous}); err != nil {
+			return err
+		}
+	}
 	c.batchID, c.staged = batchID, staged
 	return nil
 }
@@ -181,16 +237,22 @@ func (c *Collector) clearPending() {
 	clear(c.pending)
 	c.batchID = ""
 	c.staged = nil
+	c.checkpointDirty = false
 }
 func (c *Collector) Flush(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(c.pending) == 0 {
+	if len(c.pending) == 0 && !c.checkpointDirty {
 		return nil
 	}
-	tx, err := c.writer.BeginTx(ctx, nil)
+	conn, err := c.writer.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("reserve traffic flush connection: %w", err)
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin traffic flush: %w", err)
 	}
@@ -198,7 +260,7 @@ func (c *Collector) Flush(ctx context.Context) error {
 	if err = c.writePending(ctx, tx); err != nil {
 		return err
 	}
-	if err = tx.Commit(); err != nil {
+	if err = db.Commit(conn, tx); err != nil {
 		return fmt.Errorf("commit traffic flush: %w", err)
 	}
 	c.clearPending()

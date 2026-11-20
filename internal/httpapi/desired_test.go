@@ -25,6 +25,35 @@ import (
 	"github.com/revfanc/boxpanel/internal/sysinfo"
 )
 
+func joinTestNode(t *testing.T, master *agent.Master, client *agent.Client, url, pin, name, ip string) (agent.Node, app.Paths) {
+	t.Helper()
+	ctx := t.Context()
+	_, token, err := master.IssueToken(ctx, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := app.Paths{DataDir: t.TempDir()}
+	paths.Database = filepath.Join(paths.DataDir, "boxpanel.db")
+	id, err := app.JoinNode(ctx, paths, url, pin, token, name, ip, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := db.Open(ctx, paths.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	identity, err := db.GetSetting(ctx, conn, db.AgentMaster)
+	if err != nil || identity.ServerID != id.ServerID {
+		t.Fatal("local agent identity does not match registration", err)
+	}
+	key, err := app.LoadAgentKey(paths, identity.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return agent.Node{Reader: conn, Writer: conn, Master: identity, Key: key, Client: client}, paths
+}
+
 func TestRemoteDesiredStateLifecycle(t *testing.T) {
 	ctx := t.Context()
 	f, store, _, _ := newSubscriptionAPI(t)
@@ -56,35 +85,8 @@ func TestRemoteDesiredStateLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	join := func(name, ip string) (agent.Node, app.Paths) {
-		t.Helper()
-		_, token, err := master.IssueToken(ctx, name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		paths := app.Paths{DataDir: t.TempDir()}
-		paths.Database = filepath.Join(paths.DataDir, "boxpanel.db")
-		id, err := app.JoinNode(ctx, paths, server.URL, pin, token, name, ip, "test")
-		if err != nil {
-			t.Fatal(err)
-		}
-		conn, err := db.Open(ctx, paths.Database)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { conn.Close() })
-		identity, err := db.GetSetting(ctx, conn, db.AgentMaster)
-		if err != nil || identity.ServerID != id.ServerID {
-			t.Fatal("local agent identity does not match registration", err)
-		}
-		key, err := app.LoadAgentKey(paths, identity.PublicKey)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return agent.Node{Reader: conn, Master: identity, Key: key, Client: client}, paths
-	}
-	edge, paths := join("edge", "8.8.8.8")
-	other, _ := join("other", "8.8.4.4")
+	edge, paths := joinTestNode(t, master, client, server.URL, pin, "edge", "8.8.8.8")
+	other, _ := joinTestNode(t, master, client, server.URL, pin, "other", "8.8.4.4")
 	f.call(t, "POST", "inbounds", `{"server_id":2,"protocol":"hysteria2"}`, 422)
 	beat := agent.Heartbeat{Version: "test", SingboxActive: true}
 	for _, node := range []*agent.Node{&edge, &other} {

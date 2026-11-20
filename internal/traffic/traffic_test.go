@@ -71,6 +71,41 @@ func runningCollector(t *testing.T, w, r *sql.DB, fetch FetchFunc) *Collector {
 	c.fetch = fetch
 	return c
 }
+
+func TestNodeCollectorResumesFromCommittedKernelCheckpoint(t *testing.T) {
+	w, r := fixture(t)
+	ctx := t.Context()
+	raw := int64(40)
+	fetch := func(context.Context) ([]firewall.Counter, error) {
+		return []firewall.Counter{counter(1, 0, raw)}, nil
+	}
+	collector := NewNodeCollector(w, r, fetch, "same-boot")
+	must(t, collector.Poll(ctx))
+	must(t, collector.Flush(ctx)) // Persist the baseline even without a delta.
+	raw = 70
+	must(t, collector.Poll(ctx)) // Simulate exit before committing this sample.
+	raw = 100
+	collector = NewNodeCollector(w, r, fetch, "same-boot")
+	must(t, collector.Poll(ctx))
+	must(t, collector.Flush(ctx))
+	if got := usage(t, w, 1).down; got != 60 {
+		t.Fatalf("same-boot restart recovered %d bytes, want 60", got)
+	}
+	collector = NewNodeCollector(w, r, fetch, "same-boot")
+	must(t, collector.Poll(ctx))
+	must(t, collector.Flush(ctx))
+	if got := usage(t, w, 1).down; got != 60 {
+		t.Fatalf("same-boot restart counted the previous sample again: %d", got)
+	}
+	raw = 110 // Already higher than the old counter after the host reboot.
+	collector = NewNodeCollector(w, r, fetch, "new-boot")
+	must(t, collector.Poll(ctx))
+	must(t, collector.Flush(ctx))
+	if got := usage(t, w, 1).down; got != 170 {
+		t.Fatalf("new-boot counters were compared against the old boot: %d", got)
+	}
+}
+
 func TestCollectorDeltasRecreationUnknownAndDelete(t *testing.T) {
 	w, r := fixture(t)
 	ctx := context.Background()

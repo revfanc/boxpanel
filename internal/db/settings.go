@@ -29,6 +29,7 @@ var (
 	BlockBittorrent       = SettingKey[bool]{"block_bittorrent"}
 	PanelName             = SettingKey[string]{"panel_name"}
 	TrafficBatch          = SettingKey[string]{"traffic_batch"}
+	UserIDHighWatermark   = SettingKey[int64]{"user_id_high_watermark"}
 	AppliedUsers          = SettingKey[[]int64]{"applied_users"}
 	ApplyGeneration       = SettingKey[string]{"apply_generation"}
 	ClashAPIPort          = SettingKey[int]{"clash_api_port"}
@@ -42,7 +43,22 @@ var (
 	Hysteria2Fingerprints = SettingKey[map[string]string]{"hysteria2_fingerprints"}
 )
 
-var AgentAppliedGeneration = SettingKey[int64]{"agent_applied_generation"}
+var (
+	AgentAppliedGeneration = SettingKey[int64]{"agent_applied_generation"}
+	AgentTrafficEpoch      = SettingKey[int64]{"agent_traffic_epoch"}
+	AgentTrafficCheckpoint = SettingKey[TrafficCheckpoint]{"agent_traffic_checkpoint"}
+)
+
+type TrafficCheckpoint struct {
+	BootID  string                  `json:"boot_id"`
+	Samples map[int64]TrafficSample `json:"samples"`
+}
+
+type TrafficSample struct {
+	Epoch int64 `json:"epoch"`
+	Up    int64 `json:"up"`
+	Down  int64 `json:"down"`
+}
 
 type AgentConnection struct {
 	MasterURL string `json:"master_url"`

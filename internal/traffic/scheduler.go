@@ -106,8 +106,8 @@ func (s *Scheduler) Check(ctx context.Context) error {
 	needed := false
 	for _, u := range users {
 		d := c.pending[account{u.ID, u.epoch}]
-		u.TrafficUp = add(u.TrafficUp, d.up)
-		u.TrafficDown = add(u.TrafficDown, d.down)
+		u.TrafficUp = AddBytes(u.TrafficUp, d.up)
+		u.TrafficDown = AddBytes(u.TrafficDown, d.down)
 		if monthlyDue(u, now) || active[u.ID] && !confgen.UserEligible(u.User, now.Unix()) {
 			needed = true
 			break
@@ -186,7 +186,11 @@ func (s *Scheduler) RunAccounting(ctx context.Context) {
 func (s *Scheduler) run(ctx context.Context, enforcePolicy bool) {
 	poll := time.NewTicker(10 * time.Second)
 	defer poll.Stop()
-	flush := time.NewTicker(60 * time.Second)
+	flushInterval := 60 * time.Second
+	if !enforcePolicy {
+		flushInterval = 30 * time.Second
+	}
+	flush := time.NewTicker(flushInterval)
 	defer flush.Stop()
 	var checks <-chan time.Time
 	if enforcePolicy {

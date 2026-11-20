@@ -25,6 +25,9 @@ const (
 	OfflineAfter      = 90 * time.Second
 	nonceLifetime     = 5 * time.Minute
 	maxClockSkew      = 120
+	TrafficPath       = Prefix + "/traffic"
+	MaxTrafficBody    = 1 << 20
+	MaxTrafficUsers   = 10_000
 )
 
 type Registration struct {
@@ -118,6 +121,17 @@ type InboundKeys struct {
 
 type HeartbeatReply struct {
 	DesiredGeneration int64 `json:"desired_generation"`
+}
+
+type TrafficReport struct {
+	Counters []TrafficCounter `json:"counters"`
+}
+
+type TrafficCounter struct {
+	UserID int64 `json:"user_id"`
+	Epoch  int64 `json:"epoch"`
+	Up     int64 `json:"up"`
+	Down   int64 `json:"down"`
 }
 
 const (

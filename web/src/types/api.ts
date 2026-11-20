@@ -109,6 +109,8 @@ export interface Server {
   sync_status?: 'synced' | 'syncing' | 'failed'
   sync_error?: string
   singbox_active?: boolean
+  traffic_up?: number
+  traffic_down?: number
   last_seen_at: number | null
   version: string
   created_at: number

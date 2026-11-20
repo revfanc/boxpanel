@@ -493,7 +493,7 @@ bash scripts/install.sh --restore /root/boxpanel-backup.tar.gz.enc --passphrase-
   确认没有恢复进程后再移除，SIGKILL/断电时检查原目录与完整 pre-restore 目录并人工恢复。
   仅在新数据、服务与订阅验证正常后按需清理旧目录。
 
-## 9. T8.2–T8.3 节点安装
+## 9. T8.2–T8.4 节点安装
 
 在主控面板打开「服务器 → 添加服务器」，生成命令后在新节点以 root 执行。示例中的 URL 包含主控面板路径。
 
@@ -528,3 +528,5 @@ bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/main/script
   位于 NAT 后的节点仍需按实际协议映射入站端口及配置的 UDP 跳跃端口。等待入站公开材料上报后再更新客户端订阅。
 - 主控暂时不可达时节点继续使用已经生效的配置。节点恢复后缺少 Reality 或 Hysteria2 密钥时会重新生成并上报。
   使用原公钥或指纹的客户端需要刷新订阅。
+- 主控和节点均升级至支持 T8.4 的版本后，节点采集的用户用量会随心跳汇总到主控。主控暂时不可达时，节点继续计数并在恢复后补报。
+  若只重启节点的 boxpanel 服务，sing-box 和同次系统启动的 nft 计数器持续运行时可补记停机间隔的用量。

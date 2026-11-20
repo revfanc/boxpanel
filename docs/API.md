@@ -227,7 +227,7 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 | GET | `/reality/recommend` | `{targets: [{server, tls13, h2, latency_ms, ok}]}`，前 3 个推荐 |
 | POST | `/reality/check` | `{server, port?}` → 单个检测结果 |
 
-## 服务器（T8.1–T8.3）
+## 服务器（T8.1–T8.4）
 
 | 方法 | 路径 | 请求与成功响应 |
 |---|---|---|
@@ -245,15 +245,18 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 名称和公网地址变更直接更新订阅元数据。远端 `public_host` 接受域名或裸 IPv4/IPv6。本机公网地址通过设置 API 修改。
 远端服务器还返回 `desired_generation`、`applied_generation`（0 表示尚未生效）、`sync_status`（`syncing`、`synced`、`failed`）
 及最近心跳记录的 `singbox_active`。有失败时返回固定的 `sync_error` 代码，面板根据代码展示原因和处理建议。
+`GET /servers` 的远端行还包含 `traffic_up`、`traffic_down`，单位为字节。两项汇总该服务器所有未删除用户已确认的用量，
+包含历次节点 epoch，从 0 开始并饱和到 int64 上限。用户清零不改变服务器累计值。本机继续通过 `/alerts` 查看网卡计费用量。
+按服务器拆分单个用户的用量留给 T8.6。
 服务器列表排除 `removed`；本机、已移除或不存在的服务器无法通过 DELETE 移除，返回 404。
 令牌元数据为 `id`、`name`、`expires_at`。只有签发响应含令牌明文，使用和撤销后从列表消失。
 无论主控当前使用自签或 ACME 证书，`master_pin` 都是固定回退公钥 SPKI DER 的 SHA-256（无填充 base64url）。
 签发要求 HTTPS，HTTP 面板返回 `409 agent_requires_https`。令牌管理和服务器移除沿用管理员会话与 CSRF 校验。
 
-### 节点 API（T8.2–T8.3）
+### 节点 API（T8.2–T8.4）
 
 前缀为 `/{web_path}/api/agent/v1`，只接受 HTTPS。带请求体的 POST 使用 `application/json`。节点使用签名认证。
-请求体限 8 KiB、路径不含查询参数。所有 base64url 值均不带填充。
+请求体限 8 KiB，`/traffic` 限 1 MiB。路径不含查询参数。所有 base64url 值均不带填充。
 
 | 方法 | 路径 | 请求与成功响应 |
 |---|---|---|
@@ -261,6 +264,7 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 | POST | `/heartbeat` | `{version, singbox_active, uptime, applied_generation?, sync_error?}`。携带 `applied_generation` 时 200 `{desired_generation}`，旧节点省略该字段时返回 204。uptime 为节点进程运行秒数 |
 | GET | `/desired` | 空请求体，200 `{generation, inbounds, users, route}` |
 | POST | `/inbound-keys` | `{inbound_id, key_id, reality_public_key?, short_id?, hy2_cert_sha256?, hy2_cert_pem?}`，204 |
+| POST | `/traffic` | `{counters:[{user_id,epoch,up,down}]}`，204 |
 
 注册按 TCP 对端 IP 限流，每分钟 10 次，返回 429 时带 `Retry-After`。`public_ip` 为空时记录连接对端 IP，
 不会采用转发头。非公网地址（包括未传地址且对端为私网的情况）返回 `422 agent_public_ip_required`，
@@ -282,6 +286,12 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 过期的 `key_id` 返回 `409 stale_inbound_keys`，无效的公开材料返回 `400 invalid_inbound_keys`。同一版本和材料允许重复上报。
 `sync_error` 可为空或为 `check_failed`、`port_in_use`、`restart_failed`、`firewall_failed`、`apply_timeout`、
 `rollback_failed`、`apply_failed`、`key_publication_failed`。主控拒绝其他值，避免向面板转发节点日志或凭证。
+
+`/traffic` 只按签名认证取得的服务器 ID 记账，已移除服务器统一返回 `401 agent_unauthorized`。
+每批最多 10000 条，`user_id` 和 `epoch` 为正整数，`up`、`down` 为非负 int64 累计字节。
+重复 `user_id`、未知字段和无效 JSON 返回 `400 invalid_argument`，请求体超限返回 413。已删除的用户记录静默忽略。
+请求成功表示整批已确认。节点以新签名重试同一快照不会重复计数。较旧 epoch 忽略，同一 epoch 的每个方向独立保留最高确认值。
+收到较新 epoch 时，该 epoch 从零计量。总量和配额以主控为准。具体重置与补报口径见 [SPEC §19](SPEC.md#19-t84-远端流量汇总)。
 
 ## 入站
 

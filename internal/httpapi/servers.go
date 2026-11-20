@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"database/sql"
 	"fmt"
 	"net/http"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/revfanc/boxpanel/internal/rules"
+	"github.com/revfanc/boxpanel/internal/traffic"
 )
 
 type serverRecord struct {
@@ -25,6 +27,8 @@ type serverRecord struct {
 	SyncStatus        string `json:"sync_status,omitempty"`
 	SyncError         string `json:"sync_error,omitempty"`
 	SingboxActive     *bool  `json:"singbox_active,omitempty"`
+	TrafficUp         *int64 `json:"traffic_up,omitempty"`
+	TrafficDown       *int64 `json:"traffic_down,omitempty"`
 }
 
 const serverColumns = "id,name,public_host,is_local,status,last_seen_at,version,created_at,updated_at,desired_generation,applied_generation,sync_error,singbox_active"
@@ -57,7 +61,14 @@ func (a *api) serverList(w http.ResponseWriter, r *http.Request) {
 		a.resourceError(w, err)
 		return
 	}
-	rows, err := conn.QueryContext(r.Context(), "SELECT "+serverColumns+" FROM servers WHERE status<>'removed' ORDER BY is_local DESC, id")
+	ctx := r.Context()
+	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		a.resourceError(w, fmt.Errorf("begin server list: %w", err))
+		return
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, "SELECT "+serverColumns+" FROM servers WHERE status<>'removed' ORDER BY is_local DESC, id")
 	if err != nil {
 		a.resourceError(w, fmt.Errorf("list servers: %w", err))
 		return
@@ -75,6 +86,36 @@ func (a *api) serverList(w http.ResponseWriter, r *http.Request) {
 	if err := rows.Err(); err != nil {
 		a.resourceError(w, fmt.Errorf("list servers: %w", err))
 		return
+	}
+	remote := make(map[int64]int)
+	for i := range servers {
+		if !servers[i].IsLocal {
+			remote[servers[i].ID] = i
+			servers[i].TrafficUp, servers[i].TrafficDown = new(int64), new(int64)
+		}
+	}
+	if len(remote) > 0 {
+		rows, err := tx.QueryContext(ctx, `SELECT t.server_id,t.total_up,t.total_down FROM server_user_traffic t
+			JOIN servers s ON s.id=t.server_id WHERE s.is_local=0 AND s.status<>'removed'`)
+		if err != nil {
+			a.resourceError(w, fmt.Errorf("read server traffic totals: %w", err))
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id, up, down int64
+			if err := rows.Scan(&id, &up, &down); err != nil {
+				a.resourceError(w, fmt.Errorf("scan server traffic totals: %w", err))
+				return
+			}
+			s := &servers[remote[id]]
+			*s.TrafficUp = traffic.AddBytes(*s.TrafficUp, up)
+			*s.TrafficDown = traffic.AddBytes(*s.TrafficDown, down)
+		}
+		if err := rows.Err(); err != nil {
+			a.resourceError(w, fmt.Errorf("list server traffic totals: %w", err))
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, servers)
 }

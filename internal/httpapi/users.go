@@ -5,11 +5,13 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/revfanc/boxpanel/internal/auth"
+	"github.com/revfanc/boxpanel/internal/db"
 )
 
 type userView struct {
@@ -188,13 +190,19 @@ func (a *api) userCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		u := userView{Name: *input.Name, Enabled: true, CreatedAt: time.Now().Unix()}
 		patchUser(&u, input)
-		res, err := tx.ExecContext(ctx, "INSERT INTO users (name,uuid,password,sub_token,traffic_limit,expire_at,remark,created_at,traffic_reset_day,traffic_epoch,alert_identity) VALUES (?,?,?,?,?,?,?,?,?,?,?)", u.Name, uuid, password, token, u.TrafficLimit, u.ExpireAt, u.Remark, u.CreatedAt, u.TrafficResetDay, epoch, epoch)
-		if err != nil {
+		lastID, err := db.GetSetting(ctx, tx, db.UserIDHighWatermark)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		var id int64
+		if err := tx.QueryRowContext(ctx, `INSERT INTO users
+			(id,name,uuid,password,sub_token,traffic_limit,expire_at,remark,created_at,traffic_reset_day,traffic_epoch,alert_identity)
+			VALUES (max(?,coalesce((SELECT max(id) FROM users),0))+1,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
+			lastID, u.Name, uuid, password, token, u.TrafficLimit, u.ExpireAt, u.Remark, u.CreatedAt, u.TrafficResetDay, epoch, epoch).Scan(&id); err != nil {
 			return fmt.Errorf("create user: %w", err)
 		}
-		id, err := res.LastInsertId()
-		if err != nil {
-			return fmt.Errorf("read created user ID: %w", err)
+		if err := db.SetSetting(ctx, tx, db.UserIDHighWatermark, id); err != nil {
+			return err
 		}
 		result, err = readUser(ctx, tx, id)
 		return err

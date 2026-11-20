@@ -786,7 +786,7 @@ sing-box 配置，已导入的设备可继续使用。本任务补齐两者，�
 4. **T8.2** 一次性加入令牌 + `install.sh --join`；节点本地生成密钥对注册，之后双向认证；**节点主动连主控**，节点不暴露管理端口、不跑面板。
 5. **T8.3** 期望状态同步（入站、有效用户、规则、generation），节点用现有 Apply（校验/回滚/不变不重启）生效并回报健康；离线判定；
    节点自生成 Reality/Hysteria2 私钥，只上报公钥/指纹。
-6. **T8.4** 节点上报每用户增量（带序号，幂等），主控汇总并统一判定到期/超额，下一轮同步全网停用。
+6. **T8.4** 节点上报每用户累计值（单调 epoch 与各方向高水位保证幂等），主控汇总并统一判定到期/超额，下一轮同步全网停用。
 7. **T8.5** 在 T8.1 的跨服务器订阅和默认命名基础上完善订阅体验；≥3 节点时可选自动测速组。
 8. **T8.6** 面板「服务器」页：添加向导（复制加入命令）、状态/版本/最近联系/流量、移除。
 9. **T8.7** 版本兼容检查与提示；端到端测试（本机 1 主控 + 2 节点）；告警扩展到全部服务器 + 服务器离线告警；
@@ -1108,12 +1108,12 @@ host 变化后回退密钥 SPKI 不变；系统 CA 分支拒绝主机名不匹�
 
 **1. 上报语义（幂等）**：节点上报**累计值**而非增量：`POST /api/agent/v1/traffic`
 `{counters:[{user_id, epoch, up, down}]}`。`epoch` 为节点镜像用户的 `traffic_epoch`（T8.3 镜像已在 uuid 变化/新用户时换新 epoch），
-同一 epoch 内 up/down 只增不减。主控按 `(server_id, user_id)` 保存上次确认的 `(epoch, up, down)`，增量 = 本次 − 上次；
-epoch 变化 → 以 0 为基线（增量 = 本次值）；同 epoch 下某方向回退 → 该方向视为新基线、增量 0（不倒扣、记 warn 日志不含用户信息）。
-重放、重试、乱序重复都不会重复计数（这就是路线图里「带序号」的实现方式，在文档中说明）。
-- 新迁移 `server_user_traffic(server_id, user_id, epoch, up, down, updated_at, PRIMARY KEY(server_id,user_id))`，
+同一 epoch 内 up/down 只增不减。主控按 `(server_id, user_id)` 保存确认的 `(epoch, up, down)`，增量 = 本次 − 上次；
+单调递增的 epoch 换代时从 0 计，较旧 epoch 忽略。同 epoch 下某方向回退，该方向增量为 0 并保留最高确认值，记录不含用户信息的警告。
+若接受回退值为基线，后续重放会重复记账，因此真正的累计重建由新 epoch 表示。
+- 新迁移 `server_user_traffic(server_id, user_id, epoch, up, down, total_up, total_down, updated_at, PRIMARY KEY(server_id,user_id))`，
   外键/删除：用户删除时一并删除其行；服务器移除时保留（历史流量保留，见 T8.2）。
-- 同一事务内：更新基线 + `users.traffic_up/down` 饱和加法（同 collector 的饱和写法）。未知 user_id（已删除）忽略并更新/不建基线，
+- 同一事务内更新基线，以饱和加法更新跨 epoch 累计和 `users.traffic_up/down`。未知 user_id（已删除）忽略且不建基线，
   不返回错误；单请求 ≤ 10000 条，重复 user_id → 400。该路由 body 上限放宽到 1 MiB（其他 agent 路由保持 8 KiB）。
 - 鉴权同 T8.3：身份来自签名认证，只写该 server_id 的基线；removed 服务器 401。
 - 已知取舍（写入文档）：主控月度重置/手动清零时，节点上次上报后、重置前的少量用量会计入新周期；节点只上报主控下发过的用户 id
@@ -1121,7 +1121,8 @@ epoch 变化 → 以 0 为基线（增量 = 本次值）；同 epoch 下某方�
 
 **2. 节点侧**：在心跳循环（或独立 30 s 定时器，与 Flush 对齐）读取本地**已落库**的镜像用户累计值，与上次被主控确认（2xx）的
 快照比较，有变化才上报；失败下次重试（累计语义保证补报）。主控离线期间节点继续计数，恢复后一次补齐。节点仍不执行本地停用调度。
-需确认节点 Flush 节奏（现为 60 s）与上报配合，使「用量发生 → 主控可见」≤ 约 90 s；可把节点 flush 缩短到 30 s。
+节点每 10 s 采样、30 s 落库，随正常 20 s 心跳上报。同步前尽力采样，在镜像应用事务中保存被替换或移除用户的最终累计值，
+直到主控确认。节点保存内核采样基线，boxpanel 服务重启后可从仍存续的 nft 计数器补差值。
 
 **3. 主控判定**：用户 traffic 增加越过上限时，现有 `desired_user_update` 触发器递增所有远端 desired_generation，节点下轮同步停用；
 本机由现有 Scheduler 停用。需保证：
@@ -1130,8 +1131,8 @@ epoch 变化 → 以 0 为基线（增量 = 本次值）；同 epoch 下某方�
 - 到期判定沿用主控（T8.3 refreshDesired 已覆盖），无需改动。
 - 月度重置后用户重新有效 → 触发器递增 generation → 节点恢复该用户。
 
-**4. API / 面板**：`GET /api/servers`（或现有服务器列表接口）为每台远端服务器返回 `traffic_up/traffic_down`（该服务器全部用户累计之和，
-来自 server_user_traffic）；用户详情可选返回按服务器拆分（若改动小则做，否则留给 T8.6，在文档注明）。API.md 同步。
+**4. API / 面板**：`GET /servers` 为每台远端服务器返回 `traffic_up/traffic_down`（该服务器全部未删除用户的跨 epoch 累计之和，
+来自 `server_user_traffic`）。用户详情按服务器拆分留给 T8.6。API.md 同步。
 面板服务器列表显示该服务器累计流量（简单文本即可，完整服务器页在 T8.6）。
 
 **测试**
@@ -1143,7 +1144,11 @@ epoch 变化 → 以 0 为基线（增量 = 本次值）；同 epoch 下某方�
 - 单机 golden 与现有 traffic 测试不变。
 
 - **验收**：
-  - [ ] 以上测试；`make lint test build` 通过；SPEC/API/CONFIG 同步。
+  - [x] 主控累计、重放、乱序、epoch 换代、回退、批次回滚、未知用户、鉴权、请求上限及饱和测试通过。
+  - [x] HTTPS 集成验证离线补报、丢失确认重试、节点进程重启、两节点停用和月度恢复。远端独立导致超额时，每周期只记录一次停用及阈值事件。
+  - [x] 单机 golden、既有流量测试、服务器列表和面板检查通过。SPEC、API、CONFIG、FRONTEND、INSTALL 已同步。
+  - [x] `make lint`、`make build`、21 项安装脚本用例、除 `internal/e2e` 外全部 Go 测试、前端类型检查与 134 项 Vitest 通过。
+  - [ ] 完整 `make test` 通过。已执行，`TestLoopback` 和 `TestTrafficLoopback` 在 macOS 沙箱启动 sing-box 时注册 DNS 通知返回 `status 9`，待沙箱外复跑。
   - [ ] LXD 实机：经远端节点下载 N MB，≤ 90 s 内主控用户流量增加 ≈N MB（与 nft 计数一致）；给用户设小上限，经节点超额后
     ≤ 90 s 节点停用该用户、连接失败，并收到/记录一次停用事件；节点断网（停 boxpanel 或阻断）期间产生的用量恢复后补齐、不重复。
 

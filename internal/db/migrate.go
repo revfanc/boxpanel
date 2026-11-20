@@ -108,10 +108,7 @@ func migrate(ctx context.Context, pool *sql.DB, source fs.FS) error {
 			return fmt.Errorf("record database migration %q: %w", names[i], err)
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		// database/sql considers the transaction finished even if SQLite
-		// retained it. Closing the driver connection rolls it back.
-		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+	if err := Commit(conn, tx); err != nil {
 		return fmt.Errorf("commit database migrations: %w", err)
 	}
 	return nil

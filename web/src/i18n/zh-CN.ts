@@ -296,6 +296,7 @@ export const zhCN = {
     revoke: '撤销令牌',
     closeAdd: '关闭添加表单',
     lastSeen: '最近联系',
+    traffic: '用户累计流量（上传 / 下载）',
     noHeartbeat: '尚未收到心跳',
     sync: '配置同步',
     generations: '已生效版本 / 期望版本',
