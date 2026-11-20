@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -28,6 +29,7 @@ var (
 	SingboxVersion        = SettingKey[string]{"singbox_version"}
 	BlockBittorrent       = SettingKey[bool]{"block_bittorrent"}
 	PanelName             = SettingKey[string]{"panel_name"}
+	SubscriptionAutoGroup = SettingKey[bool]{"subscription_auto_group"}
 	TrafficBatch          = SettingKey[string]{"traffic_batch"}
 	UserIDHighWatermark   = SettingKey[int64]{"user_id_high_watermark"}
 	AppliedUsers          = SettingKey[[]int64]{"applied_users"}
@@ -143,6 +145,15 @@ func GetSetting[T any](ctx context.Context, conn SettingsDB, key SettingKey[T]) 
 		return zero, fmt.Errorf("decode setting %q (repair or restore this setting): %w", key.name, err)
 	}
 	return value, nil
+}
+
+// ReadSubscriptionAutoGroup defaults to false for databases saved before T8.5.
+func ReadSubscriptionAutoGroup(ctx context.Context, conn SettingsDB) (bool, error) {
+	enabled, err := GetSetting(ctx, conn, SubscriptionAutoGroup)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return enabled, err
 }
 
 // SetSetting inserts or replaces a JSON value without changing other settings.

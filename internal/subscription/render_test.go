@@ -22,6 +22,7 @@ import (
 	"github.com/revfanc/boxpanel/internal/db"
 	"github.com/revfanc/boxpanel/internal/share"
 	"github.com/revfanc/boxpanel/internal/singbox"
+	"github.com/revfanc/boxpanel/web"
 	"gopkg.in/yaml.v3"
 )
 
@@ -43,8 +44,11 @@ func fixture(t *testing.T) Snapshot {
 
 func TestGolden(t *testing.T) {
 	for _, preset := range []string{"bypass_cn", "gfw_only", "global"} {
-		for _, variant := range []string{"default", "options", "empty", "single", "names"} {
+		for _, variant := range []string{"default", "options", "empty", "single", "names", "auto_group"} {
 			for _, format := range []Format{Singbox, Clash, Base64} {
+				if variant == "auto_group" && (preset != "global" || format == Base64) {
+					continue
+				}
 				name := string(format) + "_" + preset + "_" + variant
 				t.Run(name, func(t *testing.T) {
 					s := fixture(t)
@@ -77,7 +81,13 @@ func TestGolden(t *testing.T) {
 						extra := s.Nodes[0]
 						extra.ID, extra.Port, extra.Name = 3, 9443, " Reality · 443 "
 						s.Nodes[0].Name, s.Nodes[1].Name = "", " \t\n "
-						s.Nodes = UniqueNames(append(s.Nodes, extra))
+						s.Nodes = uniqueNames(append(s.Nodes, extra), nil)
+					}
+					if variant == "auto_group" {
+						extra := s.Nodes[0]
+						extra.ID, extra.Port, extra.Name = 3, 9443, web.SubscriptionText()["autoSelect"]
+						s.Nodes = uniqueNames(append(s.Nodes, extra), nil)
+						s.AutoGroup = true
 					}
 					before, _ := json.Marshal(s)
 					got, err := Render(s, format)
@@ -224,7 +234,7 @@ func TestRedactAndNames(t *testing.T) {
 	s.Nodes[0].Name = "proxy"
 	s.Nodes[2].Name = "proxy"
 	before := append([]share.Node{}, s.Nodes...)
-	names := UniqueNames(s.Nodes)
+	names := uniqueNames(s.Nodes, nil)
 	if !reflect.DeepEqual(s.Nodes, before) {
 		t.Fatal("mutated names")
 	}

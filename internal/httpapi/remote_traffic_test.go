@@ -21,6 +21,7 @@ import (
 	"github.com/revfanc/boxpanel/internal/db"
 	"github.com/revfanc/boxpanel/internal/firewall"
 	"github.com/revfanc/boxpanel/internal/singbox"
+	"github.com/revfanc/boxpanel/internal/subscription"
 	"github.com/revfanc/boxpanel/internal/traffic"
 )
 
@@ -32,7 +33,7 @@ func TestRemoteTrafficLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	f := newResources(t, false)
+	f, store, _, _ := newSubscriptionAPI(t)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	master := agent.NewMaster(f.conn, nil, nil)
 	master.OnStopped = alerts.New(f.conn, nil, alerts.Options{}).UserStopped
@@ -72,7 +73,8 @@ func TestRemoteTrafficLifecycle(t *testing.T) {
 	edge, edgePaths := joinTestNode(t, master, client, server.URL, pin, "edge", "8.8.8.8")
 	other, otherPaths := joinTestNode(t, master, client, server.URL, pin, "other", "8.8.4.4")
 	beat := agent.Heartbeat{Version: "test", SingboxActive: true}
-	f.call(t, "POST", "users", `{"name":"alice","traffic_limit":100,"traffic_reset_day":1}`, 201)
+	expiry := time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC).Unix()
+	f.call(t, "POST", "users", fmt.Sprintf(`{"name":"alice","traffic_limit":100,"traffic_reset_day":1,"expire_at":%d}`, expiry), 201)
 	config := func(filename string) string {
 		t.Helper()
 		raw, err := os.ReadFile(filename)
@@ -142,6 +144,14 @@ func TestRemoteTrafficLifecycle(t *testing.T) {
 	disconnected.Store(false)
 	must(sync(&edge))
 	usage(40)
+	data, err := store.Load(ctx, 1, nil)
+	must(err)
+	public := &subscription.Handler{Store: store, Limiter: &subscription.Limiter{}, Logger: logger}
+	sub := request(t, public, http.MethodHead, "https://master.test/subscribe/"+data.User.Token+"?format=clash", "", nil, nil)
+	requireStatus(t, sub, http.StatusOK)
+	if got := sub.Header().Get("Subscription-Userinfo"); got != fmt.Sprintf("upload=0; download=40; total=100; expire=%d", expiry) {
+		t.Fatalf("public subscription lost reported node traffic or expiry: %q", got)
+	}
 	must(sync(&edge))
 	usage(40)
 	must(sync(&edge))

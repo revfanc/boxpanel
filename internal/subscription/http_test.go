@@ -72,7 +72,7 @@ func TestHTTPFormatsHeadersHTMLAnd404(t *testing.T) {
 	base := "/subscribe123/token-that-must-not-leak"
 	for _, format := range []string{"singbox", "clash", "base64"} {
 		w := publicRequest(h, "GET", base+"?format="+format, nil)
-		if w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" || w.Header().Get("Subscription-Userinfo") != "upload=0; download=0; total=0; expire=0" || w.Header().Get("Profile-Update-Interval") != "12" || !strings.Contains(w.Header().Get("Content-Disposition"), "filename*=UTF-8''") {
+		if w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" || w.Header().Get("Subscription-Userinfo") != "upload=0; download=0; total=0" || w.Header().Get("Profile-Update-Interval") != "12" || !strings.Contains(w.Header().Get("Content-Disposition"), "filename*=UTF-8''") {
 			t.Fatal(w.Code, w.Header())
 		}
 		if strings.Contains(w.Body.String(), "NEVER-IN-CLIENT") {
@@ -96,6 +96,35 @@ func TestHTTPFormatsHeadersHTMLAnd404(t *testing.T) {
 	}
 	if w := publicRequest(h, "GET", base+"?format=unknown", nil); w.Code != 400 {
 		t.Fatal(w.Code)
+	}
+}
+
+func TestSubscriptionAttachmentHeaders(t *testing.T) {
+	h, store := publicFixture(t)
+	if _, err := store.DB.Exec("UPDATE users SET traffic_up=1024,traffic_down=2048,traffic_limit=10000,expire_at=1800000001"); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ panelName, encoded string }{
+		{"", "boxpanel"},
+		{"面板 A\"'\r\nX-Test: +*%;", "%E9%9D%A2%E6%9D%BF%20A%22%27%0D%0AX-Test%3A%20%2B%2A%25%3B"},
+	} {
+		if err := db.SetSetting(t.Context(), store.DB, db.PanelName, tc.panelName); err != nil {
+			t.Fatal(err)
+		}
+		for _, format := range []Format{Singbox, Clash, Base64} {
+			filename := tc.encoded
+			if format == Clash {
+				filename += ".yaml"
+			}
+			for _, method := range []string{"GET", "HEAD"} {
+				w := publicRequest(h, method, "/subscribe123/token-that-must-not-leak?format="+string(format), nil)
+				if w.Code != 200 || w.Header().Get("Content-Disposition") != "attachment; filename*=UTF-8''"+filename ||
+					w.Header().Get("Subscription-Userinfo") != "upload=1024; download=2048; total=10000; expire=1800000001" ||
+					w.Header().Get("Profile-Update-Interval") != "12" {
+					t.Fatalf("%s %s: %d %v", method, format, w.Code, w.Header())
+				}
+			}
+		}
 	}
 }
 func TestInactiveResetTokenAndPath(t *testing.T) {

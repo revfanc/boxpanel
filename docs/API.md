@@ -450,7 +450,7 @@ JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未�
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/settings` | `{public_host, web_port, web_path, sub_path, panel_tls_mode, block_bittorrent, panel_name}` |
+| GET | `/settings` | `{public_host, web_port, web_path, sub_path, panel_tls_mode, block_bittorrent, panel_name, subscription_auto_group}` |
 | PUT | `/settings` | 修改；改 `web_port`/`web_path` 时响应里返回新面板地址，后端 2 秒后重启监听 |
 
 ### T3.2 订阅、规则与设置约定
@@ -484,6 +484,10 @@ JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未�
   `--dev` 固定 2053/根路径，拒绝修改这两项；其他设置可正常编辑。
 - sub_path 更新立即用于路由判断，旧路径失效；规则、名称、public_host 修改立即影响下一次订阅。
   正在处理的请求仍使用开始时的一致快照。此次不增加流量采样或定时封禁。
+- T8.5：`subscription_auto_group` 为布尔值，默认 `false`。PUT 保存后下一次订阅和规则预览使用新值。
+  只改变该项时 `restart_after=0`，不调用服务端 Apply，也不递增节点的 `desired_generation`。
+- T8.5：`/users/{id}/links` 的节点按本机、远端服务器 ID、同服务器内入站 ID 的顺序排列。
+  规则预览和管理员 links 沿用原响应结构、缓存与脱敏规则，不添加公开订阅的流量、下载和更新间隔响应头。
 
 公开订阅 `/{sub_path}/{token}`：
 
@@ -494,12 +498,14 @@ JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未�
   带 Retry-After。计数包括错误 token、HEAD 和该订阅命名空间内的非法请求，合法 token 也不能绕过。
   内存限流表最多 10000 项，过期清理，满时拒绝新来源；重启清空，切换监听不重置。
 - 显式 format 参数优先于 UA；不支持的值、空值或重复参数在 token 有效后返回 400；UA 表见 CONFIG.md。
-  成功配置类型为 application/json、application/yaml 或 text/plain，通用三项响应头见 CONFIG.md。
+  成功配置类型为 application/json、application/yaml 或 text/plain，GET 与 HEAD 均返回 CONFIG.md §4.2
+  的三项响应头，HEAD 无响应体。流量来自主控已确认的本机与远端汇总，未设限额时 `total=0`，
+  未设到期时省略 `expire`。Clash 下载名追加 `.yaml`，面板名称为空时使用 `boxpanel`。
   无法生成时返回无敏感细节的 503 与下一步建议，不透传 DB/证书错误。
 - 浏览器 HTML 以 text/html 内联显示（不发 attachment），仍带流量/更新头；二维码在本地生成 PNG，
   页面使用 no-store、no-referrer、CSP、HTML 转义，无外部脚本、字体、QR 服务或请求日志中的 token。
   T6.6：采用跟随系统亮暗色的卡片布局，显示状态、换算后的流量及 UTC 到期日期/剩余天数、
-  二维码、只读订阅地址/复制、sing-box/Clash 导入、共享客户端清单及其他格式折叠区。
+  二维码、只读订阅地址/复制、sing-box/Clash 导入、共享客户端清单及其他格式折叠区。T8.5 多服务器时还显示分组节点列表。
   每次 HTML 响应（包括 HEAD）生成 crypto/rand 32 字节 base64url nonce，
   CSP 增加 `script-src 'nonce-…'`，与唯一内联复制脚本一致，其余指令不变。
   无 JS 时可手动选择地址。禁用/过期/超额仍保持空白 404，不因渲染器支持状态展示而放开。

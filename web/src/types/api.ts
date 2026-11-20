@@ -55,6 +55,7 @@ export interface PanelSettings {
   panel_tls_mode: string
   block_bittorrent: boolean
   panel_name: string
+  subscription_auto_group: boolean
 }
 export interface SettingsResult extends PanelSettings { panel_url: string; restart_after: 0 | 2 }
 export interface CertificateStatus {

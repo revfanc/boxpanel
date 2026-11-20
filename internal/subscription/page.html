@@ -113,7 +113,13 @@ footer p + p { margin-top: 8px; }
   <details class="card"><summary>{{.Text.otherFormats}}</summary>{{range .Formats}}
     <div class="format"><label for="{{.ID}}">{{.Label}}</label><div class="copy-row"><input id="{{.ID}}" type="text" readonly value="{{.URL}}" spellcheck="false" autocomplete="off"><button type="button" data-copy="{{.ID}}" aria-label="{{$.Text.copy}} {{.Label}}">{{$.Text.copy}}</button></div></div>{{end}}
   </details>
-  <p id="copy-feedback" class="feedback hint" role="status" aria-live="polite"></p>
+  {{if .NodeGroups}}<section class="card" aria-labelledby="nodes-title">
+    <h2 id="nodes-title">{{.Text.nodes}}</h2>{{range .NodeGroups}}
+    <div class="format"><h3>{{.Server}}</h3><ul class="clients">{{range .Nodes}}
+      <li>{{.Remark}}</li>{{end}}
+    </ul></div>{{end}}
+  </section>
+  {{end}}<p id="copy-feedback" class="feedback hint" role="status" aria-live="polite"></p>
   <footer><p>{{.Text.compatibility}}</p><p>{{.Text.privacy}}</p></footer>
 </main>
 <script nonce="{{.Nonce}}">

@@ -242,15 +242,20 @@ URL 拼接：`https://raw.githubusercontent.com/{repo}/{branch}/{path}`；设置
 | `clash`、`mihomo`、`stash`、`verge`、`flclash`、`nyanpasu` | clash |
 | 其他（v2rayN、Shadowrocket、NekoBox、浏览器…） | base64 |
 
-浏览器直接访问（UA 含 `Mozilla` 且无上述关键字、`Accept` 含 `text/html`）时，返回一个简洁的 HTML 页：二维码 + 各客户端一键导入按钮 + 到期/流量信息。
+浏览器直接访问（UA 含 `Mozilla` 且无上述关键字、`Accept` 含 `text/html`）时，返回 HTML 分享页，
+提供二维码、客户端一键导入和到期/流量信息。多服务器时显示按服务器归组的订阅节点。
 
 ### 4.2 通用响应头
 
 ```
 Subscription-Userinfo: upload=<n>; download=<n>; total=<limit>; expire=<unix>
 Profile-Update-Interval: 12
-Content-Disposition: attachment; filename*=UTF-8''<面板名>
+Content-Disposition: attachment; filename*=UTF-8''<编码后的下载名>
 ```
+
+- 上传与下载为主控已落库的全网汇总字节数。不限流量时 `total=0`。设置到期时 `expire` 为 UTC Unix 秒，不限期时省略。
+- 下载名取面板名称，缺省为 `boxpanel`，Clash 追加 `.yaml`。使用 [RFC 5987](https://www.rfc-editor.org/rfc/rfc5987.html#section-3.2.1)
+  的 UTF-8 百分号编码表示空格、引号、控制字符等。GET 和 HEAD 均携带这些头，HTML 分享页以内联方式返回，省略下载头。
 
 ### 4.3 sing-box 客户端 JSON（结构示意）
 
@@ -275,7 +280,7 @@ Content-Disposition: attachment; filename*=UTF-8''<面板名>
     { "type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080 }
   ],
   "outbounds": [
-    { "type": "selector", "tag": "proxy", "outbounds": ["<节点…>"], "default": "<第一个节点>" },   // 唯一分组；无节点时为 ["direct"]
+    { "type": "selector", "tag": "proxy", "outbounds": ["<节点…>"], "default": "<第一个节点>" },   // 手动分组；无节点时为 ["direct"]
     { "<各节点 outbound>": "..." },
     { "type": "direct", "tag": "direct" }
   ],
@@ -298,13 +303,13 @@ Content-Disposition: attachment; filename*=UTF-8''<面板名>
 }
 ```
 
-- T6.7：上例适用于至少两个节点。第一层只包含 auto/manual/direct，节点只在 auto/manual 的候选列表中；
-  单节点只生成 proxy selector，`outbounds: ["<该节点>", "direct"]`，`default` 为该节点，不生成 auto/manual。
-  tag 延续现有 proxy/auto/direct 命名并新增 manual；route final、远端 DNS detour 与
-  rule-set `http_client.detour` 仍引用 proxy（gfw_only 的 final 仍为 direct）。
-  [Selector](https://sing-box.sagernet.org/configuration/outbound/selector/) 的 default 未指定时使用首项；
-  [URLTest](https://sing-box.sagernet.org/configuration/outbound/urltest/) 的 tolerance 单位为毫秒，显式输出 50。
-  两类组均不新增 `interrupt_exist_connections`，沿用默认 false，不改变已有连接切换策略。
+- 默认使用 T6.9 的手动 selector，按显示顺序列出实际节点，显式以首个节点为 `default`。
+  T8.5 开启 `subscription_auto_group` 且至少导出三个节点时，在 `proxy` 的候选列表末尾增加 `自动选择`。
+  该出站为 `urltest`，候选仅包含实际节点，`url` 为 `https://www.gstatic.com/generate_204`，
+  `interval: "5m"`、`tolerance: 50`（毫秒）。route final、远端 DNS detour 与 rule-set detour
+  沿用 `proxy` 引用（gfw_only 的 final 仍为 `direct`）。
+  字段见 [Selector](https://sing-box.sagernet.org/configuration/outbound/selector/) 和
+  [URLTest](https://sing-box.sagernet.org/configuration/outbound/urltest/)。
 - fakeip 开启时增加 fakeip server 与对应 DNS 规则。
 - 节点 outbound：
   - vless_reality：`type: vless`, `flow: xtls-rprx-vision`, `tls.reality.{enabled, public_key, short_id}`, `tls.utls.{enabled, fingerprint}`, `tls.server_name`
@@ -373,7 +378,7 @@ proxies:
     skip-cert-verify: false        # 指纹固定验证自签证书
     fingerprint: <sha256>         # 必填，叶证书 DER 的 SHA-256 hex
 proxy-groups:
-  - { name: 节点选择, type: select, proxies: [<节点…>] }   # 唯一分组：手动点选节点，默认第一个；无节点时为 [REJECT]
+  - { name: 节点选择, type: select, proxies: [<节点…>] }   # 手动点选节点，默认第一个；无节点时为 [REJECT]
 rule-providers:
   geosite-cn: { type: http, behavior: domain, format: yaml, url: <见 §3>, interval: 86400, proxy: 节点选择 }
   geoip-cn:   { type: http, behavior: ipcidr, format: yaml, url: <见 §3>, interval: 86400, proxy: 节点选择 }
@@ -389,12 +394,11 @@ rules:
   - MATCH,节点选择
 ```
 
-T6.7（2026-11-09）代理组：上例适用于至少两个节点，节点选择默认首项“自动选择”，
-不直接包含节点；自动/手动组均包含全部节点。单节点只有节点选择 `[该节点, DIRECT]`。
-select/auto/manual 显示文案共享 zh-CN.ts，DIRECT 保持内置名。
-按 [mihomo URL-test](https://wiki.metacubex.one/config/proxy-groups/url-test/) 与
-[组通用字段](https://wiki.metacubex.one/config/proxy-groups/)，显式设置 300 秒间隔、50ms 容差和 lazy=true；
-保留原规则、provider 下载及远端 DNS 到节点选择的引用。
+默认使用 T6.9 的「节点选择」手动组。T8.5 开启 `subscription_auto_group` 且至少导出三个节点时，
+在手动组末尾加入「自动选择」，首项仍是第一个节点。「自动选择」为 `url-test` 组，候选仅包含实际节点，
+使用 `https://www.gstatic.com/generate_204`、`interval: 300`（秒）、`tolerance: 50`（毫秒）和
+`lazy: true`。规则、provider 下载和远端 DNS 继续引用「节点选择」。组名取自 zh-CN.ts。
+字段见 [mihomo URL-test](https://wiki.metacubex.one/en/config/proxy-groups/url-test/)。
 
 T6.5（2026-11-09）防泄漏与兼容边界：
 
@@ -411,7 +415,7 @@ T6.5（2026-11-09）防泄漏与兼容边界：
   不依赖 Stash 文档未确认的 `#代理名` 语法。bypass_cn/global 另加载
   geolocation-!cn 供真实 DNS 查询使用，NTP/连通性检测的真实 IP 例外也明确经代理。
   custom_direct 仍使用本地 DNS，同一后缀 direct 优先；gfw_only 中非 GFW 域名直连是预期。
-  不输出直连境外 fallback。节点选择保留用户主动选择 DIRECT 的能力；防泄漏路径以选择代理节点为前提。
+  不输出直连境外 fallback。直连使用客户端自带的直连模式，防泄漏路径以选择代理节点为前提。
 - Fake-IP 不能覆盖应用自行使用的 DNS/DoH；未列入远程 policy 的非 A/AAAA 查询仍按默认 nameserver
   处理。这里修复代理连接的地址解析路径及境外 DoH 直连，不声称接管设备所有 DNS 流量。
 - [mihomo DNS](https://wiki.metacubex.one/config/dns/) 确认 `respect-rules`、节点独立 DNS、Fake-IP 与
@@ -451,7 +455,7 @@ check 只校验格式，不启动 TUN、不连接节点、不下载 rule-set。
 | route `action/outbound/protocol/ip_is_private/domain_suffix/rule_set` | [Route rule](https://sing-box.sagernet.org/configuration/route/rule/)、[actions](https://sing-box.sagernet.org/configuration/route/rule_action/)；sniff → DNS hijack → 广告 reject → 私网 → custom_direct → custom_proxy → 预设；显式 route action，不使用 block/dns 特殊出站 |
 | route `final/auto_detect_interface/default_domain_resolver` | [Route](https://sing-box.sagernet.org/configuration/route/)；节点域名通过 dns-local，接口自动检测避免 TUN 回环 |
 | rule-set `type/tag/format/url/http_client/update_interval` | [Rule-set](https://sing-box.sagernet.org/configuration/rule-set/)、[HTTP client](https://sing-box.sagernet.org/configuration/shared/http-client/)；remote/binary，`http_client:{detour:"proxy"}` 取代 1.14 已弃用 download_detour，仅引用预设需要的规则 |
-| selector / urltest `type/tag/outbounds/default/url/interval/tolerance` | [Selector](https://sing-box.sagernet.org/configuration/outbound/selector/)、[URLTest](https://sing-box.sagernet.org/configuration/outbound/urltest/)；多节点 proxy 默认 auto，manual 包含全部节点；单节点 proxy 默认该节点；测试 URL 为 gstatic generate_204，间隔 3m，容差 50ms（T6.7） |
+| selector / urltest `type/tag/outbounds/default/url/interval/tolerance` | [Selector](https://sing-box.sagernet.org/configuration/outbound/selector/)、[URLTest](https://sing-box.sagernet.org/configuration/outbound/urltest/)；proxy 默认为首个节点，可选测速组参数见 §4.3 |
 | VLESS `server/server_port/uuid/flow/tls` | [VLESS](https://sing-box.sagernet.org/configuration/outbound/vless/)、[TLS](https://sing-box.sagernet.org/configuration/shared/tls/)；Vision、Reality 公钥和首个 short ID、uTLS 指纹；绝不包含服务器私钥 |
 | Hysteria2 `server/password/up_mbps/down_mbps/obfs/tls/server_ports` | [Hysteria2](https://sing-box.sagernet.org/configuration/outbound/hysteria2/)；TLS 内嵌已生效证书 PEM、SNI、h3，不设置 insecure；端口跳跃时仅输出 server_ports，省略冲突的 server_port |
 | mihomo VLESS / Reality | [VLESS](https://wiki.metacubex.one/config/proxies/vless/)、[TLS](https://wiki.metacubex.one/config/proxies/tls/)；network=tcp、udp=true、packet-encoding=xudp、Vision、servername、client-fingerprint、reality-opts.public-key/short-id |
@@ -469,19 +473,21 @@ check 只校验格式，不启动 TUN、不连接节点、不下载 rule-set。
   sing-box 在 bypass_cn 的域名决策之后、geoip-cn 之前显式 `resolve` 到 dns-remote，
   再检查私网和国内 IP，让 mixed/FakeIP 的域名目标也可命中 IP 规则；其他预设无需此解析。
   FakeIP 只处理 A/AAAA，代理域名的其他查询类型仍显式路由到远程 DNS。
-- T6.7 节点命名：在 `subscription.Store.Load` 的统一导出路径中按入站 ID 升序处理，
+- 节点在 `subscription.Store.Load` 的统一导出路径中按本机优先、远端服务器 ID 升序、同服务器内入站 ID 升序处理。
   remark 去首尾空白；空白/清理后为空时按协议使用 `Reality · <端口>` / `Hysteria2 · <端口>`，
   模板集中在 zh-CN.ts。不再回退到内部 tag，不回写数据库或影响服务端入站 tag。
   ASCII 逗号替换为全角逗号；控制字符和 Unicode 空白（含换行、行/段分隔符）替换为空格并合并连续空白。
-  其余标点保留，由 yaml.v3 / JSON / net/url 编码。所有格式及单节点 links 使用同一显示名。
-  与已分配名称、proxy/auto/manual/direct、DIRECT/REJECT、i18n 策略组名冲突时，
+  多台未移除的服务器时，仅默认名加上「服务器名 · 」前缀。其余标点由 yaml.v3 / JSON / net/url 编码。
+  所有格式、分享页及单节点 links 使用同一显示名。
+  与已分配名称、proxy/auto/manual/direct、DIRECT/REJECT、「节点选择」或「自动选择」冲突时，
   从原显示名追加 ` (2)`、` (3)`，取第一个未占用的名称；自然带后缀的备注也参与碰撞检查。
-  按 ID 先到先分配，例如 `A, A, A (2)` 得到 `A, A (2), A (2) (2)`，不会覆盖先前节点。
+  按显示顺序先到先分配，例如 `A, A, A (2)` 得到 `A, A (2), A (2) (2)`。
+  「自动选择」始终保留，开关切换或节点数跨越门槛时不改节点名。升级时正好使用该旧备注的节点将加后缀。
   IPv6 URI 使用方括号；凭证、query、显示名片段由 net/url 编码。
 - 每次订阅读取一致 DB 快照，只导出启用入站及当前用户凭证；公开订阅对禁用/超额/过期用户返回 404。
   无节点仍输出可解析配置，未匹配直连规则的流量 reject；base64 是空列表。
-  T6.7 补齐空节点组结构：不生成 auto/manual；sing-box proxy 仅包含 direct 作为有效占位，
-  仍保留末尾 reject 路由；Clash 节点选择为 `[REJECT, DIRECT]`、默认 REJECT，远端 DNS 及 MATCH 仍为 REJECT。
+  空节点时 sing-box proxy 仅包含 direct 作为有效占位，仍保留末尾 reject 路由。
+  Clash 节点选择为 `[REJECT]`，远端 DNS 及 MATCH 仍为 REJECT。
 - Hysteria2 读取 T2.3 的不可变公开证书文件，校验 SNI、有效期与 DB 中叶证书指纹；缺失/不一致时
   返回不可用，不生成无指纹的 insecure 订阅。开发模式没有 Apply 证书，须在 Linux 成功生效后导出。
 - 新增 Go 依赖 `gopkg.in/yaml.v3 v3.0.1`（结构化 YAML 编码）与

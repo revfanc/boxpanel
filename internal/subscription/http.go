@@ -138,9 +138,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	w.Header().Set("Subscription-Userinfo", fmt.Sprintf("upload=%d; download=%d; total=%d; expire=%d", d.User.TrafficUp, d.User.TrafficDown, d.User.TrafficLimit, d.User.ExpireAt))
+	info := fmt.Sprintf("upload=%d; download=%d; total=%d", d.User.TrafficUp, d.User.TrafficDown, d.User.TrafficLimit)
+	if d.User.ExpireAt > 0 {
+		info += fmt.Sprintf("; expire=%d", d.User.ExpireAt)
+	}
+	w.Header().Set("Subscription-Userinfo", info)
 	w.Header().Set("Profile-Update-Interval", "12")
-	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+strings.ReplaceAll(url.QueryEscape(d.PanelName), "+", "%20"))
+	if f != HTML {
+		w.Header().Set("Content-Disposition", subscriptionAttachment(d.PanelName, f))
+	}
 	contentType := "text/plain; charset=utf-8"
 	if f == Singbox {
 		contentType = "application/json; charset=utf-8"
@@ -150,7 +156,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if f == HTML {
 		contentType = "text/html; charset=utf-8"
-		w.Header().Del("Content-Disposition")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'nonce-"+nonce+"'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 	}
 	w.Header().Set("Content-Type", contentType)
@@ -175,6 +180,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	logger.InfoContext(r.Context(), "subscription served", "format", format, "user_agent", logUserAgent(r.UserAgent(), secrets), "user_id", d.User.ID)
+}
+
+func subscriptionAttachment(name string, format Format) string {
+	if strings.TrimSpace(name) == "" {
+		name = "boxpanel"
+	}
+	if format == Clash {
+		name += ".yaml"
+	}
+	// QueryEscape's unescaped characters are a subset of RFC 5987 attr-char
+	// once spaces use percent encoding.
+	return "attachment; filename*=UTF-8''" + strings.ReplaceAll(url.QueryEscape(name), "+", "%20")
 }
 
 // User-Agent is untrusted. Remove control/formatting characters and known

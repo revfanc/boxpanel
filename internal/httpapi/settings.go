@@ -16,13 +16,14 @@ import (
 )
 
 type PanelSettings struct {
-	PublicHost      string `json:"public_host"`
-	WebPort         int    `json:"web_port"`
-	WebPath         string `json:"web_path"`
-	SubPath         string `json:"sub_path"`
-	TLSMode         string `json:"panel_tls_mode"`
-	BlockBittorrent bool   `json:"block_bittorrent"`
-	PanelName       string `json:"panel_name"`
+	PublicHost            string `json:"public_host"`
+	WebPort               int    `json:"web_port"`
+	WebPath               string `json:"web_path"`
+	SubPath               string `json:"sub_path"`
+	TLSMode               string `json:"panel_tls_mode"`
+	BlockBittorrent       bool   `json:"block_bittorrent"`
+	PanelName             string `json:"panel_name"`
+	SubscriptionAutoGroup bool   `json:"subscription_auto_group"`
 }
 
 func (s PanelSettings) URL() string {
@@ -62,7 +63,10 @@ func readSettings(ctx context.Context, q db.SettingsDB) (PanelSettings, error) {
 	if s.WebPort, err = db.GetSetting(ctx, q, db.WebPort); err != nil {
 		return s, err
 	}
-	s.BlockBittorrent, err = db.GetSetting(ctx, q, db.BlockBittorrent)
+	if s.BlockBittorrent, err = db.GetSetting(ctx, q, db.BlockBittorrent); err != nil {
+		return s, err
+	}
+	s.SubscriptionAutoGroup, err = db.ReadSubscriptionAutoGroup(ctx, q)
 	return s, err
 }
 func saveSettings(ctx context.Context, q db.SettingsDB, s PanelSettings) error {
@@ -77,7 +81,10 @@ func saveSettings(ctx context.Context, q db.SettingsDB, s PanelSettings) error {
 	if err := db.SetSetting(ctx, q, db.WebPort, s.WebPort); err != nil {
 		return err
 	}
-	return db.SetSetting(ctx, q, db.BlockBittorrent, s.BlockBittorrent)
+	if err := db.SetSetting(ctx, q, db.BlockBittorrent, s.BlockBittorrent); err != nil {
+		return err
+	}
+	return db.SetSetting(ctx, q, db.SubscriptionAutoGroup, s.SubscriptionAutoGroup)
 }
 func (a *api) settingsGet(w http.ResponseWriter, r *http.Request) {
 	conn, err := a.readDB()
@@ -100,13 +107,14 @@ func (a *api) settingsGet(w http.ResponseWriter, r *http.Request) {
 }
 
 type settingsInput struct {
-	PublicHost      *string `json:"public_host"`
-	WebPort         *int    `json:"web_port"`
-	WebPath         *string `json:"web_path"`
-	SubPath         *string `json:"sub_path"`
-	TLSMode         *string `json:"panel_tls_mode"`
-	BlockBittorrent *bool   `json:"block_bittorrent"`
-	PanelName       *string `json:"panel_name"`
+	PublicHost            *string `json:"public_host"`
+	WebPort               *int    `json:"web_port"`
+	WebPath               *string `json:"web_path"`
+	SubPath               *string `json:"sub_path"`
+	TLSMode               *string `json:"panel_tls_mode"`
+	BlockBittorrent       *bool   `json:"block_bittorrent"`
+	PanelName             *string `json:"panel_name"`
+	SubscriptionAutoGroup *bool   `json:"subscription_auto_group"`
 }
 
 var settingPath = regexp.MustCompile(`^[a-z0-9]{1,64}$`)
@@ -129,6 +137,9 @@ func patchSettings(s PanelSettings, in settingsInput, dev bool) (PanelSettings, 
 	}
 	if in.BlockBittorrent != nil {
 		s.BlockBittorrent = *in.BlockBittorrent
+	}
+	if in.SubscriptionAutoGroup != nil {
+		s.SubscriptionAutoGroup = *in.SubscriptionAutoGroup
 	}
 	if in.TLSMode != nil {
 		if dev && *in.TLSMode != s.TLSMode || !dev && *in.TLSMode != "self_signed" && *in.TLSMode != "acme" {

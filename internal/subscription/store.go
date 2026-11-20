@@ -11,7 +11,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -39,6 +38,12 @@ type Data struct {
 	User                                             User
 	PublicHost, PanelName, SubPath, WebPath, TLSMode string
 	WebPort                                          int
+	nodeGroups                                       []nodeGroup
+}
+
+type nodeGroup struct {
+	name  string
+	first int // index of the first node in this server's group
 }
 
 func (s *Store) now() time.Time {
@@ -128,6 +133,9 @@ func (s *Store) Load(ctx context.Context, id int64, token *string) (Data, error)
 	if d.Rules, err = db.GetSetting(ctx, tx, db.Rules); err != nil {
 		return d, err
 	}
+	if d.AutoGroup, err = db.ReadSubscriptionAutoGroup(ctx, tx); err != nil {
+		return d, err
+	}
 	if err = rules.Validate(d.Rules); err != nil {
 		return d, fmt.Errorf("read subscription rules: %w", err)
 	}
@@ -139,19 +147,21 @@ func (s *Store) Load(ctx context.Context, id int64, token *string) (Data, error)
 	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM servers WHERE status<>'removed'").Scan(&serverCount); err != nil {
 		return d, fmt.Errorf("count subscription servers: %w", err)
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT i.id,i.remark,i.protocol,i.port,i.options,s.public_host,s.name,s.is_local
-		FROM inbounds i JOIN servers s ON s.id=i.server_id WHERE i.enabled=1 AND s.status<>'removed' AND (s.is_local=1 OR i.agent_keys_ready=1) ORDER BY i.id`)
+	rows, err := tx.QueryContext(ctx, `SELECT i.id,i.remark,i.protocol,i.port,i.options,s.public_host,s.name,s.is_local,s.id
+		FROM inbounds i JOIN servers s ON s.id=i.server_id WHERE i.enabled=1 AND s.status<>'removed' AND (s.is_local=1 OR i.agent_keys_ready=1)
+		ORDER BY s.is_local DESC,s.id,i.id`)
 	if err != nil {
 		return d, fmt.Errorf("read subscription inbounds: %w", err)
 	}
 	d.Nodes = []share.Node{}
 	localCertificates := map[int64]bool{}
-	serverNames := map[int64]string{}
+	var previousServer int64
 	for rows.Next() {
 		var n share.Node
 		var protocol, raw, serverName string
 		var local bool
-		if err := rows.Scan(&n.ID, &n.Name, &protocol, &n.Port, &raw, &n.Host, &serverName, &local); err != nil {
+		var serverID int64
+		if err := rows.Scan(&n.ID, &n.Name, &protocol, &n.Port, &raw, &n.Host, &serverName, &local, &serverID); err != nil {
 			rows.Close()
 			return d, fmt.Errorf("read subscription inbound: %w", err)
 		}
@@ -190,9 +200,10 @@ func (s *Store) Load(ctx context.Context, id int64, token *string) (Data, error)
 			rows.Close()
 			return d, fmt.Errorf("read subscription inbound: unsupported protocol")
 		}
-		if serverCount > 1 {
-			serverNames[n.ID] = serverName
+		if serverCount > 1 && (len(d.Nodes) == 0 || previousServer != serverID) {
+			d.nodeGroups = append(d.nodeGroups, nodeGroup{name: serverName, first: len(d.Nodes)})
 		}
+		previousServer = serverID
 		d.Nodes = append(d.Nodes, n)
 	}
 	err = rows.Err()
@@ -234,30 +245,28 @@ func (s *Store) Load(ctx context.Context, id int64, token *string) (Data, error)
 		}
 		n.Certificate = string(pem.EncodeToMemory(block))
 	}
-	d.Nodes = uniqueNames(d.Nodes, serverNames)
+	d.Nodes = uniqueNames(d.Nodes, d.nodeGroups)
 	return d, nil
 }
 
-// Names may collide with groups, tags or each other. Resolve deterministically
-// in inbound ID order, without changing the input slice or allowing rule-string
-// injection. All subscription formats and node links share these display names.
-func UniqueNames(nodes []share.Node) []share.Node {
-	return uniqueNames(nodes, nil)
-}
-
-func uniqueNames(nodes []share.Node, serverNames map[int64]string) []share.Node {
+// Resolve collisions in display order and keep names safe in rule strings.
+// All subscription formats and node links share these display names.
+func uniqueNames(nodes []share.Node, groups []nodeGroup) []share.Node {
 	result := append([]share.Node{}, nodes...)
-	sort.SliceStable(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	text := web.SubscriptionText()
 	used := map[string]bool{"proxy": true, "auto": true, "manual": true, "direct": true, "DIRECT": true, "REJECT": true,
-		text["select"]: true}
+		text["select"]: true, text["autoSelect"]: true}
+	var serverName string
 	for i := range result {
+		if len(groups) > 0 && groups[0].first == i {
+			serverName, groups = groups[0].name, groups[1:]
+		}
 		n := &result[i]
 		n.Name = normalizeName(n.Name)
 		if n.Name == "" {
 			n.Name = defaultName(*n, text)
-			if name, ok := serverNames[n.ID]; ok {
-				n.Name = normalizeName(name + " · " + n.Name)
+			if serverName != "" {
+				n.Name = normalizeName(serverName + " · " + n.Name)
 			}
 		}
 		base := n.Name

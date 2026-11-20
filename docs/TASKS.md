@@ -1158,6 +1158,50 @@ host 变化后回退密钥 SPKI 不变；系统 CA 分支拒绝主机名不匹�
       与 nft 一致，65 s 后仍一致（不重复）。
     - 下载 10 MB 后 11 s（落库前）重启节点 boxpanel：同一 boot 检查点恢复，主控 +10,098,151 B，与 nft 一致。
 
+### T8.5 多服务器订阅体验
+
+**目标**：一个订阅里多台服务器的节点清楚、稳定、好选；客户端能直接看到本用户的全网已用流量和到期时间。单机输出（golden）除新增响应头外不变。
+
+**1. 排序**：订阅（所有格式、分享页、管理员 links）节点按服务器分组：本机在前，其余按 `servers.id`；同服务器内按入站 id。
+重名去重（`(2)` 后缀）按此显示顺序进行。单机时顺序与现状一致。
+
+**2. 命名（保持现规则，补边界）**：有备注用备注。无备注时多台未移除服务器为「服务器名 · 协议 · 端口」，单机为「协议 · 端口」。
+基础名取决于该入站与其服务器。增删无命名碰撞的其他入站不改变已有节点名。重名后缀按显示顺序分配，碰撞顺序变化时可重排。
+服务器改名会改变其无备注节点名，改名处提示「客户端更新订阅后需重新选择节点」。
+
+**3. 订阅响应头**（Clash / sing-box / 通用 base64 等所有格式）：
+- `subscription-userinfo: upload=<traffic_up>; download=<traffic_down>; total=<traffic_limit>; expire=<expire_at>`。
+  流量为主控汇总值（含 T8.4 远端）；不限流量时 `total=0`，不限期时省略 `expire`。
+- `profile-update-interval: 12`（小时）。
+- `content-disposition: attachment; filename*=UTF-8''<面板名称 percent-encode>`（Clash 用 `.yaml`），面板名称经过 RFC 5987 编码，
+  不允许任何 CR/LF 或引号注入；面板名称为空时用 `boxpanel`。
+- 头部只用于公开订阅，HEAD 同样返回。HTML 分享页继续内联显示，省略下载头。
+
+**4. 可选自动测速组**（默认关闭，尊重已确定的「只有一个手动分组」）：设置项 `subscription_auto_group`（bool，默认 false），
+面板「设置」页开关，说明「节点 ≥ 3 个时，在『节点选择』中增加『自动选择』（按延迟自动挑选），默认仍为手动」。
+- 开启且该用户订阅节点数 ≥ 3：Clash 增加 `url-test` 组「自动选择」（url `https://www.gstatic.com/generate_204`，interval 300，tolerance 50，
+  lazy true），sing-box 增加 `urltest` 出站（同 url/间隔/容差）；放在「节点选择」选项的**最后**，默认选中项仍是第一个节点。
+- 「自动选择」始终是保留名，使用该备注的节点加后缀。未开启或 < 3 节点时省略自动组。
+  关闭后恢复开启前的配置字节，升级时已有同名备注仍需按保留名规则分配后缀。
+- 设置写入 API（PUT settings）与 API.md 同步；不进入节点期望状态（订阅专用设置，不递增 desired_generation）。
+
+**5. 分享页**：多服务器时按服务器分组显示实际导出的节点，分组标题为服务器名。单机沿用原分享页。
+
+**测试**
+- 既有单机 golden 逐字节不变；多服务器排序与去重；增删无命名碰撞的入站时命名稳定。
+- 响应头：值正确（含远端汇总流量）、不限额/不限期、面板名含中文/空格/引号/换行时的编码与防注入。
+- 自动组：关闭、开启但 < 3 节点、开启且 ≥ 3 节点三种输出；Clash 与 sing-box 结构校验；保留名冲突。
+- 分享页分组的前端测试。
+
+- **验收**：
+  - [x] 以上测试；`make lint test build`（审查者沙箱外复跑，含 e2e、136 项 Vitest）通过；SPEC/API/CONFIG/FRONTEND 同步。
+  - [x] 实机（2026-11-19，主控与节点 v0.5.0-test8，用户 test）：
+    - 响应头 `subscription-userinfo: upload=232112; download=65390212; total=0`，与主控汇总值（含 T8.4 远端）一致，不限期时无 expire；
+      `profile-update-interval: 12`；Clash `filename*=UTF-8''boxpanel.yaml`，sing-box 无扩展名；HEAD 返回同样的头。
+    - 节点顺序：本机 Reality 443 → 本机 Hysteria2 8443 → 测试节点2 Reality 20443 → 测试节点2 Hysteria2 28443。
+    - 开启自动组：「自动选择」位于「节点选择」末尾，默认仍为首个节点；Clash url-test 参数正确；订阅 sing-box 配置 `sing-box check` 通过；
+      desired_generation 不变（6→6）。关闭后 Clash 订阅与开启前逐字节一致。
+
 ## M7 后续增强（MVP 之后，按需排期）
 
 - T7.1 见上方详细任务（已排期）

@@ -271,6 +271,7 @@ export const zhCN = {
     publicHost: '节点与订阅地址', hostHint: '填写域名或裸 IP，不含协议、端口和路径。可信证书模式下变更地址会自动重新签发，请先确认新地址指向本机并放行 TCP 80。',
     port: '面板端口', webPath: '面板路径', subPath: '订阅路径', pathHint: '路径仅含小写字母和数字，不带斜杠；面板路径可留空。',
     tls: '面板 TLS 模式', blockBT: '屏蔽 BitTorrent', addressHint: '修改端口或面板路径后将跳转，请先放行新端口的云安全组。修改订阅路径会立即使旧订阅链接失效。',
+    autoGroup: '订阅自动选择', autoGroupHint: '节点 ≥ 3 个时，在「节点选择」中增加「自动选择」（按延迟自动挑选），默认仍为手动。',
     confirmTitle: '确认变更访问地址', confirmHint: '面板端口或路径变化可能需要重新登录；订阅路径变化后，所有使用者需要更新订阅地址。请记下新地址后继续。',
     redirect: '设置已保存，等待监听切换后跳转。如未跳转，请打开下方新地址。', newAddress: '新面板地址',
     account: '管理员账号', accountHint: '修改用户名或密码后，所有会话会失效，需要重新登录。',
@@ -286,6 +287,7 @@ export const zhCN = {
     version: 'boxpanel 版本',
     statuses: { local: '本机', online: '在线', offline: '离线', pending: '待连接' },
     rename: '改名',
+    renameHint: '多服务器订阅中，改名会更新该服务器上无备注的节点名称。客户端更新订阅后需重新选择这些节点。',
     add: '添加服务器',
     generate: '生成加入命令',
     addHint: '在新节点上以 root 执行加入命令。令牌一小时内有效，只能使用一次，请勿转发。',
@@ -417,6 +419,8 @@ export const subscriptionText = /* subscription-text:start */ {
   "compatibility": "sing-box 客户端需 1.14 或更新。通用 URI 不含分流规则，请在客户端内选择「绕过大陆」等规则。",
   "privacy": "请妥善保存订阅链接，不要公开分享；链接失效时请联系管理员。",
   "select": "节点选择",
+  "autoSelect": "自动选择",
+  "nodes": "订阅节点",
   "realityName": "Reality · %d",
   "hysteria2Name": "Hysteria2 · %d"
 } /* subscription-text:end */ as const
