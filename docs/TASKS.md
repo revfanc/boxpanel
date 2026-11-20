@@ -1287,8 +1287,6 @@ T8.2–T8.4 已有：生成加入命令、有效令牌与撤销、状态/版本/
 
 - **验收**：
   - [ ] 以上测试；`make lint test build` 通过；SPEC/API/FRONTEND/INSTALL 同步。
-  - [ ] 实机（主控 + LXD 节点）：节点网卡样本出现在主控并按其设置计算用量；把节点额度设很小触发 80%/100% 事件各一次；
-    停止节点 boxpanel → 约 90 s 后离线事件一次，启动后恢复事件一次；节点 `install.sh update`（本地构建替换下载）后身份与配置保持、继续同步。
 
 **实现与验证记录**
 
@@ -1297,6 +1295,14 @@ T8.2–T8.4 已有：生成加入命令、有效令牌与撤销、状态/版本/
 - [x] `make lint` 和 `make build` 通过。
 - [ ] `make test` 的既有 `TestLoopback`、`TestTrafficLoopback` 在 macOS 沙箱内因 sing-box 注册 DNS 配置通知返回 `status 9` 失败。其余 Go 包通过，待沙箱外复跑。
 - [ ] Linux 主控加 LXD 节点的实机验收待执行。
+  - [x] 完整 `make lint test build`（审查者沙箱外复跑，含 e2e、22 项 install.sh、149 项 Vitest）。
+  - [x] 实机（2026-11-20，主控 HK VPS v0.5.0-test10，节点 bp-node1）：
+    - 仅升级主控：旧节点（协议 1）心跳 200，拉取期望状态 426（applied 6 / desired 7），按最后配置继续服务。
+    - 节点 `install.sh update`（本地构建替换下载）：主控连接、入站密钥、sing-box 配置与 hy2 证书摘要前后一致；升级后协议 2、
+      生效 7/7，上报网卡 `eth0`，一次补报 1055 条历史分钟样本。
+    - 节点额度 1 GB（入站口径）：经节点下载 600 MB 后 72% 无告警；再下载 600 MB 后 1.32 GB，80%/100% 事件各一次，地址为节点公网地址。
+    - 停止节点 boxpanel：约 100 s 后 `server_offline` 一次；离线期间重启主控不重复；启动节点后 `server_recovered` 一次（离线 133 s），
+      70 s 后无重复。未配置通道时不入 outbox（与既有设计一致）。
 
 ## M7 后续增强（MVP 之后，按需排期）
 
