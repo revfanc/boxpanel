@@ -1051,6 +1051,56 @@ host 变化后回退密钥 SPKI 不变；系统 CA 分支拒绝主机名不匹�
 - [x] 真机发现并修复 2 个缺陷：① 主机装有 LXD/Docker 等软件时，其仅放行的 nft input 链被误判为系统防火墙，导致生效失败、面板重启循环；
   ② LXC/LXD 容器（大量廉价 VPS）内 `/proc/uptime` 被 LXCFS 虚拟化，与 systemd 单调时间戳相减为负，`singbox install` 失败。均已加回归测试。
 
+### T8.3 期望状态同步：在主控为远端服务器建节点并自动生效
+
+**目标**：在主控面板为任一服务器创建/修改/停用入站，或增删改用户，**30 秒内**在该服务器生效；订阅自动包含远端节点。
+节点私钥不离开节点。主控离线时节点按最后状态继续服务。
+
+**1. 版本号**：主控为每台远端服务器维护 `desired_generation`（任何影响该服务器的变更——其入站、全局用户集合、
+服务端路由规则如 BT 屏蔽——都递增；单事务内完成）。心跳响应携带当前 `desired_generation`。
+
+**2. 拉取期望状态**：节点发现 `applied_generation != desired_generation` 时，签名请求
+`GET /api/agent/v1/desired` → `{generation, inbounds:[该服务器的入站], users:[有效用户: id,name,uuid,password], route:{block_bittorrent,…}}`。
+- 只返回该服务器自己的入站；用户凭证通过已认证的 TLS 通道下发（必要），响应 `Cache-Control: no-store`，日志不得记录内容。
+- 「有效用户」由**主控**判定（到期/超额/停用由主控决定，T8.4 汇总流量后生效）；节点模式下禁用本地的到期/超额调度器，
+  避免与主控结论冲突。
+
+**3. 节点本地生效**：节点在本地 DB 镜像入站/用户/规则（同一套表），在一次 `Manager.Apply` 的 mutation 中整体替换后生效：
+复用先校验后生效、失败回滚、配置不变不重启、防火墙同步、nft 流量计数。成功后在下一次心跳上报
+`applied_generation` 与结果；失败上报脱敏错误码与提示（如端口被占用），主控在服务器页显示「已同步 / 同步中 / 同步失败：原因」。
+
+**4. 节点侧密钥**：主控为远端服务器创建 Reality / Hysteria2 入站时**不生成私钥**（options 中私钥字段为空，状态 pending）。
+节点同步到 pending 入站后本地生成 Reality 密钥对 / Hysteria2 自签证书（私钥只存节点），通过签名请求
+`POST /api/agent/v1/inbound-keys` 上报 `{inbound_id, reality_public_key, short_id, hy2_cert_sha256, hy2_cert_pem}`；
+主控保存公开部分并将入站标为 ready。**订阅只包含 ready 的远端入站**。节点重新加入/恢复后若本地缺私钥，重新生成并上报（客户端需更新订阅，面板提示）。
+
+**5. 面板**：入站创建/编辑可选择服务器（去掉 T8.1 的 422 限制，仅 online/offline 的远端服务器可选，removed 不可选）；
+端口占用检测与 Reality 目标检测对远端服务器暂不执行（界面注明「在节点上生效时检测，失败会在服务器页显示原因」）；
+服务器页显示同步状态、applied/desired 版本、最近错误；远端服务器的 public_host 可在服务器页修改（影响订阅地址）。
+
+**6. 兼容**：单机（无远端服务器）行为与配置/订阅字节级不变（golden 回归）。主控本机入站仍由本机直接生效。
+
+**测试**
+- 进程内端到端：主控 handler + 节点（假 Apply/真实 confgen）完成：建远端入站 → 节点生成密钥上报 → ready → 订阅包含远端节点地址与公钥；
+  增删用户 → generation 递增 → 节点同步；节点生效失败 → 主控显示原因；主控不可达 → 节点保持原状态。
+- 鉴权：desired / inbound-keys 只能取/改**自己**服务器的数据（越权 server_id、他服务器 inbound_id 一律拒绝）。
+- 节点模式禁用本地停用调度器。
+- make lint test build 通过；SPEC/API/FRONTEND 同步。审查者将在 LXD 容器节点上真机验收（端口映射到主控公网 IP）。
+
+- **验收**：
+  - [x] 同步、节点侧密钥与鉴权。进程内 HTTPS 测试覆盖两个节点的归属隔离、入站与用户变化、密钥恢复、
+    订阅、失败回滚、无变化免重启及离线保留。节点保留流量采样，跳过本地停用调度。
+  - [x] 面板支持创建和编辑时选服务器、显示同步状态与版本、编辑远端公网地址。新增前端组件测试。
+  - [x] `make lint`、`make build` 和单机配置/订阅 golden 通过。SPEC、API、FRONTEND、CONFIG、INSTALL 已同步。
+  - [x] 完整 `make lint test build`（审查者在沙箱外复跑）：含 `internal/e2e`、134 项 Vitest，CI ubuntu/macos 均通过。
+  - [x] LXD 实机（2026-11-19，主控 HK VPS v0.5.0-test6，节点 bp-node1 容器，LXD proxy 映射 20443/tcp、28443/udp）：
+    - 为「测试节点2」建 Reality 20443 与 Hysteria2 28443（与面板创建等价的入库 + generation 递增）；
+      节点在一个心跳周期内 applied=desired=2，sing-box 监听两端口。
+    - 主控库中 Reality 仅有公钥与 short_id（private_key 为空），Hysteria2 仅有证书与指纹；私钥只在节点。
+    - 订阅同时包含本机两节点与 85.189.54.156:20443/28443，公钥/指纹与节点上报一致。
+    - 用订阅参数起 sing-box 客户端：Reality、Hysteria2 均出口 85.189.54.156，10 MB 下载约 18 MB/s。
+    - 停用用户 14 s 后节点移除该用户、连接失败；重新启用 22 s 后恢复（gen 4/4），均在 30 s 内。
+
 ## M7 后续增强（MVP 之后，按需排期）
 
 - T7.1 见上方详细任务（已排期）

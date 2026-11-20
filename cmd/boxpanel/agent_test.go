@@ -32,6 +32,9 @@ func TestJoinServeInfoAndLeaveNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
+	if err := db.SetSetting(ctx, conn, db.BlockBittorrent, true); err != nil {
+		t.Fatal(err)
+	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	master := agent.NewMaster(conn, nil, nil)
 	_, token, err := master.IssueToken(ctx, "edge")
@@ -141,7 +144,7 @@ func TestHeartbeatBackoffAndRemovalHint(t *testing.T) {
 		t.Fatal("network failure reset removal hint or retained the consecutive counter")
 	}
 	last, delay := nextHeartbeat(last, nil, &streak, &backoff, now)
-	if last.RepeatedUnauthorized || last.Status != "ok" || delay != 30*time.Second || backoff != 5*time.Second {
+	if last.RepeatedUnauthorized || last.Status != "ok" || delay != agent.SyncInterval || backoff != 5*time.Second {
 		t.Fatal("successful heartbeat did not reset the retry state")
 	}
 }

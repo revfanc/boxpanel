@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -18,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/revfanc/boxpanel/internal/certs"
 	"github.com/revfanc/boxpanel/internal/confgen"
@@ -180,50 +182,124 @@ func (m *Manager) runtimeOptions(ctx context.Context, tx *sql.Tx, s confgen.Snap
 	}
 	fingerprints := map[string]string{}
 	for _, in := range s.Inbounds {
-		if !in.Enabled || in.Protocol != "hysteria2" {
+		if in.Protocol != "hysteria2" {
+			continue
+		}
+		var agentKeyID, certificateID string
+		if err := tx.QueryRowContext(ctx, "SELECT agent_key_id,agent_cert_id FROM inbounds WHERE id=?", in.ID).Scan(&agentKeyID, &certificateID); err != nil {
+			return opts, fmt.Errorf("read certificate identity: %w", err)
+		}
+		if !in.Enabled && agentKeyID == "" {
 			continue
 		}
 		var hy confgen.Hysteria2Options
-		_ = json.Unmarshal(in.Options, &hy) // validated by Build above
-		hash := sha256.Sum256([]byte(hy.SNI))
-		// SNI-specific immutable paths preserve the old certificate on rollback.
-		stem := filepath.Join(filepath.Dir(m.config), "certs", fmt.Sprintf("hy2-%d-%x", in.ID, hash[:8]))
-		files := confgen.CertificateFiles{CertificatePath: stem + ".crt", KeyPath: stem + ".key"}
-		certificate, ce := m.files.ReadFile(files.CertificatePath)
-		key, ke := m.files.ReadFile(files.KeyPath)
-		if errors.Is(ce, fs.ErrNotExist) && errors.Is(ke, fs.ErrNotExist) {
-			pair, e := certs.Hysteria2(hy.SNI, opts.Now)
-			if e != nil {
-				return opts, fmt.Errorf("prepare Hysteria2 certificate: %w", e)
-			}
-			if e = os.MkdirAll(filepath.Dir(stem), 0700); e != nil {
-				return opts, fmt.Errorf("create certificate directory: %w", e)
-			}
-			certificate, key = pair.Certificate, pair.PrivateKey
-			if e = m.files.WriteFile(files.KeyPath, key, 0600); e != nil {
-				return opts, fmt.Errorf("save Hysteria2 key: %w", e)
-			}
-			if e = m.files.WriteFile(files.CertificatePath, certificate, 0600); e != nil {
-				_ = m.files.Remove(files.KeyPath)
-				return opts, fmt.Errorf("save Hysteria2 certificate: %w", e)
-			}
-		} else if ce != nil || ke != nil {
-			return opts, fmt.Errorf("read Hysteria2 certificate pair; restore both certificate and key files")
+		if json.Unmarshal(in.Options, &hy) != nil {
+			return opts, fmt.Errorf("decode Hysteria2 certificate options")
 		}
-		pair, e := tls.X509KeyPair(certificate, key)
-		if e != nil {
-			return opts, fmt.Errorf("invalid Hysteria2 certificate pair; restore certificate and key")
+		files, fingerprint, err := m.prepareHysteria2(ctx, tx, in.ID, hy.SNI, agentKeyID, certificateID, opts.Now)
+		if err != nil {
+			return opts, err
 		}
-		leaf, e := x509.ParseCertificate(pair.Certificate[0])
-		if e != nil || leaf.VerifyHostname(hy.SNI) != nil || opts.Now.Before(leaf.NotBefore) || !opts.Now.Before(leaf.NotAfter) {
-			return opts, fmt.Errorf("Hysteria2 certificate is invalid or expired; renew the certificate pair")
+		if in.Enabled {
+			fingerprints[strconv.FormatInt(in.ID, 10)] = fingerprint
+			opts.Hysteria2TLS[in.ID] = files
 		}
-		fingerprint := sha256.Sum256(pair.Certificate[0])
-		fingerprints[strconv.FormatInt(in.ID, 10)] = hex.EncodeToString(fingerprint[:])
-		opts.Hysteria2TLS[in.ID] = files
 	}
 	if err := db.SetSetting(ctx, tx, db.Hysteria2Fingerprints, fingerprints); err != nil {
 		return opts, err
 	}
 	return opts, nil
+}
+
+func (m *Manager) hysteria2Files(id int64, sni, revision string) confgen.CertificateFiles {
+	hash := sha256.Sum256([]byte(sni))
+	stem := filepath.Join(filepath.Dir(m.config), "certs", fmt.Sprintf("hy2-%d-%x", id, hash[:8]))
+	if revision != "" {
+		stem += "-" + revision
+	}
+	return confgen.CertificateFiles{CertificatePath: stem + ".crt", KeyPath: stem + ".key"}
+}
+
+func (m *Manager) prepareHysteria2(ctx context.Context, tx *sql.Tx, id int64, sni, agentKeyID, revision string, now time.Time) (confgen.CertificateFiles, string, error) {
+	agent := agentKeyID != ""
+	files := m.hysteria2Files(id, sni, revision)
+	if !agent || validCertificateRevision(revision) {
+		_, fingerprint, err := m.readHysteria2(files, sni, now)
+		if err == nil {
+			return files, fingerprint, nil
+		}
+		if !agent && !errors.Is(err, fs.ErrNotExist) {
+			return files, "", err
+		}
+	}
+	if agent {
+		// Use a new immutable path to keep rollback references valid. A
+		// retry derives the same candidate and reuses a pair staged earlier.
+		digest := sha256.Sum256([]byte(agentKeyID + "\n" + revision))
+		revision = base64.RawURLEncoding.EncodeToString(digest[:])
+		files = m.hysteria2Files(id, sni, revision)
+		if _, fingerprint, err := m.readHysteria2(files, sni, now); err == nil {
+			return files, fingerprint, recordAgentCertificate(ctx, tx, id, revision)
+		}
+	}
+	pair, err := certs.Hysteria2(sni, now)
+	if err != nil {
+		return files, "", fmt.Errorf("prepare Hysteria2 certificate: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(files.KeyPath), 0700); err != nil {
+		return files, "", fmt.Errorf("create certificate directory: %w", err)
+	}
+	if err := m.files.WriteFile(files.KeyPath, pair.PrivateKey, 0600); err != nil {
+		return files, "", fmt.Errorf("save Hysteria2 key: %w", err)
+	}
+	if err := m.files.WriteFile(files.CertificatePath, pair.Certificate, 0600); err != nil {
+		_ = m.files.Remove(files.KeyPath)
+		return files, "", fmt.Errorf("save Hysteria2 certificate: %w", err)
+	}
+	if agent {
+		return files, pair.Fingerprint, recordAgentCertificate(ctx, tx, id, revision)
+	}
+	return files, pair.Fingerprint, nil
+}
+
+func recordAgentCertificate(ctx context.Context, tx *sql.Tx, id int64, revision string) error {
+	if _, err := tx.ExecContext(ctx, "UPDATE inbounds SET agent_cert_id=? WHERE id=?", revision, id); err != nil {
+		return fmt.Errorf("record node certificate identity: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) readHysteria2(files confgen.CertificateFiles, sni string, now time.Time) ([]byte, string, error) {
+	certificate, ce := m.files.ReadFile(files.CertificatePath)
+	key, ke := m.files.ReadFile(files.KeyPath)
+	if errors.Is(ce, fs.ErrNotExist) && errors.Is(ke, fs.ErrNotExist) {
+		return nil, "", fs.ErrNotExist
+	}
+	if ce != nil || ke != nil {
+		return nil, "", fmt.Errorf("read Hysteria2 certificate pair; restore both certificate and key files")
+	}
+	pair, err := tls.X509KeyPair(certificate, key)
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid Hysteria2 certificate pair; restore certificate and key")
+	}
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil || leaf.VerifyHostname(sni) != nil || now.Before(leaf.NotBefore) || !now.Before(leaf.NotAfter) {
+		return nil, "", fmt.Errorf("Hysteria2 certificate is invalid or expired; renew the certificate pair")
+	}
+	fingerprint := sha256.Sum256(pair.Certificate[0])
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: pair.Certificate[0]}), hex.EncodeToString(fingerprint[:]), nil
+}
+
+func validCertificateRevision(revision string) bool {
+	decoded, err := base64.RawURLEncoding.Strict().DecodeString(revision)
+	return err == nil && len(decoded) == 32
+}
+
+// AgentCertificate returns only the canonical public leaf and its fingerprint,
+// after checking that the node still has the corresponding private key.
+func (m *Manager) AgentCertificate(id int64, sni, revision string) ([]byte, string, error) {
+	if !validCertificateRevision(revision) {
+		return nil, "", fmt.Errorf("missing node certificate revision")
+	}
+	return m.readHysteria2(m.hysteria2Files(id, sni, revision), sni, m.now())
 }

@@ -160,3 +160,37 @@ func TestAgentMigrationPreservesRemoteServerReferences(t *testing.T) {
 		t.Fatal("migration or removal changed server data", host, rx, err)
 	}
 }
+
+func TestDesiredMigrationClearsHandProvisionedRemoteKeys(t *testing.T) {
+	ctx := t.Context()
+	conn := legacyServersDB(t)
+	source := fstest.MapFS{}
+	for _, name := range []string{"migrations/0001_initial.sql", "migrations/0002_user_traffic.sql", "migrations/0003_alerts.sql", serversMigration, agentsMigration} {
+		raw, err := migrations.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		source[name] = &fstest.MapFile{Data: raw}
+	}
+	if err := migrate(ctx, conn, source); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, conn, `INSERT INTO servers(id,name,public_host,status,agent_public_key) VALUES(2,'Remote','edge.example','online','existing-agent');
+		INSERT INTO inbounds(id,server_id,tag,protocol,port,options,created_at,updated_at) VALUES(4,2,'edge','vless_reality',443,
+			'{"server_name":"example.com","private_key":"old","public_key":"old","short_ids":["0123456789abcdef"]}',2,3);`)
+	if err := Migrate(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+	var raw, keyID string
+	var ready bool
+	if err := conn.QueryRow("SELECT options,agent_key_id,agent_keys_ready FROM inbounds WHERE id=4").Scan(&raw, &keyID, &ready); err != nil ||
+		raw != `{"server_name":"example.com"}` || keyID == "" || ready {
+		t.Fatal("legacy remote inbound retained old material or lost its parameters", err)
+	}
+	var generation, applied int64
+	var agentKey string
+	if err := conn.QueryRow("SELECT desired_generation,applied_generation,agent_public_key FROM servers WHERE id=2").Scan(&generation, &applied, &agentKey); err != nil ||
+		generation != 1 || applied != 0 || agentKey != "existing-agent" {
+		t.Fatal("upgrade did not preserve node signing identity", err)
+	}
+}

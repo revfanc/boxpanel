@@ -175,19 +175,34 @@ func (s *Scheduler) Check(ctx context.Context) error {
 }
 
 func (s *Scheduler) Run(ctx context.Context) {
+	s.run(ctx, true)
+}
+
+// RunAccounting samples and flushes counters without enforcing local user policy.
+func (s *Scheduler) RunAccounting(ctx context.Context) {
+	s.run(ctx, false)
+}
+
+func (s *Scheduler) run(ctx context.Context, enforcePolicy bool) {
 	poll := time.NewTicker(10 * time.Second)
 	defer poll.Stop()
 	flush := time.NewTicker(60 * time.Second)
 	defer flush.Stop()
-	check := time.NewTicker(30 * time.Second)
-	defer check.Stop()
+	var checks <-chan time.Time
+	if enforcePolicy {
+		check := time.NewTicker(30 * time.Second)
+		defer check.Stop()
+		checks = check.C
+	}
 	report := func(err error) {
 		if err != nil && ctx.Err() == nil {
 			s.logger.Warn("流量任务未完成；将自动重试，请检查nftables 权限、内核运行状态和数据库权限。")
 		}
 	}
 	report(s.collector.Poll(ctx))
-	report(s.Check(ctx))
+	if enforcePolicy {
+		report(s.Check(ctx))
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -205,7 +220,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 			report(s.collector.Poll(ctx))
 		case <-flush.C:
 			report(s.collector.Flush(ctx))
-		case <-check.C:
+		case <-checks:
 			report(s.Check(ctx))
 		}
 	}

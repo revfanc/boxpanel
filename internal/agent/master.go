@@ -292,21 +292,28 @@ func (m *Master) acceptNonce(key nonceKey, sent int64) bool {
 	return true
 }
 
-func (m *Master) RecordHeartbeat(ctx context.Context, identity authenticated, in Heartbeat) error {
+func (m *Master) RecordHeartbeat(ctx context.Context, identity authenticated, in Heartbeat) (HeartbeatReply, error) {
+	var reply HeartbeatReply
+	tx, err := m.writer.BeginTx(ctx, nil)
+	if err != nil {
+		return reply, fmt.Errorf("begin agent heartbeat: %w", err)
+	}
+	defer tx.Rollback()
 	now := m.now().Unix()
-	result, err := m.writer.ExecContext(ctx, `UPDATE servers SET status='online',last_seen_at=?,updated_at=?,version=?
-		WHERE id=? AND is_local=0 AND status<>'removed' AND agent_public_key=?`, now, now, in.Version, identity.id, identity.publicKey)
+	reply.DesiredGeneration, err = m.refreshDesired(ctx, tx, identity, now)
 	if err != nil {
-		return fmt.Errorf("record agent heartbeat: %w", err)
+		return reply, err
 	}
-	n, err := result.RowsAffected()
+	_, err = tx.ExecContext(ctx, `UPDATE servers SET status='online',last_seen_at=?,updated_at=?,version=?,singbox_active=?,
+		applied_generation=coalesce(?,applied_generation),sync_error=CASE WHEN ? IS NULL THEN sync_error ELSE ? END
+		WHERE id=?`, now, now, in.Version, in.SingboxActive, in.AppliedGeneration, in.AppliedGeneration, in.SyncError, identity.id)
 	if err != nil {
-		return fmt.Errorf("check agent heartbeat update: %w", err)
+		return reply, fmt.Errorf("record agent heartbeat: %w", err)
 	}
-	if n == 0 {
-		return ErrUnauthorized
+	if err := tx.Commit(); err != nil {
+		return reply, fmt.Errorf("commit agent heartbeat: %w", err)
 	}
-	return nil
+	return reply, nil
 }
 
 func (m *Master) Remove(ctx context.Context, id int64) error {

@@ -10,23 +10,44 @@ import (
 	"github.com/revfanc/boxpanel/internal/reality"
 )
 
-func defaultInboundOptions(protocol, target string) (json.RawMessage, error) {
+func defaultInboundOptions(protocol, target string, local bool) (json.RawMessage, error) {
 	switch protocol {
 	case "vless_reality":
-		pair, err := reality.GenerateKeyPair()
-		if err != nil {
-			return nil, err
+		options := confgen.RealityOptions{ServerName: target, HandshakeServer: target, HandshakePort: 443, Fingerprint: "chrome"}
+		if local {
+			if err := generateLocalReality(&options); err != nil {
+				return nil, err
+			}
 		}
-		id, err := reality.GenerateShortID()
-		if err != nil {
-			return nil, err
-		}
-		return json.Marshal(confgen.RealityOptions{ServerName: target, HandshakeServer: target, HandshakePort: 443, PrivateKey: pair.PrivateKey, PublicKey: pair.PublicKey, ShortIDs: []string{id}, Fingerprint: "chrome"})
+		return json.Marshal(options)
 	case "hysteria2":
 		return json.Marshal(confgen.Hysteria2Options{SNI: "www.bing.com", CertMode: "self_signed", PortHopping: confgen.PortHopping{Start: 20000, End: 30000}})
 	default:
 		return nil, invalid("protocol", "请选择 vless_reality 或 hysteria2。")
 	}
+}
+
+func generateLocalReality(options *confgen.RealityOptions) error {
+	pair, err := reality.GenerateKeyPair()
+	if err != nil {
+		return err
+	}
+	id, err := reality.GenerateShortID()
+	if err != nil {
+		return err
+	}
+	options.PrivateKey, options.PublicKey, options.ShortIDs = pair.PrivateKey, pair.PublicKey, []string{id}
+	return nil
+}
+
+func rejectRemoteKeyOptions(patch json.RawMessage) error {
+	fields := optionFields(patch)
+	for _, key := range []string{"private_key", "public_key", "short_ids"} {
+		if _, ok := fields[key]; ok {
+			return invalid("options."+key, "远端入站的密钥在节点上生成，请省略此字段。")
+		}
+	}
+	return nil
 }
 
 func optionFields(raw json.RawMessage) map[string]json.RawMessage {
@@ -82,7 +103,7 @@ func mergeInboundOptions(protocol string, old, patch json.RawMessage) (json.RawM
 	return encoded, nil
 }
 
-func validateInbound(in inboundRecord) error {
+func validateInbound(in inboundRecord, local bool) error {
 	if in.Protocol != "vless_reality" && in.Protocol != "hysteria2" {
 		return invalid("protocol", "请选择 vless_reality 或 hysteria2。")
 	}
@@ -103,6 +124,12 @@ func validateInbound(in inboundRecord) error {
 		if len(options.ShortIDs) > 16 || !validTag(options.Fingerprint) || !reality.ValidServer(options.ServerName) || !reality.ValidServer(options.HandshakeServer) {
 			return invalid("options", "请使用公网域名或 IP、1–16 个 short_ids，并填写有效的客户端指纹名称。")
 		}
+		if !local {
+			if options.HandshakePort < 1 || options.HandshakePort > 65535 {
+				return invalid("options.handshake_port", "请使用 1–65535 之间的整数端口。")
+			}
+			return nil
+		}
 	} else {
 		var options confgen.Hysteria2Options
 		if json.Unmarshal(in.Options, &options) != nil {
@@ -110,6 +137,15 @@ func validateInbound(in inboundRecord) error {
 		}
 		if len(options.ObfsPassword) > 1024 {
 			return invalid("options.obfs_password", "请将混淆密码缩短到 1024 字节以内。")
+		}
+		if !local {
+			// Remote storage also holds published certificate metadata, which
+			// intentionally is not part of the server generator's input.
+			raw, err := json.Marshal(options)
+			if err != nil {
+				return fmt.Errorf("encode Hysteria2 validation options: %w", err)
+			}
+			in.Options = raw
 		}
 		h := options.PortHopping
 		if h.Start < 1 || h.End > 65535 || h.Start > h.End {
@@ -140,6 +176,12 @@ func validTag(tag string) bool {
 	return true
 }
 func publicInbound(in inboundRecord) (inboundRecord, error) {
+	if in.keyID != "" {
+		in.KeyStatus = "pending"
+		if in.keysReady {
+			in.KeyStatus = "ready"
+		}
+	}
 	var options map[string]json.RawMessage
 	if json.Unmarshal(in.Options, &options) != nil {
 		return in, fmt.Errorf("decode inbound response options")
@@ -155,6 +197,9 @@ func publicInbound(in inboundRecord) (inboundRecord, error) {
 		if value, ok := options[name]; ok {
 			clean[name] = value
 		}
+	}
+	if in.Protocol == "vless_reality" && (in.KeyStatus == "pending" || string(clean["short_ids"]) == "null") {
+		clean["short_ids"] = json.RawMessage("[]")
 	}
 	raw, err := json.Marshal(clean)
 	if err != nil {

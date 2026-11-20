@@ -25,20 +25,23 @@ type portReservations struct {
 	sockets     map[sysinfo.Socket]bool
 }
 
-func (a *api) inboundReservations(ctx context.Context, q inboundQuery, sockets map[sysinfo.Socket]bool) (portReservations, error) {
-	p := portReservations{reserved: map[int]bool{a.opts.PanelPort: true}, sockets: sockets}
-	for _, key := range []db.SettingKey[int]{db.WebPort, db.ClashAPIPort} {
-		value, err := db.GetSetting(ctx, q, key)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return p, err
-		}
-		if key == db.ClashAPIPort {
-			p.controlPort = value
-		} else {
-			p.reserved[value] = true
+func (a *api) inboundReservations(ctx context.Context, q inboundQuery, sockets map[sysinfo.Socket]bool, server inboundServer) (portReservations, error) {
+	p := portReservations{reserved: map[int]bool{}, sockets: sockets}
+	if server.local {
+		p.reserved[a.opts.PanelPort] = true
+		for _, key := range []db.SettingKey[int]{db.WebPort, db.ClashAPIPort} {
+			value, err := db.GetSetting(ctx, q, key)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return p, err
+			}
+			if key == db.ClashAPIPort {
+				p.controlPort = value
+			} else {
+				p.reserved[value] = true
+			}
 		}
 	}
-	rows, err := q.QueryContext(ctx, "SELECT "+inboundColumns+" FROM inbounds WHERE server_id=(SELECT id FROM servers WHERE is_local=1) ORDER BY id")
+	rows, err := q.QueryContext(ctx, "SELECT "+inboundColumns+" FROM inbounds WHERE server_id=? ORDER BY id", server.id)
 	if err != nil {
 		return p, fmt.Errorf("read port reservations: %w", err)
 	}

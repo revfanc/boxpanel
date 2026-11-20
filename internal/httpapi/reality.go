@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/revfanc/boxpanel/internal/reality"
+	"github.com/revfanc/boxpanel/internal/sysinfo"
 )
 
 func (a *api) realityRecommend(w http.ResponseWriter, r *http.Request) {
@@ -31,24 +32,9 @@ func (a *api) realityCheck(w http.ResponseWriter, r *http.Request) {
 func (a *api) inboundSuggest(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Protocol string `json:"protocol"`
+		ServerID *int64 `json:"server_id"`
 	}
 	if !decodeResource(w, r, &input) {
-		return
-	}
-	options, err := a.prepareInbound(r.Context(), input.Protocol, nil)
-	hint := ""
-	var targetErr *resourceError
-	if errors.As(err, &targetErr) && targetErr.code == "reality_target_unavailable" {
-		hint = targetErr.hint
-		options, err = defaultInboundOptions(input.Protocol, "")
-	}
-	if err != nil {
-		a.resourceError(w, err)
-		return
-	}
-	sockets, err := a.opts.ListeningPorts(r.Context())
-	if err != nil {
-		a.portInspectionError(w)
 		return
 	}
 	conn, err := a.readDB()
@@ -56,7 +42,34 @@ func (a *api) inboundSuggest(w http.ResponseWriter, r *http.Request) {
 		a.resourceError(w, err)
 		return
 	}
-	reservations, err := a.inboundReservations(r.Context(), conn, sockets)
+	server, err := lookupInboundServer(r.Context(), conn, input.ServerID)
+	if err == nil {
+		err = checkInboundServer(server)
+	}
+	if err != nil {
+		a.resourceError(w, err)
+		return
+	}
+	options, err := a.prepareInbound(r.Context(), input.Protocol, nil, server.local)
+	hint := ""
+	var targetErr *resourceError
+	if errors.As(err, &targetErr) && targetErr.code == "reality_target_unavailable" {
+		hint = targetErr.hint
+		options, err = defaultInboundOptions(input.Protocol, "", true)
+	}
+	if err != nil {
+		a.resourceError(w, err)
+		return
+	}
+	var sockets map[sysinfo.Socket]bool
+	if server.local {
+		sockets, err = a.opts.ListeningPorts(r.Context())
+		if err != nil {
+			a.portInspectionError(w)
+			return
+		}
+	}
+	reservations, err := a.inboundReservations(r.Context(), conn, sockets, server)
 	if err != nil {
 		a.resourceError(w, err)
 		return

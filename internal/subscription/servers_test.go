@@ -31,12 +31,12 @@ func TestMultiServerSubscription(t *testing.T) {
 	}{
 		{"UPDATE servers SET name='Edge' WHERE is_local=1", nil},
 		{"INSERT INTO servers(id,name,public_host,status) VALUES(2,'Edge','edge.example','offline')", nil},
-		{`INSERT INTO inbounds(server_id,tag,protocol,port,options,created_at,updated_at)
-			SELECT 2,tag,protocol,port,options,0,0 FROM inbounds WHERE id=1`, nil},
-		{`INSERT INTO inbounds(server_id,tag,protocol,port,remark,options,created_at,updated_at)
-			SELECT 2,'custom',protocol,9443,' Custom ',options,0,0 FROM inbounds WHERE id=1`, nil},
-		{`INSERT INTO inbounds(server_id,tag,protocol,port,remark,options,created_at,updated_at)
-			VALUES(2,'hy2','hysteria2',8443,'Custom',?,0,0)`, []any{string(remoteOptions)}},
+		{`INSERT INTO inbounds(server_id,tag,protocol,port,options,created_at,updated_at,agent_keys_ready)
+			SELECT 2,tag,protocol,port,json_remove(options,'$.private_key'),0,0,1 FROM inbounds WHERE id=1`, nil},
+		{`INSERT INTO inbounds(server_id,tag,protocol,port,remark,options,created_at,updated_at,agent_keys_ready)
+			SELECT 2,'custom',protocol,9443,' Custom ',json_remove(options,'$.private_key'),0,0,1 FROM inbounds WHERE id=1`, nil},
+		{`INSERT INTO inbounds(server_id,tag,protocol,port,remark,options,created_at,updated_at,agent_keys_ready)
+			VALUES(2,'hy2','hysteria2',8443,'Custom',?,0,0,1)`, []any{string(remoteOptions)}},
 		{`INSERT INTO inbounds(server_id,tag,protocol,port,enabled,options,created_at,updated_at)
 			VALUES(2,'disabled','hysteria2',14443,0,'{}',0,0)`, nil},
 	} {

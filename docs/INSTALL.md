@@ -493,7 +493,7 @@ bash scripts/install.sh --restore /root/boxpanel-backup.tar.gz.enc --passphrase-
   确认没有恢复进程后再移除，SIGKILL/断电时检查原目录与完整 pre-restore 目录并人工恢复。
   仅在新数据、服务与订阅验证正常后按需清理旧目录。
 
-## 9. T8.2 / T8.2b 节点安装
+## 9. T8.2–T8.3 节点安装
 
 在主控面板打开「服务器 → 添加服务器」，生成命令后在新节点以 root 执行。示例中的 URL 包含主控面板路径。
 
@@ -516,12 +516,15 @@ bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/main/script
   加入后启用两个 systemd 单元，由 `boxpanel serve` 使用现有校验、生效和回滚流程启动内核。
   节点仅需能出站访问主控 HTTPS，安装不会打开管理端口或 TCP 80，也不会生成管理员或申请面板证书。
 - `boxpanel info` 显示主控 URL、服务器编号和最近心跳结果。`boxpanel system ready` 在节点检查本机内核，
-  不依赖主控在线。主控不可达时，心跳从 5 秒指数退避到 60 秒；恢复后回到 30 秒间隔。
+  不依赖主控在线。主控不可达时，心跳从 5 秒指数退避到 60 秒；恢复后回到 20 秒间隔。
   连续三次认证失败时，日志与 info 提醒从主控检查记录，执行 `boxpanel leave` 或重新加入。
   若 401 响应时间与本机相差超过 100 秒，日志与 info 优先报告偏差和 NTP 操作。请执行 `timedatectl set-ntp true`，
   并用 `timedatectl status` 确认时钟同步，心跳会自动重试。
-- `boxpanel leave` 清除本地节点身份和私钥，保留已安装的程序、内核配置与本地流量样本。请在主控移除旧记录。
+- `boxpanel leave` 清除本地签名身份和同步镜像，保留已安装的程序、现有内核文件和历史网卡样本。请在主控移除旧记录。
   若节点注册成功但服务启动失败，请排查 `journalctl -u boxpanel` 后执行
   `systemctl enable --now boxpanel.service boxpanel-singbox.service`。
   若加入响应丢失，请在主控检查是否留下待连接记录，移除后签发新令牌。
-- 节点注册后暂时没有来自主控的入站配置。确认方式是在主控服务器页观察首次心跳及 90 秒超时后的离线状态。
+- 先升级主控，再升级节点。首次心跳后，在主控「节点」选择该服务器创建入站。在「服务器」查看版本与生效结果。
+  位于 NAT 后的节点仍需按实际协议映射入站端口及配置的 UDP 跳跃端口。等待入站公开材料上报后再更新客户端订阅。
+- 主控暂时不可达时节点继续使用已经生效的配置。节点恢复后缺少 Reality 或 Hysteria2 密钥时会重新生成并上报。
+  使用原公钥或指纹的客户端需要刷新订阅。

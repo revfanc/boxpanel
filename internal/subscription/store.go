@@ -140,7 +140,7 @@ func (s *Store) Load(ctx context.Context, id int64, token *string) (Data, error)
 		return d, fmt.Errorf("count subscription servers: %w", err)
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT i.id,i.remark,i.protocol,i.port,i.options,s.public_host,s.name,s.is_local
-		FROM inbounds i JOIN servers s ON s.id=i.server_id WHERE i.enabled=1 AND s.status<>'removed' ORDER BY i.id`)
+		FROM inbounds i JOIN servers s ON s.id=i.server_id WHERE i.enabled=1 AND s.status<>'removed' AND (s.is_local=1 OR i.agent_keys_ready=1) ORDER BY i.id`)
 	if err != nil {
 		return d, fmt.Errorf("read subscription inbounds: %w", err)
 	}

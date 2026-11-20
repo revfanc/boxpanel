@@ -42,6 +42,8 @@ var (
 	Hysteria2Fingerprints = SettingKey[map[string]string]{"hysteria2_fingerprints"}
 )
 
+var AgentAppliedGeneration = SettingKey[int64]{"agent_applied_generation"}
+
 type AgentConnection struct {
 	MasterURL string `json:"master_url"`
 	Pin       string `json:"pin,omitempty"`
