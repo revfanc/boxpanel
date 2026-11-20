@@ -34,7 +34,7 @@ func TestAgentTrafficReportValidationAndAccounting(t *testing.T) {
 			t.Fatal(err)
 		}
 		id, err := master.Register(t.Context(), agent.Registration{
-			Token: token, PublicKey: base64.RawURLEncoding.EncodeToString(public), Hostname: name, Version: "test",
+			Token: token, PublicKey: base64.RawURLEncoding.EncodeToString(public), Hostname: name, Version: "test", Protocol: agent.ProtocolVersion,
 		}, "8.8.8.8")
 		if err != nil {
 			t.Fatal(err)

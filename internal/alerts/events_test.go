@@ -298,3 +298,91 @@ func TestLocalBillingAndEventsUseServerRow(t *testing.T) {
 		t.Fatal("local alerts used the remote row")
 	}
 }
+
+func TestRemoteBillingThresholdsAndRetention(t *testing.T) {
+	f := newFixture(t, Options{})
+	f.now = time.Date(2030, 1, 15, 12, 0, 0, 0, time.UTC)
+	f.enableBark()
+	f.exec(`INSERT INTO servers(id,name,public_host,status) VALUES
+		(2,'Edge','8.8.8.8','online'),(3,'Other','8.8.4.4','offline'),(4,'Removed','1.1.1.1','removed')`)
+	for _, item := range []struct {
+		id   int64
+		day  int
+		mode string
+	}{{2, 10, "both"}, {3, 1, "max"}} {
+		_, err := f.service.SaveConfig(t.Context(), ConfigUpdate{ServerID: &item.id, Day: &item.day, Mode: &item.mode, QuotaGB: pointer(int64(1))})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.exec(`UPDATE servers SET alert_preferences=json_set(alert_preferences,'$.quota_gb',1) WHERE id=4`)
+	f.exec(`INSERT INTO server_traffic_samples VALUES
+		(2,?,'eth0',2000000000,0),(2,?,'eth0',400000000,400000000),
+		(3,?,'eth2',700000000,700000000),(4,?,'eth3',0,2000000000),(4,?,'eth3',0,0)`,
+		f.now.AddDate(0, 0, -7).UnixNano(), f.now.UnixNano(), f.now.UnixNano(), f.now.UnixNano(), f.now.AddDate(0, 0, -63).UnixNano())
+	f.evaluate()
+	if f.events(serverQuota80) != 1 || f.events(serverQuota100) != 0 || f.count("SELECT count(*) FROM server_traffic_samples WHERE server_id=4") != 1 {
+		t.Fatal("server threshold, billing cycle or sample retention was incorrect")
+	}
+	f.now = f.now.Add(time.Minute)
+	f.exec(`INSERT INTO server_traffic_samples VALUES (2,?,'eth0',200000000,0),(3,?,'eth2',0,300000000)`, f.now.UnixNano(), f.now.UnixNano())
+	f.evaluate()
+	f.restart()
+	f.evaluate()
+	if f.events(serverQuota80) != 2 || f.events(serverQuota90) != 0 || f.events(serverQuota100) != 2 || f.count("SELECT count(*) FROM alert_outbox") != 4 {
+		t.Fatal("remote billing thresholds were not independently deduplicated")
+	}
+	for id, address := range map[int64]string{2: "8.8.8.8", 3: "8.8.4.4"} {
+		if f.count("SELECT count(*) FROM alert_events WHERE server_id=? AND address=?", id, address) != 2 {
+			t.Fatal("remote billing events use the wrong server address")
+		}
+	}
+}
+
+func TestServerAvailabilitySettingAndRecoveryPair(t *testing.T) {
+	f := newFixture(t, Options{})
+	f.exec(`INSERT INTO servers(id,name,public_host,status) VALUES (2,'Edge','8.8.8.8','offline')`)
+	ctx := t.Context()
+	set := func(enabled bool) {
+		t.Helper()
+		if _, err := f.service.SaveConfig(ctx, ConfigUpdate{Events: map[string]*bool{serverOffline: &enabled}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record := func(lastSeen time.Time, recovered bool) {
+		t.Helper()
+		tx, err := f.writer.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		if err := f.service.ServerAvailability(ctx, tx, 2, "8.8.8.8", lastSeen, f.now, recovered); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := f.now.Add(-2 * time.Minute)
+	set(false)
+	record(seen, false)
+	set(true)
+	record(seen, true)
+	if f.events(serverOffline) != 0 || f.events(serverRecovered) != 0 {
+		t.Fatal("disabled incident generated an availability notification")
+	}
+	seen = seen.Add(time.Second)
+	for range 2 {
+		record(seen, false)
+		record(seen, true)
+	}
+	if f.events(serverOffline) != 1 || f.events(serverRecovered) != 1 {
+		t.Fatal("an enabled incident did not generate exactly one event per transition")
+	}
+	var key, address string
+	var seconds int64
+	if err := f.reader.QueryRow(`SELECT event_key,address,offline_seconds FROM alert_events WHERE kind=?`, serverRecovered).
+		Scan(&key, &address, &seconds); err != nil || address != "8.8.8.8" || seconds != 119 || key == "" {
+		t.Fatalf("unexpected recovery event: %q/%q/%d (%v)", key, address, seconds, err)
+	}
+}

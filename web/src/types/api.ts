@@ -109,6 +109,8 @@ export interface Server {
   applied_generation?: number
   sync_status?: 'synced' | 'syncing' | 'failed'
   sync_error?: string
+  protocol?: number
+  upgrade_required?: boolean
   singbox_active?: boolean
   uptime?: number
   inbound_counts?: { ready: number; pending: number }
@@ -212,13 +214,14 @@ export type BillingMode = 'out' | 'both' | 'max' | 'in'
 export type NotificationChannel = 'bark' | 'server_chan' | 'telegram'
 export type AlertKind = 'user_quota_80' | 'user_quota_100' | 'user_expiring' | 'user_expired' | 'user_stopped'
   | 'server_quota_80' | 'server_quota_90' | 'server_quota_100' | 'certificate_warning' | 'core_down' | 'core_recovered'
+  | 'server_offline' | 'server_recovered'
 
 export interface AlertConfig {
   interface: string
   quota_gb: number
   billing_day: number
   billing_mode: BillingMode
-  events: Record<AlertKind, boolean>
+  events: Partial<Record<AlertKind, boolean>>
 }
 
 export interface NotificationChannelSettings {
@@ -232,16 +235,19 @@ export interface AlertSettings {
   config: AlertConfig
   channels: Record<NotificationChannel, NotificationChannelSettings>
   interfaces: string[]
+  billing: AlertOverview['billing']
 }
 
 export interface AlertEvent {
   key: string
   kind: AlertKind
+  server_id?: number
   address: string
   username?: string
   used: number
   limit: number
   deadline?: number
+  offline_seconds?: number
   created_at: number
 }
 

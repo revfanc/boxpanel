@@ -30,6 +30,7 @@ export const alertSettings: AlertSettings = {
     telegram: { enabled: false, credential_mask: '' },
   },
   interfaces: [],
+  billing: alertOverview.billing,
 }
 export const server: Server = { id: 1, name: '本机', public_host: 'example.com', is_local: true, status: 'local', version: 'dev', last_seen_at: null, created_at: 1, updated_at: 1 }
 export const inbound: Inbound = { id: 1, server_id: 1, tag: 'reality-443', protocol: 'vless_reality', port: 443, enabled: true, remark: 'Reality', options: { server_name: 'example.com', handshake_server: 'example.com', handshake_port: 443, fingerprint: 'chrome', short_ids: ['0123456789abcdef'], public_key: 'public-key' }, created_at: 1, updated_at: 1 }

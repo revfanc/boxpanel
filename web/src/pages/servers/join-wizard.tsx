@@ -14,18 +14,15 @@ import { expiry } from '@/lib/format'
 import { serversQuery } from '@/lib/resources'
 import { serverNameSchema } from '@/schemas/server'
 import type { IssuedJoinToken, JoinToken, Server } from '@/types/api'
+import { installCommand } from './install-command'
 
 const tokenPath = '/servers/join-tokens'
 const tokenKey = ['servers', 'join-tokens'] as const
 
 function joinCommand(issued: IssuedJoinToken) {
-  const version = window.__BOXPANEL__?.version ?? ''
-  const tag = /^v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*)?$/.test(version) ? version : ''
-  const script = `https://raw.githubusercontent.com/revfanc/boxpanel/${tag || 'main'}/scripts/install.sh`
   const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'"
-  return `bash <(curl -fsSL ${script}) --join ${quote(issued.master_url)} --token ${quote(issued.token)}`
-    + ` --master-pin ${quote(issued.master_pin)}`
-    + (tag ? ` --version ${tag}` : '')
+  const args = `--join ${quote(issued.master_url)} --token ${quote(issued.token)} --master-pin ${quote(issued.master_pin)}`
+  return installCommand(window.__BOXPANEL__?.version ?? '', args)
 }
 
 type JoinProgress = { state: 'waiting' | 'unavailable' } | { state: 'connected'; server: Server }

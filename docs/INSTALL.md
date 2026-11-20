@@ -40,7 +40,8 @@ install 流程：
    enable 两个单元并 restart 面板；同时确认服务 active 与本机 HTTPS 就绪。
 8. 询问是否开启 BBR（非交互模式默认开启），输出 §1 的信息。
 
-update：先补齐 nftables 等系统依赖，再下载新版 boxpanel → 校验 → 同目录原子替换 → `systemctl restart boxpanel` → 检查本机 HTTPS。
+update：主控缺少 nft 时先补齐系统依赖，然后下载新版 boxpanel → 校验 → 同目录原子替换 → `systemctl restart boxpanel` → 检查就绪。
+主控检查本机 HTTPS，节点检查受管内核，节点升级跳过系统依赖安装。
 脚本不初始化/重置 DB、不安装/升级 sing-box；`serve` 仍按既有约定迁移 DB 并执行 Startup/Apply，
 因此“不动 DB 与 sing-box”不表示阻止正常启动时的重新生效。失败尝试恢复旧二进制并重启，
 不回退数据库迁移、不声称整机事务回滚；旧版也无法启动时提示检查数据库兼容性和 journal。
@@ -493,7 +494,7 @@ bash scripts/install.sh --restore /root/boxpanel-backup.tar.gz.enc --passphrase-
   确认没有恢复进程后再移除，SIGKILL/断电时检查原目录与完整 pre-restore 目录并人工恢复。
   仅在新数据、服务与订阅验证正常后按需清理旧目录。
 
-## 9. T8.2–T8.4 节点安装
+## 9. T8.2–T8.7 节点安装
 
 在主控面板打开「服务器 → 添加服务器」，生成命令后在新节点以 root 执行。示例中的 URL 包含主控面板路径。
 
@@ -520,7 +521,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/main/script
   连续三次认证失败时，日志与 info 提醒从主控检查记录，执行 `boxpanel leave` 或重新加入。
   若 401 响应时间与本机相差超过 100 秒，日志与 info 优先报告偏差和 NTP 操作。请执行 `timedatectl set-ntp true`，
   并用 `timedatectl status` 确认时钟同步，心跳会自动重试。
-- `boxpanel leave` 清除本地签名身份和同步镜像，保留已安装的程序、现有内核文件和历史网卡样本。请在主控移除旧记录。
+- `boxpanel leave` 清除本地签名身份和同步镜像，保留已安装的程序、现有内核文件和历史网卡样本。重新加入后，只发送新身份下采集的样本。
+  请在主控移除旧记录。
   若节点注册成功但服务启动失败，请排查 `journalctl -u boxpanel` 后执行
   `systemctl enable --now boxpanel.service boxpanel-singbox.service`。
   若加入响应丢失，请在主控检查是否留下待连接记录，移除后签发新令牌。
@@ -528,5 +530,15 @@ bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/main/script
   位于 NAT 后的节点仍需按实际协议映射入站端口及配置的 UDP 跳跃端口。等待入站公开材料上报后再更新客户端订阅。
 - 主控暂时不可达时节点继续使用已经生效的配置。节点恢复后缺少 Reality 或 Hysteria2 密钥时会重新生成并上报。
   使用原公钥或指纹的客户端需要刷新订阅。
-- 主控和节点均升级至支持 T8.4 的版本后，节点采集的用户用量会随心跳汇总到主控。主控暂时不可达时，节点继续计数并在恢复后补报。
+- 主控和节点均支持当前协议后，节点采集的用户用量和网卡样本会随同步轮次汇总到主控。主控暂时不可达时，节点继续计数并在恢复后补报。
   若只重启节点的 boxpanel 服务，sing-box 和同次系统启动的 nft 计数器持续运行时可补记停机间隔的用量。
+
+### T8.7 节点升级
+
+- 先升级主控，再在远端服务器卡片复制升级命令，以 root 在节点执行。主控为发布版时，命令从相同 tag 取脚本并显式指定该版本。
+  主控为开发构建时，命令从 `main` 取脚本，使用默认的最新发布版。旧节点心跳可继续联系主控，协议恢复兼容后自动继续同步。
+- `install.sh update` 在 `agent` 角色下校验并原子替换 boxpanel，重启 `boxpanel.service`，用节点的 `system ready` 检查本机内核。
+  脚本保留 `agent.key`、镜像 DB、sing-box 配置及内核二进制，不运行初始化、加入向导或 sing-box 安装。节点启动仍按原流程迁移 DB，
+  校验并恢复本地配置。失败按 §2 尝试恢复原二进制。升级无需新的加入令牌。
+- 主控的网卡账期用量可从远端卡片「流量告警」查看。网卡选择经心跳下发，无需重启节点内核。
+  主控备份复制到节点留待后续。

@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,6 +20,8 @@ import (
 
 	"github.com/revfanc/boxpanel/internal/spa"
 )
+
+var ErrMasterOutdated = errors.New("主控版本过旧，请先升级主控，节点会继续使用上次生效的配置")
 
 type Client struct {
 	base string
@@ -108,9 +111,20 @@ func unauthorized(date string, now time.Time) error {
 
 func (c *Client) Join(ctx context.Context, token string, key ed25519.PublicKey, hostname, publicIP, version string) (Identity, error) {
 	var id Identity
-	resp, err := c.post(ctx, "/join", Registration{token, encoding.EncodeToString(key), hostname, publicIP, version}, 0, nil)
+	in := Registration{Token: token, PublicKey: encoding.EncodeToString(key), Hostname: hostname, PublicIP: publicIP, Version: version, Protocol: ProtocolVersion}
+	resp, err := c.post(ctx, "/join", in, 0, nil)
 	if err != nil {
 		return id, err
+	}
+	if resp.StatusCode == http.StatusBadRequest {
+		// Pre-negotiation binaries reject the unknown protocol field before
+		// consuming a token. Retry registration with their original shape.
+		resp.Body.Close()
+		in.Protocol = 0
+		resp, err = c.post(ctx, "/join", in, 0, nil)
+		if err != nil {
+			return id, err
+		}
 	}
 	defer resp.Body.Close()
 	switch resp.StatusCode {
@@ -132,13 +146,16 @@ func (c *Client) Join(ctx context.Context, token string, key ed25519.PublicKey, 
 }
 
 func (c *Client) Heartbeat(ctx context.Context, id int64, key ed25519.PrivateKey, heartbeat Heartbeat) error {
+	if heartbeat.Protocol == 0 {
+		heartbeat.Protocol = ProtocolVersion
+	}
 	resp, err := c.post(ctx, "/heartbeat", heartbeat, id, key)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	switch resp.StatusCode {
-	case http.StatusNoContent:
+	case http.StatusNoContent, http.StatusOK:
 		return nil
 	case http.StatusUnauthorized:
 		return unauthorized(resp.Header.Get("Date"), time.Now())
@@ -154,6 +171,17 @@ func (c *Client) SyncHeartbeat(ctx context.Context, id int64, key ed25519.Privat
 	if err != nil {
 		return reply, err
 	}
+	legacy := resp.StatusCode == http.StatusBadRequest && in.Protocol != 0
+	if legacy {
+		// Old masters also reject new sync error codes. Keep contact with
+		// them after attempting the modern heartbeat.
+		resp.Body.Close()
+		in.Protocol, in.Interfaces, in.SyncError = 0, nil, ""
+		resp, err = c.post(ctx, "/heartbeat", in, id, key)
+		if err != nil {
+			return reply, err
+		}
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNoContent {
 		return reply, nil
@@ -163,6 +191,9 @@ func (c *Client) SyncHeartbeat(ctx context.Context, id int64, key ed25519.Privat
 	}
 	if err := decodeResponse(resp, 8192, &reply); err != nil || reply.DesiredGeneration <= 0 {
 		return HeartbeatReply{}, fmt.Errorf("invalid desired generation in heartbeat response")
+	}
+	if legacy {
+		reply.Protocol = 1
 	}
 	return reply, nil
 }
@@ -205,12 +236,25 @@ func (c *Client) ReportTraffic(ctx context.Context, id int64, key ed25519.Privat
 	return nodeResponse(resp, http.StatusNoContent)
 }
 
+func (c *Client) ReportInterfaceSamples(ctx context.Context, id int64, key ed25519.PrivateKey, report InterfaceSamples) error {
+	resp, err := c.post(ctx, "/interface-samples", report, id, key)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nodeResponse(resp, http.StatusNoContent)
+}
+
 func nodeResponse(resp *http.Response, want int) error {
 	switch resp.StatusCode {
 	case want:
 		return nil
 	case http.StatusUnauthorized:
 		return unauthorized(resp.Header.Get("Date"), time.Now())
+	case http.StatusNotFound:
+		return ErrMasterOutdated
+	case http.StatusUpgradeRequired:
+		return ErrAgentUpgradeRequired
 	default:
 		return fmt.Errorf("node request returned HTTP %d", resp.StatusCode)
 	}

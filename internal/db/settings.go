@@ -49,6 +49,7 @@ var (
 	AgentAppliedGeneration = SettingKey[int64]{"agent_applied_generation"}
 	AgentTrafficEpoch      = SettingKey[int64]{"agent_traffic_epoch"}
 	AgentTrafficCheckpoint = SettingKey[TrafficCheckpoint]{"agent_traffic_checkpoint"}
+	AgentInterfaceAck      = SettingKey[int64]{"agent_interface_ack"}
 )
 
 type TrafficCheckpoint struct {
@@ -76,7 +77,7 @@ type AgentHeartbeatResult struct {
 	RepeatedUnauthorized bool   `json:"repeated_unauthorized,omitempty"`
 }
 
-// AlertConfig stores local billing settings and per-event switches.
+// AlertConfig stores a server's billing settings and per-event switches.
 type AlertConfig struct {
 	Interface string          `json:"interface"`
 	QuotaGB   int64           `json:"quota_gb"`

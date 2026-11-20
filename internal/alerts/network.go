@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,20 +22,14 @@ type Network struct {
 	Runner host.Runner
 }
 
-var interfacePattern = regexp.MustCompile(`^[^[:space:]/:\\]{1,15}$`)
-
-func validInterface(name string) bool {
-	return name == "" || (name != "lo" && name != "." && name != ".." && !strings.ContainsAny(name, "\x00") && len(name) <= 15 && interfacePattern.MatchString(name))
-}
-
-func (n Network) interfaces() ([]string, error) {
+func (n Network) Interfaces() ([]string, error) {
 	counters, err := sysinfo.ReadNetworkCounters(n.Files)
 	if err != nil {
 		return nil, err
 	}
 	names := make([]string, 0, len(counters))
 	for name := range counters {
-		if validInterface(name) {
+		if sysinfo.ValidNetworkInterface(name) {
 			names = append(names, name)
 		}
 	}
@@ -64,7 +57,7 @@ func routeDevice(data []byte) string {
 				metric, _ = strconv.ParseUint(fields[i+1], 10, 64)
 			}
 		}
-		if name != "" && validInterface(name) && metric < lowest {
+		if sysinfo.ValidNetworkInterface(name) && metric < lowest {
 			best, lowest = name, metric
 		}
 	}

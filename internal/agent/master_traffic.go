@@ -36,13 +36,10 @@ func (m *Master) RecordTraffic(ctx context.Context, identity authenticated, repo
 		return fmt.Errorf("begin agent traffic report: %w", err)
 	}
 	defer tx.Rollback()
-	var serverID int64
-	if err := tx.QueryRowContext(ctx, "SELECT id FROM servers WHERE "+agentIdentity, identity.id, identity.publicKey).Scan(&serverID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrUnauthorized
-		}
-		return fmt.Errorf("verify node before recording traffic: %w", err)
+	if err := requireNodeProtocol(ctx, tx, identity); err != nil {
+		return err
 	}
+	serverID := identity.id
 	now := m.now()
 	regression := false
 	for _, c := range report.Counters {

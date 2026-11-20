@@ -15,19 +15,26 @@ import (
 )
 
 const (
-	Prefix            = "/api/agent/v1"
-	HeaderServer      = "X-Boxpanel-Server"
-	HeaderTimestamp   = "X-Boxpanel-Timestamp"
-	HeaderNonce       = "X-Boxpanel-Nonce"
-	HeaderSignature   = "X-Boxpanel-Signature"
-	HeartbeatInterval = 30 * time.Second
-	SyncInterval      = 20 * time.Second
-	OfflineAfter      = 90 * time.Second
-	nonceLifetime     = 5 * time.Minute
-	maxClockSkew      = 120
-	TrafficPath       = Prefix + "/traffic"
-	MaxTrafficBody    = 1 << 20
-	MaxTrafficUsers   = 10_000
+	Prefix                  = "/api/agent/v1"
+	HeaderServer            = "X-Boxpanel-Server"
+	HeaderTimestamp         = "X-Boxpanel-Timestamp"
+	HeaderNonce             = "X-Boxpanel-Nonce"
+	HeaderSignature         = "X-Boxpanel-Signature"
+	HeartbeatInterval       = 30 * time.Second
+	SyncInterval            = 20 * time.Second
+	OfflineAfter            = 90 * time.Second
+	nonceLifetime           = 5 * time.Minute
+	maxClockSkew            = 120
+	TrafficPath             = Prefix + "/traffic"
+	MaxTrafficBody          = 1 << 20
+	MaxTrafficUsers         = 10_000
+	ProtocolVersion         = 2
+	MinNodeProtocol         = 2
+	MinMasterProtocol       = 2
+	InterfaceSamplesPath    = Prefix + "/interface-samples"
+	MaxInterfaceSamplesBody = 256 << 10
+	MaxInterfaceSamples     = 1000
+	MaxInterfaceNames       = 32
 )
 
 type Registration struct {
@@ -36,6 +43,7 @@ type Registration struct {
 	Hostname  string `json:"hostname"`
 	PublicIP  string `json:"public_ip"`
 	Version   string `json:"version"`
+	Protocol  int    `json:"protocol,omitempty"`
 }
 
 type Identity struct {
@@ -43,11 +51,13 @@ type Identity struct {
 }
 
 type Heartbeat struct {
-	Version           string `json:"version"`
-	SingboxActive     bool   `json:"singbox_active"`
-	Uptime            int64  `json:"uptime"`
-	AppliedGeneration *int64 `json:"applied_generation,omitempty"`
-	SyncError         string `json:"sync_error,omitempty"`
+	Version           string   `json:"version"`
+	Protocol          int      `json:"protocol,omitempty"`
+	Interfaces        []string `json:"interfaces,omitzero"`
+	SingboxActive     bool     `json:"singbox_active"`
+	Uptime            int64    `json:"uptime"`
+	AppliedGeneration *int64   `json:"applied_generation,omitempty"`
+	SyncError         string   `json:"sync_error,omitempty"`
 }
 
 var encoding = base64.RawURLEncoding.Strict()
@@ -120,7 +130,21 @@ type InboundKeys struct {
 }
 
 type HeartbeatReply struct {
-	DesiredGeneration int64 `json:"desired_generation"`
+	DesiredGeneration int64  `json:"desired_generation"`
+	Protocol          int    `json:"protocol"`
+	Version           string `json:"version"`
+	Interface         string `json:"interface"`
+}
+
+type InterfaceSamples struct {
+	Samples []InterfaceSample `json:"samples"`
+}
+
+type InterfaceSample struct {
+	SampledAt int64  `json:"sampled_at"`
+	Interface string `json:"interface"`
+	RX        int64  `json:"rx"`
+	TX        int64  `json:"tx"`
 }
 
 type TrafficReport struct {
@@ -135,19 +159,20 @@ type TrafficCounter struct {
 }
 
 const (
-	SyncCheckFailed = "check_failed"
-	SyncPortInUse   = "port_in_use"
-	SyncRestart     = "restart_failed"
-	SyncFirewall    = "firewall_failed"
-	SyncTimeout     = "apply_timeout"
-	SyncRollback    = "rollback_failed"
-	SyncApply       = "apply_failed"
-	SyncKeys        = "key_publication_failed"
+	SyncCheckFailed    = "check_failed"
+	SyncPortInUse      = "port_in_use"
+	SyncRestart        = "restart_failed"
+	SyncFirewall       = "firewall_failed"
+	SyncTimeout        = "apply_timeout"
+	SyncRollback       = "rollback_failed"
+	SyncApply          = "apply_failed"
+	SyncKeys           = "key_publication_failed"
+	SyncMasterOutdated = "master_outdated"
 )
 
 func ValidSyncError(code string) bool {
 	switch code {
-	case "", SyncCheckFailed, SyncPortInUse, SyncRestart, SyncFirewall, SyncTimeout, SyncRollback, SyncApply, SyncKeys:
+	case "", SyncCheckFailed, SyncPortInUse, SyncRestart, SyncFirewall, SyncTimeout, SyncRollback, SyncApply, SyncKeys, SyncMasterOutdated:
 		return true
 	default:
 		return false

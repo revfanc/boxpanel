@@ -7,17 +7,91 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"errors"
 	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/revfanc/boxpanel/internal/certs"
+	"github.com/revfanc/boxpanel/internal/db"
 )
+
+func TestLegacyMasterAllowsFallbackHeartbeatWithoutApplying(t *testing.T) {
+	var currentJoins, legacyJoins, legacyBeats, reportedOutdated atomic.Int64
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode node request: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		switch r.URL.Path {
+		case Prefix + "/join":
+			if string(body["protocol"]) == "2" {
+				currentJoins.Add(1)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			legacyJoins.Add(1)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"server_id":2}`))
+		case Prefix + "/heartbeat":
+			if string(body["sync_error"]) == `"master_outdated"` {
+				reportedOutdated.Add(1)
+			}
+			if body["protocol"] != nil || body["interfaces"] != nil || body["sync_error"] != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			legacyBeats.Add(1)
+			_, _ = w.Write([]byte(`{"desired_generation":12}`))
+		default:
+			t.Errorf("incompatible node called %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	pin := certs.SPKIPin(server.Certificate().RawSubjectPublicKeyInfo)
+	client, err := NewClient(server.URL, pin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	pub, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	id, err := client.Join(ctx, "token", pub, "edge", "8.8.8.8", "current")
+	if err != nil || id.ServerID != 2 || currentJoins.Load() != 1 || legacyJoins.Load() != 1 {
+		t.Fatal("registration did not negotiate the legacy request shape", err)
+	}
+	conn, err := db.Open(ctx, filepath.Join(t.TempDir(), "node.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := db.SetSetting(ctx, conn, db.AgentAppliedGeneration, int64(7)); err != nil {
+		t.Fatal(err)
+	}
+	node := Node{Reader: conn, Writer: conn, Client: client, Key: key, Master: db.AgentConnection{ServerID: id.ServerID}}
+	beat := Heartbeat{Version: "current", SingboxActive: true, Interfaces: []string{"eth0"}}
+	for range 2 {
+		if err := node.Sync(ctx, beat, func() bool { return true }); !errors.Is(err, ErrMasterOutdated) {
+			t.Fatalf("legacy sync: %v", err)
+		}
+	}
+	applied, err := db.GetSetting(ctx, conn, db.AgentAppliedGeneration)
+	if err != nil || applied != 7 || legacyBeats.Load() != 3 || reportedOutdated.Load() != 2 {
+		t.Fatalf("legacy contact or existing config changed: applied=%d beats=%d reports=%d err=%v", applied, legacyBeats.Load(), reportedOutdated.Load(), err)
+	}
+}
 
 func TestClientUsesCAAndDoesNotForwardRegistrationOnRedirect(t *testing.T) {
 	var redirected atomic.Bool

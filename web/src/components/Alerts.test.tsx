@@ -38,10 +38,24 @@ it('saves billing settings and individual event switches', async () => {
   await user.type(quota, '500')
   await user.selectOptions(screen.getByLabelText(a.mode), 'both')
   await user.click(screen.getByRole('switch', { name: a.event.server_quota_90 }))
+  const availability = screen.getByRole('switch', { name: a.offlineNotifications })
+  expect(availability).toBeChecked()
+  await user.click(availability)
   await user.click(screen.getByRole('button', { name: a.saveSettings }))
   expect(await screen.findByText(a.settingsSaved)).toBeVisible()
   const call = fetch.mock.calls.find(([url, init]) => url.endsWith('/alerts/settings') && init?.method === 'PUT')
-  expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ quota_gb: 500, billing_mode: 'both', events: { server_quota_90: false } })
+  expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ quota_gb: 500, billing_mode: 'both', events: { server_quota_90: false, server_offline: false } })
+})
+
+it('shows remote recovery with its duration in the dashboard inbox', async () => {
+  mockAPI({ '/alerts': () => Response.json({ ...alertOverview, unread_count: 1, unread: [
+    { key: 'recovered', kind: 'server_recovered', server_id: 2, address: 'edge.example.com', used: 0, limit: 0,
+      created_at: 1735689600, offline_seconds: 120 },
+  ] }) })
+  mountPage(<DashboardPage />)
+  expect(await screen.findByText(a.event.server_recovered)).toBeVisible()
+  expect(screen.getByText(/edge\.example\.com/)).toBeVisible()
+  expect(screen.getByText(a.offlineDuration('2 分钟'))).toBeVisible()
 })
 
 it('preserves masked values on save and sends a test with saved credentials', async () => {

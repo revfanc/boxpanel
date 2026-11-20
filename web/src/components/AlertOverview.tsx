@@ -6,14 +6,14 @@ import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { alertOverviewQuery, billingGB, utcDate } from '@/lib/alerts'
 import { api } from '@/lib/api'
-import { bytes } from '@/lib/format'
+import { bytes, duration } from '@/lib/format'
 import { zhCN as t } from '@/i18n/zh-CN'
 import { useOperation } from '@/hooks/use-operation'
 import type { AlertOverview as Overview, AlertEvent } from '@/types/api'
 
 const a = t.alerts
 
-function ServerBilling({ billing }: { billing: Overview['billing'] }) {
+export function ServerBilling({ billing, showSettingsLink = true }: { billing: Overview['billing']; showSettingsLink?: boolean }) {
   return <Panel title={a.billing} hint={a.accounting}>
     {billing.supported ? <>
       {billing.sampled_at > 0 ? <>
@@ -29,7 +29,7 @@ function ServerBilling({ billing }: { billing: Overview['billing'] }) {
       </> : <Notice>{a.collecting}</Notice>}
       <p className="text-sm text-muted-foreground">{a.cycle(utcDate(billing.starts_at), utcDate(billing.ends_at))} · {a.modes[billing.billing_mode]}</p>
     </> : <Notice>{a.unsupported}</Notice>}
-    <Button asChild variant="outline" size="sm"><Link to="/settings">{a.configurable}</Link></Button>
+    {showSettingsLink && <Button asChild variant="outline" size="sm"><Link to="/settings">{a.configurable}</Link></Button>}
   </Panel>
 }
 
@@ -49,6 +49,7 @@ function UnreadEvent({ event }: { event: AlertEvent }) {
     </div>
     {event.limit > 0 && <p className="text-sm">{a.quotaUsage(format(event.used), format(event.limit), (100 * event.used / event.limit).toFixed(1))}</p>}
     {!!event.deadline && <p className="text-sm">{a.deadline(utcDate(event.deadline))}</p>}
+    {!!event.offline_seconds && <p className="text-sm">{a.offlineDuration(duration(event.offline_seconds))}</p>}
     {read.error != null && <ErrorNotice error={read.error} />}
   </li>
 }

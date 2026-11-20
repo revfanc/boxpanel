@@ -3,6 +3,8 @@ import { Link } from 'react-router'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
+import { RemoteAlertSettings } from '@/components/AlertSettings'
+import { CopyField } from '@/components/CopyField'
 import { ErrorNotice, Loading } from '@/components/Feedback'
 import { Confirm, Empty, Field, Page, Panel, Submit } from '@/components/ResourceUI'
 import { Button } from '@/components/ui/button'
@@ -15,6 +17,7 @@ import { bytes, duration, expiry, relativeTime } from '@/lib/format'
 import { refreshResources, serversQuery } from '@/lib/resources'
 import type { Server } from '@/types/api'
 import { JoinWizard } from './join-wizard'
+import { installCommand } from './install-command'
 
 function EditServerForm({ server, close }: { server: Server; close: () => void }) {
   const client = useQueryClient()
@@ -75,6 +78,7 @@ function ServerOverview({ servers }: { servers: Server[] }) {
 
 function ServerDetails({ server, multiple, masterVersion, now }: { server: Server; multiple: boolean; masterVersion?: string; now: number }) {
   const lastSeen = server.last_seen_at
+  const versionDiffers = !!masterVersion && !!server.version && server.version !== masterVersion
   return <>
     <dl className="grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm [&>dt]:text-muted-foreground">
       <dt>{t.servers.address}</dt><dd>{server.public_host || t.common.unknown}</dd>
@@ -106,8 +110,10 @@ function ServerDetails({ server, multiple, masterVersion, now }: { server: Serve
         </>}
       </>}
     </dl>
-    {!server.is_local && server.version && masterVersion && server.version !== masterVersion &&
-      <p className="text-sm text-muted-foreground">{t.servers.versionDifference(masterVersion)}</p>}
+    {!server.is_local && versionDiffers && <p className="text-sm text-muted-foreground">{t.servers.versionDifference(masterVersion)}</p>}
+    {!server.is_local && server.upgrade_required && <p role="status" className="text-sm text-destructive">{t.servers.nodeOutdated}</p>}
+    {!server.is_local && (server.upgrade_required || versionDiffers) &&
+      <CopyField label={t.servers.upgradeCommand} value={installCommand(masterVersion ?? '', 'update')} />}
     {server.sync_error && <p role="status" className="text-sm text-destructive">{syncErrors[server.sync_error] ?? t.servers.syncErrors.apply_failed}</p>}
     {!server.is_local && <p className="text-xs text-muted-foreground">{t.servers.keyRefresh}</p>}
   </>
@@ -119,10 +125,11 @@ export function ServersPage() {
   const operation = useOperation()
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<number | null>(null)
+  const [alertServer, setAlertServer] = useState<number | null>(null)
   const [removing, setRemoving] = useState<Server | null>(null)
   const servers = query.data ?? []
   const multiple = servers.length > 1
-  const masterVersion = servers.find((server) => server.is_local)?.version
+  const masterVersion = servers.find((server) => server.is_local)?.version || window.__BOXPANEL__?.version
   return <Page title={t.pages.servers} actions={<Button aria-expanded={adding} onClick={() => setAdding(!adding)}>{adding ? t.servers.closeAdd : t.servers.add}</Button>}>
     {adding && <JoinWizard />}
     {query.isPending ? <Loading /> : query.isError ? <ErrorNotice error={query.error} retry={() => { void query.refetch() }} />
@@ -135,8 +142,11 @@ export function ServersPage() {
             : <div className="flex flex-wrap gap-2">
               {multiple && <Button variant="outline" asChild><Link to={`/inbounds?server=${server.id}`}>{t.servers.viewInbounds}</Link></Button>}
               <Button variant="outline" disabled={editing !== null} onClick={() => setEditing(server.id)}>{server.is_local ? t.servers.rename : t.common.edit}</Button>
+              {!server.is_local && <Button variant="outline" aria-expanded={alertServer === server.id}
+                onClick={() => setAlertServer(alertServer === server.id ? null : server.id)}>{t.servers.trafficAlerts}</Button>}
               {!server.is_local && <Button variant="outline" disabled={editing !== null} onClick={() => { operation.reset(); setRemoving(server) }}>{t.servers.remove}</Button>}
             </div>}
+          {alertServer === server.id && <RemoteAlertSettings serverID={server.id} />}
         </Panel>)}
         </div>
       </>}

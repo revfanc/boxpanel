@@ -18,7 +18,7 @@ func (a *api) agentEndpoints() http.Handler {
 	routes := map[string]string{
 		agent.Prefix + "/join": http.MethodPost, agent.Prefix + "/heartbeat": http.MethodPost,
 		agent.Prefix + "/desired": http.MethodGet, agent.Prefix + "/inbound-keys": http.MethodPost,
-		agent.TrafficPath: http.MethodPost,
+		agent.TrafficPath: http.MethodPost, agent.InterfaceSamplesPath: http.MethodPost,
 	}
 	return middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method, ok := routes[r.URL.Path]
@@ -63,7 +63,7 @@ func (a *api) agentJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in agent.Registration
-	if !decode(w, r, &in) {
+	if !decodeResource(w, r, &in) {
 		return
 	}
 	id, err := a.opts.Agents.Register(r.Context(), in, peer)
@@ -83,13 +83,16 @@ func (a *api) agentJoin(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) agentAuthenticated(w http.ResponseWriter, r *http.Request) {
 	limit := int64(8 * 1024)
-	if r.URL.Path == agent.TrafficPath {
+	switch r.URL.Path {
+	case agent.TrafficPath:
 		limit = agent.MaxTrafficBody
+	case agent.InterfaceSamplesPath:
+		limit = agent.MaxInterfaceSamplesBody
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {
-		if _, tooLarge := err.(*http.MaxBytesError); r.URL.Path == agent.TrafficPath && tooLarge {
-			writeError(w, 413, "invalid_argument", "节点流量上报超过大小限制", "请将每批流量上报拆分至 1 MiB 以内后重试。")
+		if _, tooLarge := err.(*http.MaxBytesError); limit > 8*1024 && tooLarge {
+			writeError(w, 413, "invalid_argument", "节点流量上报超过大小限制", fmt.Sprintf("请将每批流量上报拆分至 %d KiB 以内后重试。", limit/1024))
 			return
 		}
 		a.rejectAgent(w, false)
@@ -107,6 +110,18 @@ func (a *api) agentAuthenticated(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	switch r.URL.Path {
+	case agent.InterfaceSamplesPath:
+		media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		var report agent.InterfaceSamples
+		if err != nil || media != "application/json" || strictObject(body, &report) != nil {
+			a.agentOperationError(w, agent.ErrInvalidInterfaceSamples)
+			return
+		}
+		if err := a.opts.Agents.RecordInterfaceSamples(r.Context(), identity, report); err != nil {
+			a.agentOperationError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	case agent.TrafficPath:
 		media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 		var report agent.TrafficReport
@@ -145,7 +160,7 @@ func (a *api) agentAuthenticated(w http.ResponseWriter, r *http.Request) {
 		if !decodeResource(w, r, &in) {
 			return
 		}
-		if !agent.ValidMetadata(in.Version, 128) || in.Uptime < 0 || !agent.ValidSyncError(in.SyncError) ||
+		if !agent.ValidMetadata(in.Version, 128) || in.Uptime < 0 || in.Protocol < 0 || !agent.ValidInterfaces(in.Interfaces) || !agent.ValidSyncError(in.SyncError) ||
 			in.AppliedGeneration != nil && *in.AppliedGeneration < 0 || in.AppliedGeneration == nil && in.SyncError != "" {
 			writeError(w, 400, "invalid_argument", "节点心跳内容无效", "请检查节点 boxpanel 版本后重试。")
 			return
@@ -155,7 +170,7 @@ func (a *api) agentAuthenticated(w http.ResponseWriter, r *http.Request) {
 			a.agentOperationError(w, err)
 			return
 		}
-		if in.AppliedGeneration == nil {
+		if in.AppliedGeneration == nil && in.Protocol == 0 {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -173,6 +188,10 @@ func (a *api) agentOperationError(w http.ResponseWriter, err error) {
 		writeError(w, 400, "invalid_inbound_keys", "入站公开材料无效", "请检查节点时间和证书，或更新节点版本后重试。")
 	case agent.ErrInvalidTraffic:
 		writeError(w, 400, "invalid_argument", "节点流量上报内容无效", "请检查节点版本；每批最多上报 10000 个用户，每个用户只能出现一次。")
+	case agent.ErrInvalidInterfaceSamples:
+		writeError(w, 400, "invalid_argument", "节点网卡采样无效", "请检查节点时钟、网卡名称和流量值；每批最多上报 1000 条。")
+	case agent.ErrAgentUpgradeRequired:
+		writeError(w, http.StatusUpgradeRequired, "agent_upgrade_required", "节点版本过旧，需升级", "请在主控的服务器卡片复制升级命令并在节点执行。")
 	default:
 		a.resourceError(w, err)
 	}

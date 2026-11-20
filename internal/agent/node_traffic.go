@@ -45,11 +45,12 @@ func (n *Node) trafficSnapshot(ctx context.Context) ([]nodeCounter, error) {
 	return counters, nil
 }
 
-func (n *Node) reportTraffic(ctx context.Context) error {
+func (n *Node) reportTraffic(ctx context.Context) (bool, error) {
 	counters, err := n.trafficSnapshot(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
+	changed := len(counters) > 0
 	// Each encoded counter plus its separator fits within 120 bytes, even
 	// with four full-width int64s. Leave room for the JSON envelope.
 	const batchLimit = min(MaxTrafficUsers, (MaxTrafficBody-32)/120)
@@ -65,11 +66,11 @@ func (n *Node) reportTraffic(ctx context.Context) error {
 			count++
 		}
 		if err := n.sendTrafficBatch(ctx, counters[:count]); err != nil {
-			return err
+			return changed, err
 		}
 		counters = counters[count:]
 	}
-	return nil
+	return changed, nil
 }
 
 func (n *Node) sendTrafficBatch(ctx context.Context, batch []nodeCounter) error {

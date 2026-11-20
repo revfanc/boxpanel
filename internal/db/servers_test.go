@@ -3,10 +3,47 @@ package db
 import (
 	"context"
 	"database/sql"
+	"io/fs"
 	"path/filepath"
 	"testing"
 	"testing/fstest"
 )
+
+func TestServerMonitoringMigrationPreservesExistingData(t *testing.T) {
+	ctx := t.Context()
+	conn := legacyServersDB(t)
+	paths, err := fs.Glob(migrations, "migrations/*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v8 := fstest.MapFS{}
+	for _, path := range paths[:8] {
+		raw, err := migrations.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v8[path] = &fstest.MapFile{Data: raw}
+	}
+	if err := migrate(ctx, conn, v8); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, conn, `INSERT INTO servers (id,name,public_host,status,last_seen_at,agent_public_key,desired_generation)
+		VALUES (2,'Old node','8.8.8.8','offline',100,'old-key',14);
+		INSERT INTO server_traffic_samples VALUES (2,100,'eth0',20,30);
+		INSERT INTO alert_events (event_key,server_id,kind,address,username,used,limit_bytes,threshold,deadline,created_at)
+		VALUES ('old-event',2,'server_quota_80','8.8.8.8','',800,1000,80,0,100)`)
+	if err := migrate(ctx, conn, migrations); err != nil {
+		t.Fatal(err)
+	}
+	var protocol, generation, txBytes, duration int64
+	var key, names, status string
+	err = conn.QueryRow(`SELECT s.protocol,s.interfaces,s.agent_public_key,s.status,s.desired_generation,t.tx,e.offline_seconds
+		FROM servers s JOIN server_traffic_samples t ON t.server_id=s.id JOIN alert_events e ON e.server_id=s.id WHERE s.id=2`).
+		Scan(&protocol, &names, &key, &status, &generation, &txBytes, &duration)
+	if err != nil || protocol != 1 || names != "[]" || key != "old-key" || status != "offline" || generation != 14 || txBytes != 30 || duration != 0 {
+		t.Fatalf("monitoring migration changed old state: %d, %q, %q, %q, %d, %d, %d, %v", protocol, names, key, status, generation, txBytes, duration, err)
+	}
+}
 
 func legacyServersDB(t *testing.T) *sql.DB {
 	t.Helper()
