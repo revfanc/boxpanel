@@ -10,3 +10,12 @@ export function duration(seconds: number) {
   return hours >= 24 ? t.dashboard.days(Math.floor(hours / 24), hours % 24) : t.dashboard.minutes(hours, Math.floor(seconds % 3600 / 60))
 }
 export function expiry(seconds: number) { return seconds === 0 ? t.common.never : new Date(seconds * 1000).toLocaleString('zh-CN') }
+
+const relativeFormatter = new Intl.RelativeTimeFormat('zh-CN')
+export function relativeTime(timestamp: number, now: number) {
+  const seconds = Math.max(0, Math.floor(now / 1000) - timestamp)
+  if (seconds < 60) return t.servers.secondsAgo(seconds)
+  if (seconds < 3600) return relativeFormatter.format(-Math.floor(seconds / 60), 'minute')
+  if (seconds < 86400) return relativeFormatter.format(-Math.floor(seconds / 3600), 'hour')
+  return relativeFormatter.format(-Math.floor(seconds / 86400), 'day')
+}

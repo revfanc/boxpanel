@@ -1,7 +1,7 @@
 import { act, screen, waitFor, within } from '@testing-library/react'
 import { expect, it } from 'vitest'
 import { InboundsPage } from '.'
-import { deferred, failure, inbound, mockAPI, mountPage } from '@/test/resources'
+import { deferred, failure, inbound, mockAPI, mountPage, server } from '@/test/resources'
 import { zhCN as t } from '@/i18n/zh-CN'
 
 it('loads, renders an empty state, and recovers from a read error', async () => {
@@ -44,4 +44,29 @@ it('shows the server assignment without a selector', async () => {
   mountPage(<InboundsPage />)
   expect(await screen.findByText(t.servers.owner('本机'))).toBeVisible()
   expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+})
+
+it('filters nodes from the URL, updates it on selection and follows browser history', async () => {
+  const edge = { ...server, id: 2, name: 'Edge', is_local: false, status: 'online' }
+  const pending = { ...edge, id: 3, name: 'Pending', status: 'pending' }
+  mockAPI({
+    '/servers': () => Response.json([server, edge, pending]),
+    '/inbounds': () => Response.json([inbound, { ...inbound, id: 2, server_id: 2, remark: 'Remote node' }]),
+  })
+  const { router, user } = mountPage(<InboundsPage />, '/inbounds?server=2&keep=1', '/inbounds')
+  const filter = await screen.findByRole('combobox', { name: t.inbounds.server })
+  expect(filter).toHaveValue('2')
+  expect(await screen.findByText('Remote node')).toBeVisible()
+  expect(screen.queryByText(inbound.remark)).not.toBeInTheDocument()
+  expect(screen.getByRole('link', { name: t.pages.newInbound })).toHaveAttribute('href', '/inbounds/new?server=2')
+  await user.selectOptions(filter, '3')
+  expect(screen.getByText(t.inbounds.serverEmpty)).toBeVisible()
+  expect(router.state.location.search).toBe('?server=3&keep=1')
+  await user.selectOptions(filter, '')
+  expect(router.state.location.search).toBe('?keep=1')
+  expect(screen.getByText(inbound.remark)).toBeVisible()
+  expect(screen.getByText('Remote node')).toBeVisible()
+  await act(() => router.navigate(-1))
+  expect(filter).toHaveValue('3')
+  expect(screen.getByText(t.inbounds.serverEmpty)).toBeVisible()
 })

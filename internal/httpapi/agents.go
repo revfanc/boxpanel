@@ -187,6 +187,20 @@ func (a *api) joinTokenList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, tokens)
 }
 
+func (a *api) joinTokenGet(w http.ResponseWriter, r *http.Request) {
+	id, err := resourceID(r)
+	if err != nil {
+		a.resourceError(w, err)
+		return
+	}
+	token, err := a.opts.Agents.Token(r.Context(), id)
+	if err != nil {
+		a.resourceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, token)
+}
+
 func (a *api) joinTokenCreate(w http.ResponseWriter, r *http.Request) {
 	if r.TLS == nil || a.opts.AgentPin == nil {
 		writeError(w, 409, "agent_requires_https", "加入节点需要 HTTPS", "请在启用 HTTPS 的主控面板生成加入命令。")

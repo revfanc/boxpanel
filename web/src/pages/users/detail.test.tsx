@@ -10,6 +10,7 @@ it('loads user and links, generates a local QR, copies URLs and provides import 
   const { user } = mountPage(<UserDetailPage />, '/users/1', '/users/:id')
   expect(screen.getByText(t.common.loading)).toBeVisible()
   await screen.findByText('alice')
+  expect(screen.queryByRole('table', { name: t.users.trafficByServer })).not.toBeInTheDocument()
   await act(async () => response.resolve(Response.json(links)))
   expect(await screen.findByRole('img', { name: sub.qr })).toBeVisible()
   expect(screen.getByRole('link', { name: sub.clashImport })).toHaveAttribute('href', links.import.clash)
@@ -21,6 +22,27 @@ it('loads user and links, generates a local QR, copies URLs and provides import 
   copy.mockRejectedValueOnce(new Error('denied'))
   await user.click(screen.getByRole('button', { name: `${t.common.copy} ${t.users.base64}` }))
   expect(await screen.findByText(t.common.copyFailed)).toBeVisible()
+})
+
+it.each([false, true])('shows usage shares by server, including zero usage (%s)', async (reset) => {
+  mockAPI({ '/users/1': () => Response.json({
+    ...proxyUser,
+    traffic_up: reset ? 0 : 1024,
+    traffic_down: reset ? 0 : 3072,
+    traffic_by_server: [
+      { server_id: 1, name: 'Master', is_local: true, up: reset ? 0 : 1024, down: 0 },
+      { server_id: 2, name: 'Edge', is_local: false, up: 0, down: reset ? 0 : 3072 },
+    ],
+  }) })
+  mountPage(<UserDetailPage />, '/users/1', '/users/:id')
+  const table = within(await screen.findByRole('table', { name: t.users.trafficByServer }))
+  const local = within(table.getByRole('rowheader', { name: `Master ${t.users.localAndUnattributed}` }).closest('tr')!)
+  const remote = within(table.getByRole('rowheader', { name: 'Edge' }).closest('tr')!)
+  expect(local.getByRole('cell', { name: reset ? '0%' : '25%' })).toBeVisible()
+  expect(local.getAllByRole('cell')[0]).toHaveTextContent(reset ? '0 B' : '1 KiB')
+  expect(remote.getAllByRole('cell')[1]).toHaveTextContent(reset ? '0 B' : '3 KiB')
+  expect(remote.getByRole('cell', { name: reset ? '0%' : '75%' }).querySelector('[data-slot="progress"]')).toBeVisible()
+  expect(screen.getByText(t.users.trafficByServerHint)).toBeVisible()
 })
 it('handles unavailable certificates, retries to empty nodes, and explains inactive user subscriptions', async () => {
   let unavailable = true

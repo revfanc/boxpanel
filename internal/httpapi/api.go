@@ -146,6 +146,7 @@ func New(service *auth.Service, opts Options) http.Handler {
 	a.registerSubscriptions(register)
 	if opts.Agents != nil {
 		register("GET", "/api/v1/servers/join-tokens", a.joinTokenList, true)
+		register("GET", "/api/v1/servers/join-tokens/{id}", a.joinTokenGet, true)
 		register("POST", "/api/v1/servers/join-tokens", a.joinTokenCreate, true)
 		register("DELETE", "/api/v1/servers/join-tokens/{id}", a.joinTokenRevoke, true)
 		register("DELETE", "/api/v1/servers/{id}", a.serverRemove, true)

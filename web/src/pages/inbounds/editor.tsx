@@ -1,5 +1,5 @@
 import { useId, useState } from 'react'
-import { useNavigate, useParams } from 'react-router'
+import { useNavigate, useParams, useSearchParams } from 'react-router'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -121,11 +121,11 @@ export function SuggestedForm({ protocol, autoRecommend = false, ...props }: Omi
     </>}
   </>
 }
-function ServerSelect({ servers, selected, onChange }: { servers: Server[]; selected?: number; onChange: (server: Server) => void }) {
+function ServerSelect({ servers, selected, onChange }: { servers: Server[]; selected?: number | null; onChange: (server: Server) => void }) {
   const id = useId()
   const choices = servers.filter((server) => server.is_local || server.status === 'online' || server.status === 'offline')
   if (choices.length < 2 && (selected === undefined || choices.some((server) => server.id === selected))) return null
-  const current = selected ?? choices.find((server) => server.is_local)?.id
+  const current = selected === undefined ? choices.find((server) => server.is_local)?.id : selected
   return <div className="space-y-2">
     <label htmlFor={id} className="block text-sm font-medium">{t.inbounds.server}</label>
     <select id={id} className="h-9 max-w-full rounded-md border bg-background px-3 text-sm" value={current ?? ''} onChange={(event) => {
@@ -140,15 +140,25 @@ function ServerSelect({ servers, selected, onChange }: { servers: Server[]; sele
 
 export function NewInboundPage() {
   const servers = useQuery(serversQuery)
-  const [target, setTarget] = useState<Server>()
+  const [params, setParams] = useSearchParams()
+  const navigate = useNavigate()
   const [protocol, setProtocol] = useState<Protocol | null>(null)
-  return <Page title={t.pages.newInbound} actions={<BackLink to="/inbounds" />}>
+  const requested = params.get('server')
+  const target = servers.data?.find((server) => String(server.id) === requested && server.status !== 'pending')
+  const unavailable = requested !== null && !target
+  const returnTo = target ? `/inbounds?server=${target.id}` : '/inbounds'
+  return <Page title={t.pages.newInbound} actions={<BackLink to={returnTo} />}>
     {servers.isError && <ErrorNotice error={servers.error} retry={() => { void servers.refetch() }} />}
-    <ServerSelect servers={servers.data ?? []} selected={target?.id} onChange={setTarget} />
-    <fieldset className="min-w-0"><legend className="mb-3 text-sm font-medium">{t.inbounds.protocol}</legend><div className="grid gap-4 sm:grid-cols-2">
+    {servers.data && <ServerSelect servers={servers.data} selected={unavailable ? null : target?.id} onChange={(server) => {
+      const next = new URLSearchParams(params)
+      next.set('server', String(server.id))
+      setParams(next, { replace: true })
+    }} />}
+    {unavailable && (servers.isPending ? <Loading /> : servers.data && <Notice>{t.inbounds.serverUnavailable}</Notice>)}
+    <fieldset disabled={unavailable} className="min-w-0"><legend className="mb-3 text-sm font-medium">{t.inbounds.protocol}</legend><div className="grid gap-4 sm:grid-cols-2">
       {(['vless_reality', 'hysteria2'] as const).map((value) => <label key={value} className={`flex cursor-pointer items-start gap-3 rounded-xl border p-5 ${protocol === value ? 'border-primary bg-muted/50' : ''}`}><input type="radio" name="protocol" value={value} checked={protocol === value} onChange={() => setProtocol(value)} className="mt-1 shrink-0 accent-primary" /><span className="space-y-2"><span className="block font-medium">{value === 'vless_reality' ? t.inbounds.reality : t.inbounds.hysteria2}</span><span className="block text-sm leading-6 text-muted-foreground">{value === 'vless_reality' ? t.inbounds.realityHint : t.inbounds.hysteriaHint}</span></span></label>)}
     </div></fieldset>
-    {protocol && <SuggestedForm key={`${protocol}:${target?.id ?? ''}`} protocol={protocol} target={target} />}
+    {protocol && !unavailable && <SuggestedForm key={`${protocol}:${target?.id ?? ''}`} protocol={protocol} target={target} onSaved={() => navigate(returnTo)} />}
   </Page>
 }
 export function EditInboundPage() {

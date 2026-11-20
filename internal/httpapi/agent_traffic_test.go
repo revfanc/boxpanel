@@ -143,6 +143,20 @@ func TestAgentTrafficReportValidationAndAccounting(t *testing.T) {
 	if rows := list(); *rows[1].TrafficUp != math.MaxInt64 {
 		t.Fatal("server total overflowed")
 	}
+	// User resets leave the remote high-water marks and lifetime totals intact.
+	if _, err := conn.Exec(`UPDATE users SET traffic_epoch=traffic_epoch+1,traffic_up=0,traffic_down=0 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	send(path, fmt.Sprintf(`{"counters":[{"user_id":1,"epoch":14,"up":%d,"down":0}]}`, math.MaxInt64), edge, edgeKey, 204)
+	assertUsage(0, 0)
+	send(path, `{"counters":[{"user_id":1,"epoch":14,"up":0,"down":7}]}`, edge, edgeKey, 204)
+	assertUsage(0, 7)
+	var userEpoch, cycleUp, cycleDown, totalUp, totalDown int64
+	if err := conn.QueryRow(`SELECT user_epoch,cycle_up,cycle_down,total_up,total_down FROM server_user_traffic WHERE server_id=? AND user_id=1`, edge).
+		Scan(&userEpoch, &cycleUp, &cycleDown, &totalUp, &totalDown); err != nil ||
+		userEpoch != 1 || cycleUp != 0 || cycleDown != 7 || totalUp != math.MaxInt64 || totalDown != 36 {
+		t.Fatal("unexpected post-reset cycle or lifetime totals", userEpoch, cycleUp, cycleDown, totalUp, totalDown, err)
+	}
 	if err := master.Remove(t.Context(), edge); err != nil {
 		t.Fatal(err)
 	}

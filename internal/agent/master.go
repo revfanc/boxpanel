@@ -27,6 +27,7 @@ type JoinToken struct {
 	ID        int64  `json:"id"`
 	Name      string `json:"name"`
 	ExpiresAt int64  `json:"expires_at"`
+	ServerID  *int64 `json:"server_id,omitempty"`
 }
 
 type nonceKey struct {
@@ -122,7 +123,7 @@ func (m *Master) IssueToken(ctx context.Context, name string) (JoinToken, string
 }
 
 func (m *Master) Tokens(ctx context.Context) ([]JoinToken, error) {
-	rows, err := m.reader.QueryContext(ctx, "SELECT id,name,expires_at FROM agent_join_tokens WHERE expires_at>? ORDER BY id DESC", m.now().Unix())
+	rows, err := m.reader.QueryContext(ctx, "SELECT id,name,expires_at FROM agent_join_tokens WHERE expires_at>? AND server_id IS NULL ORDER BY id DESC", m.now().Unix())
 	if err != nil {
 		return nil, fmt.Errorf("list join tokens: %w", err)
 	}
@@ -138,8 +139,19 @@ func (m *Master) Tokens(ctx context.Context) ([]JoinToken, error) {
 	return tokens, rows.Err()
 }
 
+func (m *Master) Token(ctx context.Context, id int64) (JoinToken, error) {
+	var token JoinToken
+	if err := m.reader.QueryRowContext(ctx, `SELECT id,name,expires_at,server_id FROM agent_join_tokens
+		WHERE id=? AND expires_at>? AND (server_id IS NULL OR EXISTS
+			(SELECT 1 FROM servers WHERE id=server_id AND status<>'removed'))`, id, m.now().Unix()).
+		Scan(&token.ID, &token.Name, &token.ExpiresAt, &token.ServerID); err != nil {
+		return token, fmt.Errorf("read join token status: %w", err)
+	}
+	return token, nil
+}
+
 func (m *Master) Revoke(ctx context.Context, id int64) error {
-	if _, err := m.writer.ExecContext(ctx, "DELETE FROM agent_join_tokens WHERE id=?", id); err != nil {
+	if _, err := m.writer.ExecContext(ctx, "DELETE FROM agent_join_tokens WHERE id=? AND server_id IS NULL", id); err != nil {
 		return fmt.Errorf("revoke join token: %w", err)
 	}
 	return nil
@@ -197,13 +209,15 @@ func (m *Master) Register(ctx context.Context, in Registration, peer string) (Id
 	}
 	defer tx.Rollback()
 	now := m.now().Unix()
+	var tokenID int64
 	var name string
-	err = tx.QueryRowContext(ctx, "DELETE FROM agent_join_tokens WHERE token_hash=? AND expires_at>? RETURNING name", hash[:], now).Scan(&name)
+	err = tx.QueryRowContext(ctx, `SELECT id,name FROM agent_join_tokens WHERE token_hash=? AND expires_at>? AND server_id IS NULL`,
+		hash[:], now).Scan(&tokenID, &name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Identity{}, ErrUnauthorized
 	}
 	if err != nil {
-		return Identity{}, fmt.Errorf("consume join token: %w", err)
+		return Identity{}, fmt.Errorf("find usable join token: %w", err)
 	}
 	if !ValidMetadata(in.Hostname, 255) || !ValidMetadata(in.Version, 128) {
 		return Identity{}, ErrRegistration
@@ -224,6 +238,9 @@ func (m *Master) Register(ctx context.Context, in Registration, peer string) (Id
 			return Identity{}, ErrUnauthorized
 		}
 		return Identity{}, fmt.Errorf("create registered server: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE agent_join_tokens SET server_id=? WHERE id=?", result.ServerID, tokenID); err != nil {
+		return Identity{}, fmt.Errorf("consume join token: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return Identity{}, fmt.Errorf("commit agent registration: %w", err)
@@ -308,9 +325,9 @@ func (m *Master) RecordHeartbeat(ctx context.Context, identity authenticated, in
 	if err != nil {
 		return reply, err
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE servers SET status='online',last_seen_at=?,updated_at=?,version=?,singbox_active=?,
+	_, err = tx.ExecContext(ctx, `UPDATE servers SET status='online',last_seen_at=?,updated_at=?,version=?,singbox_active=?,uptime=?,
 		applied_generation=coalesce(?,applied_generation),sync_error=CASE WHEN ? IS NULL THEN sync_error ELSE ? END
-		WHERE id=?`, now, now, in.Version, in.SingboxActive, in.AppliedGeneration, in.AppliedGeneration, in.SyncError, identity.id)
+		WHERE id=?`, now, now, in.Version, in.SingboxActive, in.Uptime, in.AppliedGeneration, in.AppliedGeneration, in.SyncError, identity.id)
 	if err != nil {
 		return reply, fmt.Errorf("record agent heartbeat: %w", err)
 	}
