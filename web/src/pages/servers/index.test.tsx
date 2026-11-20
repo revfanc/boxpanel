@@ -15,6 +15,7 @@ it('shows server metadata and preserves the name while retrying a failed rename'
   expect(screen.getByText(t.servers.status)).toBeVisible()
   await user.click(screen.getByRole('button', { name: t.servers.rename }))
   const input = screen.getByRole('textbox', { name: t.servers.name })
+  expect(input).toHaveAccessibleDescription(t.servers.renameHint)
   await user.clear(input)
   await user.click(screen.getByRole('button', { name: t.common.save }))
   expect(await screen.findByText(t.servers.invalidName)).toBeVisible()

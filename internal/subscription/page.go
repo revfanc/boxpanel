@@ -23,6 +23,11 @@ var pageSource string
 var page = template.Must(template.New("subscription").Funcs(template.FuncMap{"join": strings.Join}).Parse(pageSource))
 
 type pageAddress struct{ ID, Label, URL string }
+type pageNodeGroup struct {
+	Server string
+	Nodes  []NodeLink
+}
+
 type pageData struct {
 	Text                                   map[string]string
 	Name, User, Nonce                      string
@@ -30,6 +35,7 @@ type pageData struct {
 	Auto                                   pageAddress
 	Formats                                []pageAddress
 	Clients                                []web.SubscriptionClient
+	NodeGroups                             []pageNodeGroup
 	Used, Total, Expire, Remaining, Status string
 	Progress                               float64
 }
@@ -59,6 +65,13 @@ func Page(d Data, nonce string, now time.Time) ([]byte, error) {
 	}
 	for _, format := range []string{"singbox", "clash", "base64"} {
 		v.Formats = append(v.Formats, pageAddress{format, text[format], l.Subscription[format]})
+	}
+	for i, group := range d.nodeGroups {
+		end := len(l.Nodes)
+		if i+1 < len(d.nodeGroups) {
+			end = d.nodeGroups[i+1].first
+		}
+		v.NodeGroups = append(v.NodeGroups, pageNodeGroup{Server: group.name, Nodes: l.Nodes[group.first:end]})
 	}
 	if d.User.TrafficLimit > 0 {
 		v.Total = pageBytes(uint64(d.User.TrafficLimit))

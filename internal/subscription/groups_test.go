@@ -1,6 +1,7 @@
 package subscription
 
 import (
+	"bytes"
 	"encoding/json"
 	"slices"
 	"testing"
@@ -11,12 +12,12 @@ import (
 
 func TestSubscriptionGroups(t *testing.T) {
 	for _, preset := range []string{"bypass_cn", "gfw_only", "global"} {
-		for _, variant := range []string{"multiple", "three", "reality_only", "hysteria2_only", "empty"} {
+		for _, variant := range []string{"multiple", "two_auto", "three", "three_auto", "reality_only", "hysteria2_only", "empty"} {
 			t.Run(preset+"/"+variant, func(t *testing.T) {
 				s := fixture(t)
 				s.Rules.Preset = preset
 				switch variant {
-				case "three":
+				case "three", "three_auto":
 					extra := s.Nodes[0]
 					extra.ID, extra.Name, extra.Port = 3, "third", 9443
 					s.Nodes = append(s.Nodes, extra)
@@ -27,12 +28,32 @@ func TestSubscriptionGroups(t *testing.T) {
 				case "empty":
 					s.Nodes = nil
 				}
+				s.AutoGroup = variant == "two_auto" || variant == "three_auto"
+				autoEnabled := variant == "three_auto"
 				names := []string{}
 				for _, n := range s.Nodes {
 					names = append(names, n.Name)
 				}
 				text := web.SubscriptionText()
-				groupCount := 1 // a single manual group, whatever the node count
+				groupCount := 1
+				if autoEnabled {
+					groupCount++
+				}
+				if s.AutoGroup {
+					disabled := s
+					disabled.AutoGroup = false
+					for _, format := range []Format{Singbox, Clash, Base64} {
+						before, err := Render(disabled, format)
+						if err != nil {
+							t.Fatal(err)
+						}
+						after, err := Render(s, format)
+						wantSame := !autoEnabled || format == Base64
+						if err != nil || bytes.Equal(before, after) != wantSame {
+							t.Fatalf("%s output comparison: %v", format, err)
+						}
+					}
+				}
 
 				t.Run("singbox", func(t *testing.T) {
 					raw, err := Render(s, Singbox)
@@ -62,16 +83,23 @@ func TestSubscriptionGroups(t *testing.T) {
 					if len(config.Outbounds) != groupCount+len(names)+1 {
 						t.Fatalf("unexpected outbounds: %+v", config.Outbounds)
 					}
-					// One manual selector of all nodes; no auto group, no direct choice.
 					want := []string{"direct"}
 					if len(names) > 0 {
 						want = slices.Clone(names)
+					}
+					if autoEnabled {
+						want = append(want, text["autoSelect"])
+						auto := config.Outbounds[1+len(names)]
+						if auto.Type != "urltest" || auto.Tag != text["autoSelect"] || !slices.Equal(auto.Outbounds, names) ||
+							auto.URL != "https://www.gstatic.com/generate_204" || auto.Interval != "5m" || auto.Tolerance != 50 {
+							t.Fatalf("wrong auto group: %+v", auto)
+						}
 					}
 					main := config.Outbounds[0]
 					if main.Type != "selector" || main.Tag != "proxy" || !slices.Equal(main.Outbounds, want) || main.Default != want[0] {
 						t.Fatalf("wrong first layer: %+v", main)
 					}
-					for _, out := range config.Outbounds[groupCount:] {
+					for _, out := range config.Outbounds[1 : 1+len(names)] {
 						if out.Type == "selector" || out.Type == "urltest" {
 							t.Fatal("unexpected extra group")
 						}
@@ -114,10 +142,17 @@ func TestSubscriptionGroups(t *testing.T) {
 					if len(config.Groups) != groupCount {
 						t.Fatalf("unexpected groups: %+v", config.Groups)
 					}
-					// One manual group of all nodes; no auto group, no DIRECT choice.
 					want := slices.Clone(names)
 					if len(names) == 0 {
 						want = []string{"REJECT"}
+					}
+					if autoEnabled {
+						want = append(want, text["autoSelect"])
+						auto := config.Groups[1]
+						if auto.Type != "url-test" || auto.Name != text["autoSelect"] || !slices.Equal(auto.Proxies, names) ||
+							auto.URL != "https://www.gstatic.com/generate_204" || auto.Interval != 300 || auto.Tolerance != 50 || !auto.Lazy || auto.Hidden {
+							t.Fatalf("wrong auto group: %+v", auto)
+						}
 					}
 					main := config.Groups[0]
 					if main.Type != "select" || main.Name != text["select"] || !slices.Equal(main.Proxies, want) {

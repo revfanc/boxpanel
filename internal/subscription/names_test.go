@@ -30,8 +30,8 @@ func TestUniqueDisplayNames(t *testing.T) {
 		{"duplicate", []string{"HK", " HK ", "HK"}, []string{"HK", "HK (2)", "HK (3)"}},
 		{"existing_suffix", []string{"HK (2)", "HK", "HK", "HK"}, []string{"HK (2)", "HK", "HK (3)", "HK (4)"}},
 		{"suffix_collision", []string{"HK", "HK", "HK (2)"}, []string{"HK", "HK (2)", "HK (2) (2)"}},
-		{"reserved", []string{"proxy", "auto", "manual", "direct", "DIRECT", "REJECT", text["select"]},
-			[]string{"proxy (2)", "auto (2)", "manual (2)", "direct (2)", "DIRECT (2)", "REJECT (2)", text["select"] + " (2)"}},
+		{"reserved", []string{"proxy", "auto", "manual", "direct", "DIRECT", "REJECT", text["select"], text["autoSelect"]},
+			[]string{"proxy (2)", "auto (2)", "manual (2)", "direct (2)", "DIRECT (2)", "REJECT (2)", text["select"] + " (2)", text["autoSelect"] + " (2)"}},
 		{"unsafe", []string{" a,b\r\nc\t\x00\x7f\u0085\u2028\u2029d ", "a,b", "a，b", `"quoted": [node] #/?%&`},
 			[]string{"a，b c d", "a，b", "a，b (2)", `"quoted": [node] #/?%&`}},
 	} {
@@ -42,13 +42,12 @@ func TestUniqueDisplayNames(t *testing.T) {
 				n.ID, n.Name = int64(i+1), name
 				nodes = append(nodes, n)
 			}
-			slices.Reverse(nodes)
 			before := slices.Clone(nodes)
-			got := UniqueNames(nodes)
+			got := uniqueNames(nodes, nil)
 			if !reflect.DeepEqual(nodes, before) {
 				t.Fatal("name normalization mutated input")
 			}
-			if !reflect.DeepEqual(got, UniqueNames(got)) {
+			if !reflect.DeepEqual(got, uniqueNames(got, nil)) {
 				t.Fatal("name normalization is not idempotent")
 			}
 			for i, n := range got {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -108,4 +109,72 @@ func TestMultiServerSubscription(t *testing.T) {
 		}
 	}
 
+}
+
+func TestSubscriptionServerOrderAndStableNames(t *testing.T) {
+	_, store := publicFixture(t)
+	run := func(query string, args ...any) {
+		t.Helper()
+		if _, err := store.DB.Exec(query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run("UPDATE servers SET name='Primary' WHERE is_local=1")
+	run("INSERT INTO servers(id,name,public_host,status) VALUES(2,'Edge <east>','east.example','offline'),(3,'West','west.example','online')")
+	const insert = `INSERT INTO inbounds(id,server_id,tag,protocol,port,remark,options,created_at,updated_at,agent_keys_ready)
+		SELECT ?,?,?,protocol,?,?,json_remove(options,'$.private_key'),0,0,? FROM inbounds WHERE id=1`
+	run(insert, 2, 3, "west", 443, "Shared", 1)
+	run(insert, 3, 2, "east-custom", 443, "Shared", 1)
+	run(insert, 4, 1, "primary-custom", 8443, "Shared", 0)
+	run(insert, 5, 2, "east-default", 9443, "", 1)
+	run(insert, 6, 3, "west-waiting", 8443, "Waiting", 0)
+
+	load := func() Data {
+		t.Helper()
+		d, err := store.Load(t.Context(), 1, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	data := load()
+	names := []string{"Primary · Reality · 443", "Shared", "Shared (2)", "Edge <east> · Reality · 9443", "Shared (3)"}
+	assertRenderedNames(t, data.Snapshot, names)
+	links, err := MakeLinks(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []int64
+	for i, node := range links.Nodes {
+		ids = append(ids, node.InboundID)
+		if node.Remark != names[i] {
+			t.Fatalf("link %d: %q, want %q", node.InboundID, node.Remark, names[i])
+		}
+	}
+	if !slices.Equal(ids, []int64{1, 4, 3, 5, 2}) {
+		t.Fatalf("links are out of server order: %v", ids)
+	}
+	assertPageGolden(t, data, store.now(), "page_multiserver.golden")
+
+	// Earlier server groups can gain and lose unrelated nodes without
+	// changing either default names or remarks in the existing subscription.
+	run(insert, 7, 1, "primary-other", 14443, "", 0)
+	assertExistingNames := func() {
+		t.Helper()
+		byID := map[int64]string{}
+		for _, n := range load().Nodes {
+			byID[n.ID] = n.Name
+		}
+		for i, id := range ids {
+			if byID[id] != names[i] {
+				t.Fatalf("node %d name changed to %q", id, byID[id])
+			}
+		}
+	}
+	assertExistingNames()
+	run("DELETE FROM inbounds WHERE id=7")
+	assertExistingNames()
+	run("UPDATE servers SET name='East' WHERE id=2")
+	names[3] = "East · Reality · 9443"
+	assertExistingNames()
 }

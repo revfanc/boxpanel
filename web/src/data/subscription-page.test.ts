@@ -1,14 +1,14 @@
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
-import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { clients, platforms } from './clients'
 import { subscriptionText as t } from '@/i18n/zh-CN'
 
 // Vitest runs from web/, like the rest of the frontend test suite.
 const html = readFileSync('../internal/subscription/testdata/page.golden', 'utf8')
-function mountPage(script = false) {
-  const parsed = new DOMParser().parseFromString(html, 'text/html')
+function mountPage(script = false, markup = html) {
+  const parsed = new DOMParser().parseFromString(markup, 'text/html')
   document.body.innerHTML = parsed.body.innerHTML
   if (script) {
     // Execute only the checked-in, Go-rendered inline script; jsdom does not
@@ -22,6 +22,7 @@ afterEach(() => { document.body.innerHTML = ''; vi.useRealTimers() })
 it('is complete without JavaScript and shares all official clients with the panel', () => {
   mountPage()
   expect(screen.getByRole('heading', { name: 'boxpanel' })).toBeVisible()
+  expect(screen.queryByRole('region', { name: t.nodes })).not.toBeInTheDocument()
   expect(screen.getByText('alice')).toBeVisible()
   expect(screen.getByText(t.active)).toBeVisible()
   expect(screen.getByLabelText(t.subscription, { selector: 'input' })).toHaveAttribute('readonly')
@@ -36,6 +37,17 @@ it('is complete without JavaScript and shares all official clients with the pane
   }
   for (const platform of platforms) expect(clients.some((client) => client.platforms.includes(platform))).toBe(true)
   expect([...document.querySelectorAll('[src]')].map((node) => node.getAttribute('src'))).toEqual([expect.stringMatching(/^data:image\/png;base64,/)])
+})
+
+it('shows exportable nodes grouped in server order without JavaScript', () => {
+  mountPage(false, readFileSync('../internal/subscription/testdata/page_multiserver.golden', 'utf8'))
+  const nodes = within(screen.getByRole('region', { name: t.nodes }))
+  expect(nodes.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual(['Primary', 'Edge <east>', 'West'])
+  expect(nodes.getAllByRole('list').map((list) => within(list).getAllByRole('listitem').map((item) => item.textContent))).toEqual([
+    ['Primary · Reality · 443', 'Shared'],
+    ['Shared (2)', 'Edge <east> · Reality · 9443'],
+    ['Shared (3)'],
+  ])
 })
 
 it('copies each exact address and restores the button after a short success message', async () => {

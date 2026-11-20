@@ -31,9 +31,12 @@ export function Field({ label, hint, error, id: given, ...props }: ComponentProp
   const id = given ?? auto
   return <div className="min-w-0 space-y-2"><Label htmlFor={id}>{label}</Label><Input {...props} id={id} aria-invalid={!!error} aria-describedby={error ? `${id}-error` : hint ? `${id}-hint` : undefined} />{hint && <p id={`${id}-hint`} className="text-xs leading-5 text-muted-foreground">{hint}</p>}{error && <p id={`${id}-error`} role="alert" className="text-sm text-destructive">{error}</p>}</div>
 }
-export function Toggle({ label, checked, onChange, disabled }: { label: string; checked: boolean; onChange: (checked: boolean) => void; disabled?: boolean }) {
+export function Toggle({ label, hint, checked, onChange, disabled }: { label: string; hint?: string; checked: boolean; onChange: (checked: boolean) => void; disabled?: boolean }) {
   const id = useId()
-  return <div className="flex items-center justify-between gap-4 rounded-md border px-3 py-3"><Label htmlFor={id} className="leading-5">{label}</Label><Switch id={id} checked={checked} onCheckedChange={onChange} disabled={disabled} /></div>
+  return <div className="flex items-center justify-between gap-4 rounded-md border px-3 py-3">
+    <div><Label htmlFor={id} className="leading-5">{label}</Label>{hint && <p id={`${id}-hint`} className="mt-1 text-sm text-muted-foreground">{hint}</p>}</div>
+    <Switch id={id} aria-describedby={hint ? `${id}-hint` : undefined} checked={checked} onCheckedChange={onChange} disabled={disabled} />
+  </div>
 }
 export function Submit({ pending, label = t.common.save }: { pending: boolean; label?: string }) {
   return <Button type="submit" disabled={pending}>{pending && <LoaderCircle aria-hidden="true" className="animate-spin" />}{pending ? t.common.saving : label}</Button>

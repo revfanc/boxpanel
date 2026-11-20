@@ -24,6 +24,7 @@ function PanelForm({ settings }: { settings: PanelSettings }) {
   const form = useForm<SettingsForm>({ resolver: zodResolver(settingsSchema), defaultValues: settings })
   const operation = useOperation()
   const blockBT = useWatch({ control: form.control, name: 'block_bittorrent' })
+  const autoGroup = useWatch({ control: form.control, name: 'subscription_auto_group' })
   const client = useQueryClient()
   const [confirmation, setConfirmation] = useState<SettingsForm | null>(null)
   const [redirect, setRedirect] = useState<SettingsResult | null>(null)
@@ -61,6 +62,7 @@ function PanelForm({ settings }: { settings: PanelSettings }) {
         <Field label={t.settings.subPath} {...form.register('sub_path')} error={errors.sub_path?.message} />
         <p className="text-sm text-muted-foreground">{t.settings.tls}: {settings.panel_tls_mode}</p>
         <Toggle label={t.settings.blockBT} checked={blockBT} onChange={(checked) => form.setValue('block_bittorrent', checked, { shouldDirty: true })} />
+        <Toggle label={t.settings.autoGroup} hint={t.settings.autoGroupHint} checked={autoGroup} onChange={(checked) => form.setValue('subscription_auto_group', checked, { shouldDirty: true })} />
         <Submit pending={operation.pending} />
       </fieldset>
       {operation.error != null && !confirmation && <ErrorNotice error={operation.error} />}

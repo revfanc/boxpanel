@@ -8,7 +8,7 @@ import { afterEach, vi } from 'vitest'
 import { createQueryClient } from '@/lib/query'
 import type { PanelSettings, SystemStatus, Inbound, Server, User, RulesSettings, UserLinks, CertificateStatus, AlertOverview, AlertSettings } from '@/types/api'
 
-export const settings: PanelSettings = { panel_name: 'boxpanel', public_host: 'example.com', web_port: 2053, web_path: '', sub_path: 'subscription', panel_tls_mode: 'http', block_bittorrent: true }
+export const settings: PanelSettings = { panel_name: 'boxpanel', public_host: 'example.com', web_port: 2053, web_path: '', sub_path: 'subscription', panel_tls_mode: 'http', block_bittorrent: true, subscription_auto_group: false }
 export const certificate: CertificateStatus = { mode: 'http', type: 'http', host: '', issuer: '', not_before: 0, not_after: 0, last_attempt: 0, last_success: 0, last_error: '', hint: '', failures: 0, next_attempt: 0, issuing: false, warning: false }
 export const status: SystemStatus = { supported: true, cpu: 12.5, mem: { used: 1024, total: 2048 }, disk: { used: 1024, total: 4096 }, uptime: 3600, net: { rx_rate: 512, tx_rate: 1024 }, singbox: { installed: true, running: true, version: '1.14.4', uptime: 60 } }
 export const alertOverview: AlertOverview = {

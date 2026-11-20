@@ -38,7 +38,7 @@ function EditServerForm({ server, close }: { server: Server; close: () => void }
       client.setQueryData(serversQuery.queryKey, (current) => current?.map((row) => row.id === updated.id
         ? { ...updated, traffic_up: row.traffic_up, traffic_down: row.traffic_down } : row))
       close()
-      if (updated.public_host !== server.public_host) {
+      if (updated.name !== server.name || updated.public_host !== server.public_host) {
         await Promise.all([
           client.invalidateQueries({ queryKey: ['users'] }),
           client.invalidateQueries({ queryKey: ['rules'] }),
@@ -46,7 +46,7 @@ function EditServerForm({ server, close }: { server: Server; close: () => void }
       }
     },
   ))}>
-    <Field label={t.servers.name} error={form.formState.errors.name?.message} disabled={operation.pending} {...form.register('name')} />
+    <Field label={t.servers.name} hint={t.servers.renameHint} error={form.formState.errors.name?.message} disabled={operation.pending} {...form.register('name')} />
     {!server.is_local && <Field label={t.servers.address} error={form.formState.errors.public_host?.message} disabled={operation.pending} {...form.register('public_host')} />}
     {operation.error != null && <ErrorNotice error={operation.error} />}
     <div className="flex flex-wrap gap-2">

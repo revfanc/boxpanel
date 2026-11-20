@@ -25,11 +25,16 @@ func pageFixture() (Data, time.Time) {
 
 func TestPageGolden(t *testing.T) {
 	d, now := pageFixture()
+	assertPageGolden(t, d, now, "page.golden")
+}
+
+func assertPageGolden(t *testing.T, d Data, now time.Time, name string) {
+	t.Helper()
 	got, err := Page(d, "fixed-test-nonce", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join("testdata", "page.golden")
+	path := filepath.Join("testdata", name)
 	if *update {
 		if err := os.WriteFile(path, got, 0600); err != nil {
 			t.Fatal(err)
@@ -40,7 +45,7 @@ func TestPageGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(got, want) {
-		t.Fatal("page golden mismatch; go test ./internal/subscription -run TestPageGolden -update")
+		t.Fatalf("page golden mismatch: %s; go test ./internal/subscription -update", path)
 	}
 }
 

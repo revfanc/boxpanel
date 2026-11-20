@@ -1,11 +1,13 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"github.com/revfanc/boxpanel/internal/auth"
 	"github.com/revfanc/boxpanel/internal/db"
 	"github.com/revfanc/boxpanel/internal/subscription"
+	"github.com/revfanc/boxpanel/web"
 )
 
 func newSubscriptionAPI(t *testing.T) (*resourceFixture, *subscription.Store, *int, *int) {
@@ -137,6 +140,73 @@ func TestRulesUpdatesOnlyAffectSubscriptions(t *testing.T) {
 		t.Fatal("invalid rules persisted")
 	}
 }
+
+func TestSubscriptionAutoGroupSetting(t *testing.T) {
+	f, store, commits, _ := newSubscriptionAPI(t)
+	f.write(t, "POST", "users", `{"name":"alice"}`, 201)
+	for _, port := range []int{443, 8443, 9443} {
+		f.write(t, "POST", "inbounds", fmt.Sprintf(`{"protocol":"vless_reality","port":%d,"options":{"server_name":"www.example.com"}}`, port), 201)
+	}
+	if _, err := f.conn.Exec("INSERT INTO servers(id,name,public_host,desired_generation) VALUES(2,'Edge','edge.example',7)"); err != nil {
+		t.Fatal(err)
+	}
+	getSettings := func() PanelSettings {
+		t.Helper()
+		return decodeResult[PanelSettings](t, f.call(t, "GET", "settings", "", 200))
+	}
+	if getSettings().SubscriptionAutoGroup {
+		t.Fatal("auto group enabled for an existing database")
+	}
+	data, err := store.Load(t.Context(), 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := &subscription.Handler{Store: store, Limiter: &subscription.Limiter{}}
+	target := "https://example.test/subscribe/" + data.User.Token + "?format=singbox"
+	getSubscription := func() []byte {
+		t.Helper()
+		w := request(t, handler, http.MethodGet, target, "", nil, nil)
+		requireStatus(t, w, http.StatusOK)
+		return w.Body.Bytes()
+	}
+	original := getSubscription()
+	beforeCalls := f.apply.calls
+	for _, invalid := range []string{`{"subscription_auto_group":"true"}`, `{"subscription_auto_group":null}`} {
+		f.call(t, "PUT", "settings", invalid, 400)
+	}
+	on := decodeResult[PanelSettings](t, f.call(t, "PUT", "settings", `{"subscription_auto_group":true}`, 200))
+	if !on.SubscriptionAutoGroup || !getSettings().SubscriptionAutoGroup {
+		t.Fatal("auto group setting was not persisted")
+	}
+	if !bytes.Contains(getSubscription(), []byte(`"type": "urltest"`)) {
+		t.Fatal("public subscription is missing the enabled auto group")
+	}
+	f.call(t, "PUT", "settings", `{}`, 200)
+	if !getSettings().SubscriptionAutoGroup {
+		t.Fatal("partial settings update cleared the flag")
+	}
+	for _, path := range []string{"rules/preview", "users/1/links"} {
+		w := f.call(t, "GET", path, "", 200)
+		for _, name := range []string{"Subscription-Userinfo", "Profile-Update-Interval", "Content-Disposition"} {
+			if w.Header().Get(name) != "" {
+				t.Fatalf("%s included public subscription header %s", path, name)
+			}
+		}
+		if path == "rules/preview" && (!strings.Contains(w.Body.String(), web.SubscriptionText()["autoSelect"]) ||
+			strings.Contains(w.Body.String(), data.User.UUID)) {
+			t.Fatal("preview omitted the group or exposed credentials")
+		}
+	}
+	f.call(t, "PUT", "settings", `{"subscription_auto_group":false}`, 200)
+	if getSettings().SubscriptionAutoGroup || !bytes.Equal(getSubscription(), original) {
+		t.Fatal("disabling the auto group did not restore original bytes")
+	}
+	var generation int64
+	if err := f.conn.QueryRow("SELECT desired_generation FROM servers WHERE id=2").Scan(&generation); err != nil ||
+		generation != 7 || f.apply.calls != beforeCalls || *commits != 0 {
+		t.Fatalf("subscription setting affected core, listener or desired generation: generation=%d, %v", generation, err)
+	}
+}
 func TestSettingsApplyRollbackAndListener(t *testing.T) {
 	f, _, commits, cancels := newSubscriptionAPI(t)
 	f.write(t, "POST", "users", `{"name":"alice"}`, 201)
@@ -149,7 +219,7 @@ func TestSettingsApplyRollbackAndListener(t *testing.T) {
 	f.write(t, "PUT", "settings", `{"block_bittorrent":false}`, 200)
 	old := decodeResult[PanelSettings](t, f.call(t, "GET", "settings", "", 200))
 	f.runner.failCheck = true
-	f.call(t, "PUT", "settings", `{"block_bittorrent":true,"web_port":22053,"web_path":"newpanel"}`, 422)
+	f.call(t, "PUT", "settings", `{"block_bittorrent":true,"web_port":22053,"web_path":"newpanel","subscription_auto_group":true}`, 422)
 	if got := decodeResult[PanelSettings](t, f.call(t, "GET", "settings", "", 200)); got != old {
 		t.Fatal("settings not rolled back")
 	}

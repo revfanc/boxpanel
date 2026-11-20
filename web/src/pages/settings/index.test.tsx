@@ -20,6 +20,28 @@ it('loads, retries initial errors and validates empty values', async () => {
   await user.click(screen.getByRole('button', { name: t.common.save }))
   expect(await screen.findByText(t.settings.nameInvalid)).toBeVisible()
 })
+
+it('saves the subscription auto group switch as a boolean', async () => {
+  let saved = settings
+  const fetch = mockAPI({
+    'GET /settings': () => Response.json(saved),
+    'PUT /settings': (init) => {
+      saved = { ...saved, ...JSON.parse(String(init.body)) }
+      return Response.json({ ...saved, panel_url: 'http://example.com:2053/', restart_after: 0 })
+    },
+  })
+  const { user } = mountPage(<SettingsPage />)
+  const toggle = await screen.findByRole('switch', { name: t.settings.autoGroup })
+  expect(toggle).toHaveAccessibleDescription(t.settings.autoGroupHint)
+  expect(toggle).not.toBeChecked()
+  for (const enabled of [true, false]) {
+    await user.click(toggle)
+    await user.click(screen.getByRole('button', { name: t.common.save }))
+    await waitFor(() => expect(saved.subscription_auto_group).toBe(enabled))
+    expect(toggle).toHaveAttribute('aria-checked', String(enabled))
+  }
+  expect(fetch.mock.calls.filter(([, init]) => init?.method === 'PUT')).toHaveLength(2)
+})
 it('saves settings, displays write errors, and confirms destructive address changes before delayed navigation', async () => {
   const visit = vi.spyOn(location, 'visitPanel').mockImplementation(() => {})
   let fail = true

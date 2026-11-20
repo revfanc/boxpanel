@@ -131,7 +131,7 @@ func TestCollectedUsageReachesSubscriptionHeadersAndPage(t *testing.T) {
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	req.Header.Set("Accept", "text/html")
 	handler.ServeHTTP(response, req)
-	if response.Code != 200 || response.Header().Get("Subscription-Userinfo") != "upload=1024; download=2048; total=0; expire=0" {
+	if response.Code != 200 || response.Header().Get("Subscription-Userinfo") != "upload=1024; download=2048; total=0" {
 		t.Fatal(response.Code, response.Header())
 	}
 	if !strings.Contains(response.Body.String(), "3.00 KB") || !strings.Contains(response.Body.String(), web.SubscriptionText()["usageHint"]) {

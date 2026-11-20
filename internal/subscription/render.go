@@ -17,10 +17,16 @@ import (
 )
 
 type Snapshot struct {
-	Nodes []share.Node
-	Rules db.RulesSettings
+	Nodes     []share.Node
+	Rules     db.RulesSettings
+	AutoGroup bool
 }
 type object = map[string]any
+
+const (
+	autoGroupURL       = "https://www.gstatic.com/generate_204"
+	autoGroupTolerance = 50
+)
 
 func Render(s Snapshot, format Format) ([]byte, error) {
 	p, err := rules.Build(s.Rules)
@@ -93,12 +99,17 @@ func singboxConfig(s Snapshot, p rules.Plan) (object, error) {
 	}
 	// Empty subscriptions stay valid without silently giving proxy traffic a
 	// direct route. The private-IP exception still works; other traffic rejects.
-	// One manual selector listing the nodes, first node by default. No auto
-	// group (clients cannot hide it) and no direct choice (clients have a
-	// direct mode of their own).
+	// Keep the first node as the manual selector's default.
 	choices := []string{"direct"}
 	if len(names) > 0 {
 		choices = names
+	}
+	var auto object
+	if s.AutoGroup && len(names) >= 3 {
+		name := web.SubscriptionText()["autoSelect"]
+		choices = append(choices, name)
+		auto = object{"type": "urltest", "tag": name, "outbounds": names,
+			"url": autoGroupURL, "interval": "5m", "tolerance": autoGroupTolerance}
 	}
 	out := []object{{"type": "selector", "tag": "proxy", "outbounds": choices, "default": choices[0]}}
 	for _, n := range s.Nodes {
@@ -132,6 +143,9 @@ func singboxConfig(s Snapshot, p rules.Plan) (object, error) {
 			return nil, fmt.Errorf("render node: unsupported protocol")
 		}
 		out = append(out, o)
+	}
+	if auto != nil {
+		out = append(out, auto)
 	}
 	out = append(out, object{"type": "direct", "tag": "direct"})
 	routeRules := []object{{"action": "sniff"}, {"protocol": "dns", "action": "hijack-dns"}}
@@ -369,8 +383,15 @@ func clashConfig(s Snapshot, p rules.Plan) object {
 	if len(choices) == 0 {
 		choices = []string{"REJECT"}
 	}
-	// A single manual group: the user taps a node to use it.
+	autoEnabled := s.AutoGroup && len(names) >= 3
+	if autoEnabled {
+		choices = append(choices, text["autoSelect"])
+	}
 	groups := []object{{"name": selectName, "type": "select", "proxies": choices}}
+	if autoEnabled {
+		groups = append(groups, object{"name": text["autoSelect"], "type": "url-test", "proxies": names,
+			"url": autoGroupURL, "interval": 300, "tolerance": autoGroupTolerance, "lazy": true})
+	}
 	return object{
 		"mixed-port": 7890, "allow-lan": false, "mode": "rule", "log-level": "warning", "ipv6": false,
 		"dns": object{
