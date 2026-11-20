@@ -102,7 +102,14 @@ echo "cli @TAG@ $*" >>"$FIXTURE/calls"
 if [[ $* == 'system ready' && ${FAIL_READY_TAG:-} == '@TAG@' ]]; then exit 1; fi
 case "$1" in
     version) echo 'boxpanel @TAG@' ;;
-    info) [[ -s $BOXPANEL_DB_PATH ]] || exit 1; echo 'panel address and username' ;;
+    info)
+        [[ -s $BOXPANEL_DB_PATH ]] || exit 1
+        if [[ $(cat "$BOXPANEL_DB_PATH") == agent ]]; then
+            echo '节点模式（agent）'
+            echo 'server_id: 2'
+        else
+            echo 'panel address and username'
+        fi ;;
     init) [[ ! -s $BOXPANEL_DB_PATH ]] || exit 1; echo initialized >"$BOXPANEL_DB_PATH"; echo 'one-time password' ;;
     join) echo agent >"$BOXPANEL_DB_PATH" ;;
     singbox)
@@ -441,12 +448,38 @@ test_join_dry_run() {
     [[ ! -s $FIXTURE/calls && ! -e $FIXTURE/local && ! -e $FIXTURE/lock ]] || fail 'join dry-run modified system'
 }
 
+test_update_agent() {
+    local token pin
+    printf -v token '%043d' 0
+    printf -v pin '%043d' 0
+    run_install --join https://master.test/panel/ --token "$token" --master-pin "$pin" --public-ip 8.8.8.8
+    printf 'node-private-seed' >"$FIXTURE/data/agent.key"
+    printf 'last-applied-config' >"$FIXTURE/data/sing-box.json"
+    for file in boxpanel.db agent.key sing-box.json; do cp "$FIXTURE/data/$file" "$FIXTURE/$file.before"; done
+    cp "$FIXTURE/local/share/sing-box" "$FIXTURE/core.before"
+    archive v0.2.0
+    sed '/main "\$@"/i\
+command() { if [[ $* == "-v nft" ]]; then return 1; fi; builtin command "$@"; }\
+' "$FIXTURE/driver" >"$FIXTURE/driver.next"
+    mv "$FIXTURE/driver.next" "$FIXTURE/driver"
+    : >"$FIXTURE/calls"
+    run_install update --version v0.2.0 --non-interactive
+    contains "$FIXTURE/local/bin/boxpanel" 'boxpanel v0.2.0'
+    for file in boxpanel.db agent.key sing-box.json; do cmp "$FIXTURE/$file.before" "$FIXTURE/data/$file"; done
+    cmp "$FIXTURE/core.before" "$FIXTURE/local/share/sing-box"
+    contains "$FIXTURE/calls" 'systemctl restart boxpanel.service'
+    contains "$FIXTURE/calls" 'cli v0.2.0 system ready'
+    for call in ' init' ' join' ' apply' 'singbox install' 'nftables' 'restart boxpanel-singbox.service'; do
+        absent "$FIXTURE/calls" "$call"
+    done
+}
+
 if [[ ${1:-} == --case ]]; then
     fixture
     "test_$2"
     exit 0
 fi
-for scenario in join_install join_dry_run restore_install restore_failure nft_dependency update_nft_dependency install resume update uninstall rejections download_safety optional_bbr_and_lock piped_entry package_locks apt_install_lock package_lock_timeout dnf_locks dnf_lock_timeout package_permission_error package_nonlock_error; do
+for scenario in join_install join_dry_run update_agent restore_install restore_failure nft_dependency update_nft_dependency install resume update uninstall rejections download_safety optional_bbr_and_lock piped_entry package_locks apt_install_lock package_lock_timeout dnf_locks dnf_lock_timeout package_permission_error package_nonlock_error; do
     # A separate bash process preserves errexit in the installer under test.
     output=$(mktemp)
     if bash "$0" --case "$scenario" >"$output" 2>&1; then

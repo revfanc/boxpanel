@@ -30,30 +30,64 @@ type Node struct {
 	Accounting *traffic.Collector
 	Logger     *slog.Logger
 
-	syncError       string
-	published       map[int64]InboundKeys
-	reportedTraffic map[int64]TrafficCounter
+	syncError              string
+	published              map[int64]InboundKeys
+	reportedTraffic        map[int64]TrafficCounter
+	interfaceEndpointReady bool
+	interfacePreference    *string
 }
 
 // Sync is called serially by the heartbeat loop. An unreachable master leaves
 // the last committed configuration and credentials in service.
 func (n *Node) Sync(ctx context.Context, beat Heartbeat, coreActive func() bool) error {
-	// Upload before asking for the generation so a quota crossing can be
-	// applied on this heartbeat. Upload failure must not block a policy sync.
-	uploadCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	trafficErr := n.reportTraffic(uploadCtx)
-	cancel()
-	if trafficErr != nil && ctx.Err() == nil && n.Logger != nil {
-		n.Logger.Warn("节点流量暂未获主控确认，将自动重试。请检查主控版本、连接与节点数据库。")
-	}
 	applied, err := db.GetSetting(ctx, n.Reader, db.AgentAppliedGeneration)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	beat.AppliedGeneration, beat.SyncError = &applied, n.syncError
+	beat.Protocol, beat.AppliedGeneration, beat.SyncError = ProtocolVersion, &applied, n.syncError
 	reply, err := n.Client.SyncHeartbeat(ctx, n.Master.ServerID, n.Key, beat)
-	if err != nil || reply.DesiredGeneration == 0 {
+	if err != nil {
 		return err
+	}
+	if reply.Protocol < MinMasterProtocol {
+		return n.reportOutdatedMaster(ctx, beat, coreActive)
+	}
+	if err := n.setInterfacePreference(ctx, reply.Interface); err != nil {
+		n.logUploadError(ctx, err)
+	}
+	uploadCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	interfaceErr := n.reportInterfaceSamples(uploadCtx)
+	cancel()
+	if errors.Is(interfaceErr, ErrMasterOutdated) {
+		return n.reportOutdatedMaster(ctx, beat, coreActive)
+	}
+	if errors.Is(interfaceErr, ErrAgentUpgradeRequired) {
+		return interfaceErr
+	}
+	n.logUploadError(ctx, interfaceErr)
+
+	// Refresh the generation after a report that may have crossed a quota.
+	uploadCtx, cancel = context.WithTimeout(ctx, 10*time.Second)
+	changed, trafficErr := n.reportTraffic(uploadCtx)
+	cancel()
+	if errors.Is(trafficErr, ErrMasterOutdated) {
+		return n.reportOutdatedMaster(ctx, beat, coreActive)
+	}
+	if errors.Is(trafficErr, ErrAgentUpgradeRequired) {
+		return trafficErr
+	}
+	n.logUploadError(ctx, trafficErr)
+	if changed {
+		reply, err = n.Client.SyncHeartbeat(ctx, n.Master.ServerID, n.Key, beat)
+		if err != nil {
+			return err
+		}
+		if reply.Protocol < MinMasterProtocol {
+			return n.reportOutdatedMaster(ctx, beat, coreActive)
+		}
+	}
+	if n.syncError == SyncMasterOutdated && interfaceErr != nil {
+		return interfaceErr
 	}
 
 	keys, materialErr := n.publicKeys(ctx)
@@ -64,6 +98,9 @@ func (n *Node) Sync(ctx context.Context, beat Heartbeat, coreActive func() bool)
 
 	if apply {
 		desired, err := n.Client.Desired(ctx, n.Master.ServerID, n.Key)
+		if errors.Is(err, ErrMasterOutdated) {
+			return n.reportOutdatedMaster(ctx, beat, coreActive)
+		}
 		if err != nil {
 			return err
 		}
@@ -87,9 +124,29 @@ func (n *Node) Sync(ctx context.Context, beat Heartbeat, coreActive func() bool)
 	if materialErr != nil {
 		n.syncError = SyncKeys
 	} else if err := n.publish(ctx, keys); err != nil {
+		if errors.Is(err, ErrMasterOutdated) {
+			return n.reportOutdatedMaster(ctx, beat, coreActive)
+		}
 		n.syncError = SyncKeys
 	}
 	return n.report(ctx, beat, coreActive)
+}
+
+func (n *Node) logUploadError(ctx context.Context, err error) {
+	if err != nil && ctx.Err() == nil && n.Logger != nil {
+		n.Logger.Warn("节点流量设置或采样未同步，将自动重试。请检查主控版本、连接与节点数据库。")
+	}
+}
+
+func (n *Node) reportOutdatedMaster(ctx context.Context, beat Heartbeat, coreActive func() bool) error {
+	n.interfaceEndpointReady = false
+	if n.syncError != SyncMasterOutdated {
+		n.syncError = SyncMasterOutdated
+		if err := n.report(ctx, beat, coreActive); err != nil {
+			return err
+		}
+	}
+	return ErrMasterOutdated
 }
 
 func (n *Node) report(ctx context.Context, beat Heartbeat, coreActive func() bool) error {

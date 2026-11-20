@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,9 +20,11 @@ import (
 
 	"github.com/revfanc/boxpanel/internal/auth"
 	"github.com/revfanc/boxpanel/internal/reality"
+	"github.com/revfanc/boxpanel/internal/sysinfo"
 )
 
 var ErrUnauthorized = errors.New("agent authentication failed")
+var ErrAgentUpgradeRequired = errors.New("节点版本过旧，请在主控的服务器页复制升级命令")
 
 type JoinToken struct {
 	ID        int64  `json:"id"`
@@ -44,6 +47,7 @@ type Master struct {
 	// OnStopped records a quota stop for a user with no local configuration
 	// to apply. It shares the transaction and deduplication with local stops.
 	OnStopped      func(context.Context, *sql.Tx, int64, string, time.Time) error
+	OnAvailability func(ctx context.Context, tx *sql.Tx, id int64, address string, lastSeen, now time.Time, recovered bool) error
 	Logger         *slog.Logger
 	writer, reader *sql.DB
 	now            func() time.Time
@@ -219,7 +223,7 @@ func (m *Master) Register(ctx context.Context, in Registration, peer string) (Id
 	if err != nil {
 		return Identity{}, fmt.Errorf("find usable join token: %w", err)
 	}
-	if !ValidMetadata(in.Hostname, 255) || !ValidMetadata(in.Version, 128) {
+	if !ValidMetadata(in.Hostname, 255) || !ValidMetadata(in.Version, 128) || in.Protocol < 0 {
 		return Identity{}, ErrRegistration
 	}
 	address := in.PublicIP
@@ -231,9 +235,9 @@ func (m *Master) Register(ctx context.Context, in Registration, peer string) (Id
 		return Identity{}, ErrPublicIP
 	}
 	var result Identity
-	if err := tx.QueryRowContext(ctx, `INSERT INTO servers (name, public_host, version, agent_public_key, created_at, updated_at)
-		SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM servers WHERE agent_public_key=?)
-		RETURNING id`, name, ip.Unmap().String(), in.Version, in.PublicKey, now, now, in.PublicKey).Scan(&result.ServerID); err != nil {
+	if err := tx.QueryRowContext(ctx, `INSERT INTO servers (name, public_host, version, agent_public_key, created_at, updated_at, protocol)
+		SELECT ?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM servers WHERE agent_public_key=?)
+		RETURNING id`, name, ip.Unmap().String(), in.Version, in.PublicKey, now, now, max(1, in.Protocol), in.PublicKey).Scan(&result.ServerID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Identity{}, ErrUnauthorized
 		}
@@ -251,6 +255,21 @@ func (m *Master) Register(ctx context.Context, in Registration, peer string) (Id
 type authenticated struct {
 	id        int64
 	publicKey string
+}
+
+func requireNodeProtocol(ctx context.Context, q *sql.Tx, identity authenticated) error {
+	var protocol int
+	err := q.QueryRowContext(ctx, "SELECT protocol FROM servers WHERE "+agentIdentity, identity.id, identity.publicKey).Scan(&protocol)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrUnauthorized
+	}
+	if err != nil {
+		return fmt.Errorf("read registered node protocol: %w", err)
+	}
+	if protocol < MinNodeProtocol {
+		return ErrAgentUpgradeRequired
+	}
+	return nil
 }
 
 func (m *Master) Authenticate(ctx context.Context, method, path string, header http.Header, body []byte) (authenticated, error) {
@@ -313,21 +332,66 @@ func (m *Master) acceptNonce(key nonceKey, sent int64) bool {
 	return true
 }
 
+func ValidInterfaces(names []string) bool {
+	if len(names) > MaxInterfaceNames {
+		return false
+	}
+	seen := make(map[string]bool, len(names))
+	for _, name := range names {
+		if !sysinfo.ValidNetworkInterface(name) || seen[name] {
+			return false
+		}
+		seen[name] = true
+	}
+	return true
+}
+
 func (m *Master) RecordHeartbeat(ctx context.Context, identity authenticated, in Heartbeat) (HeartbeatReply, error) {
-	var reply HeartbeatReply
+	reply := HeartbeatReply{Protocol: ProtocolVersion}
 	tx, err := m.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return reply, fmt.Errorf("begin agent heartbeat: %w", err)
 	}
 	defer tx.Rollback()
-	now := m.now().Unix()
-	reply.DesiredGeneration, err = m.refreshDesired(ctx, tx, identity, now)
+	now := m.now()
+	var status, address string
+	var lastSeen sql.NullInt64
+	err = tx.QueryRowContext(ctx, `SELECT status,public_host,last_seen_at,coalesce(json_extract(alert_preferences,'$.interface'),''),
+		(SELECT version FROM servers WHERE is_local=1) FROM servers WHERE `+agentIdentity, identity.id, identity.publicKey).
+		Scan(&status, &address, &lastSeen, &reply.Interface, &reply.Version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return reply, ErrUnauthorized
+	}
+	if err != nil {
+		return reply, fmt.Errorf("read agent heartbeat preferences: %w", err)
+	}
+	reply.DesiredGeneration, err = m.refreshDesired(ctx, tx, identity, now.Unix())
 	if err != nil {
 		return reply, err
 	}
+	if m.OnAvailability != nil && lastSeen.Valid && (status == "offline" || status == "online" && lastSeen.Int64 < now.Add(-OfflineAfter).Unix()) {
+		seen := time.Unix(lastSeen.Int64, 0)
+		if status == "online" {
+			if err := m.OnAvailability(ctx, tx, identity.id, address, seen, now, false); err != nil {
+				return reply, err
+			}
+		}
+		if err := m.OnAvailability(ctx, tx, identity.id, address, seen, now, true); err != nil {
+			return reply, err
+		}
+	}
+	var names *string
+	if in.Interfaces != nil {
+		encoded, err := json.Marshal(in.Interfaces)
+		if err != nil {
+			return reply, fmt.Errorf("encode node interface names: %w", err)
+		}
+		names = new(string(encoded))
+	}
 	_, err = tx.ExecContext(ctx, `UPDATE servers SET status='online',last_seen_at=?,updated_at=?,version=?,singbox_active=?,uptime=?,
-		applied_generation=coalesce(?,applied_generation),sync_error=CASE WHEN ? IS NULL THEN sync_error ELSE ? END
-		WHERE id=?`, now, now, in.Version, in.SingboxActive, in.Uptime, in.AppliedGeneration, in.AppliedGeneration, in.SyncError, identity.id)
+		protocol=?,interfaces=coalesce(?,interfaces),applied_generation=coalesce(?,applied_generation),sync_error=CASE WHEN ? IS NULL THEN sync_error ELSE ? END
+		WHERE id=?`, now.Unix(), now.Unix(), in.Version, in.SingboxActive, in.Uptime, max(1, in.Protocol), names,
+		in.AppliedGeneration, in.AppliedGeneration, in.SyncError, identity.id)
 	if err != nil {
 		return reply, fmt.Errorf("record agent heartbeat: %w", err)
 	}
@@ -355,10 +419,41 @@ func (m *Master) Remove(ctx context.Context, id int64) error {
 
 func (m *Master) MarkOffline(ctx context.Context) error {
 	now := m.now()
-	_, err := m.writer.ExecContext(ctx, `UPDATE servers SET status='offline',updated_at=?
-		WHERE is_local=0 AND status='online' AND last_seen_at<?`, now.Unix(), now.Add(-OfflineAfter).Unix())
+	tx, err := m.writer.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin agent offline check: %w", err)
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `UPDATE servers SET status='offline',updated_at=?
+		WHERE is_local=0 AND status='online' AND last_seen_at<? RETURNING id,public_host,last_seen_at`, now.Unix(), now.Add(-OfflineAfter).Unix())
 	if err != nil {
 		return fmt.Errorf("mark inactive agents offline: %w", err)
+	}
+	defer rows.Close()
+	type incident struct {
+		id, seen int64
+		address  string
+	}
+	var offline []incident
+	for rows.Next() {
+		var item incident
+		if err := rows.Scan(&item.id, &item.address, &item.seen); err != nil {
+			return fmt.Errorf("read offline agent: %w", err)
+		}
+		offline = append(offline, item)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read offline agents: %w", err)
+	}
+	if m.OnAvailability != nil {
+		for _, item := range offline {
+			if err := m.OnAvailability(ctx, tx, item.id, item.address, time.Unix(item.seen, 0), now, false); err != nil {
+				return err
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit offline agents: %w", err)
 	}
 	return nil
 }

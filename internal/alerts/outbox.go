@@ -160,7 +160,7 @@ func deliveryMessage(ctx context.Context, tx *sql.Tx, attempt int64, now time.Ti
 	// The first five events retain full context while bounding the payload
 	// length for provider limits. The panel keeps every individual alert.
 	rows, err := tx.QueryContext(ctx, `SELECT coalesce(e.kind,''),coalesce(e.address,?),coalesce(e.username,''),
-		coalesce(e.used,0),coalesce(e.limit_bytes,0),coalesce(e.deadline,0),o.created_at,o.grouped
+		coalesce(e.used,0),coalesce(e.limit_bytes,0),coalesce(e.deadline,0),coalesce(e.offline_seconds,0),o.created_at,o.grouped
 		FROM alert_outbox o LEFT JOIN alert_events e ON e.event_key=o.event_key
 		WHERE o.attempt_id=? ORDER BY o.id LIMIT 5`, address, attempt)
 	if err != nil {
@@ -171,7 +171,7 @@ func deliveryMessage(ctx context.Context, tx *sql.Tx, attempt int64, now time.Ti
 	var grouped bool
 	for rows.Next() {
 		var event Event
-		if err := rows.Scan(&event.Kind, &event.Address, &event.Username, &event.Used, &event.Limit, &event.Deadline, &event.CreatedAt, &grouped); err != nil {
+		if err := rows.Scan(&event.Kind, &event.Address, &event.Username, &event.Used, &event.Limit, &event.Deadline, &event.OfflineSeconds, &event.CreatedAt, &grouped); err != nil {
 			return message{}, fmt.Errorf("read notification message: %w", err)
 		}
 		parts = append(parts, event.message())
@@ -269,10 +269,10 @@ func (s *Service) Overview(ctx context.Context) (Overview, error) {
 	if err != nil {
 		return out, err
 	}
-	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM alert_events WHERE server_id=? AND read_at=0", serverID).Scan(&out.UnreadCount); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM alert_events WHERE read_at=0").Scan(&out.UnreadCount); err != nil {
 		return out, fmt.Errorf("count unread alerts: %w", err)
 	}
-	out.Unread, err = unread(ctx, tx, serverID)
+	out.Unread, err = unread(ctx, tx)
 	if err != nil {
 		return out, err
 	}
@@ -280,9 +280,9 @@ func (s *Service) Overview(ctx context.Context) (Overview, error) {
 	return out, err
 }
 
-func unread(ctx context.Context, tx *sql.Tx, serverID int64) ([]Event, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT event_key,kind,address,username,used,limit_bytes,threshold,deadline,created_at
-		FROM alert_events WHERE server_id=? AND read_at=0 ORDER BY created_at DESC,event_key DESC LIMIT 30`, serverID)
+func unread(ctx context.Context, tx *sql.Tx) ([]Event, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT event_key,server_id,kind,address,username,used,limit_bytes,threshold,deadline,created_at,offline_seconds
+		FROM alert_events WHERE read_at=0 ORDER BY created_at DESC,event_key DESC LIMIT 30`)
 	if err != nil {
 		return nil, fmt.Errorf("read unread alerts: %w", err)
 	}
@@ -290,7 +290,7 @@ func unread(ctx context.Context, tx *sql.Tx, serverID int64) ([]Event, error) {
 	out := []Event{}
 	for rows.Next() {
 		var e Event
-		if err := rows.Scan(&e.Key, &e.Kind, &e.Address, &e.Username, &e.Used, &e.Limit, &e.Threshold, &e.Deadline, &e.CreatedAt); err != nil {
+		if err := rows.Scan(&e.Key, &e.ServerID, &e.Kind, &e.Address, &e.Username, &e.Used, &e.Limit, &e.Threshold, &e.Deadline, &e.CreatedAt, &e.OfflineSeconds); err != nil {
 			return nil, fmt.Errorf("read alert details: %w", err)
 		}
 		out = append(out, e)
@@ -322,7 +322,7 @@ func (s *Service) ReadEvent(ctx context.Context, key string) (bool, error) {
 		return false, nil
 	}
 	result, err := s.writer.ExecContext(ctx, `UPDATE alert_events SET read_at=CASE WHEN read_at=0 THEN ? ELSE read_at END
-		WHERE event_key=? AND server_id=(SELECT id FROM servers WHERE is_local=1)`, s.opts.Now().Unix(), key)
+		WHERE event_key=?`, s.opts.Now().Unix(), key)
 	if err != nil {
 		return false, fmt.Errorf("mark alert read: %w", err)
 	}

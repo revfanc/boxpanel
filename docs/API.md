@@ -227,7 +227,7 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 | GET | `/reality/recommend` | `{targets: [{server, tls13, h2, latency_ms, ok}]}`，前 3 个推荐 |
 | POST | `/reality/check` | `{server, port?}` → 单个检测结果 |
 
-## 服务器（T8.1–T8.6）
+## 服务器（T8.1–T8.7）
 
 | 方法 | 路径 | 请求与成功响应 |
 |---|---|---|
@@ -241,7 +241,9 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 
 每项返回 `id`、`name`、`public_host`、`is_local`、`status`、`last_seen_at`、`version`、`created_at` 和
 `updated_at`。状态为 `local`、`online`、`offline` 或 `pending`。时间使用 UTC Unix 秒，`last_seen_at` 可为 `null`。
-`version` 为已记录的 boxpanel 版本，未记录时为空。接口要求登录，改名沿用 CSRF 校验。
+`version` 为已记录的 boxpanel 版本，未记录时为空。`protocol` 为节点通信协议版本。本机报告当前协议版本。
+远端协议低于主控最低要求时返回 `upgrade_required: true`，且 `sync_status` 为 `failed`，联系状态独立显示。
+接口要求登录，改名沿用 CSRF 校验。
 名称去首尾空白后须为 1–64 个字符，且原值中不得包含控制字符。无效名称返回 400，未知 ID 返回 404。
 名称和公网地址变更直接更新订阅元数据。远端 `public_host` 接受域名或裸 IPv4/IPv6。本机公网地址通过设置 API 修改。
 远端服务器还返回 `desired_generation`、`applied_generation`（0 表示尚未生效）、`sync_status`（`syncing`、`synced`、`failed`）
@@ -257,18 +259,26 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 无论主控当前使用自签或 ACME 证书，`master_pin` 都是固定回退公钥 SPKI DER 的 SHA-256（无填充 base64url）。
 签发要求 HTTPS，HTTP 面板返回 `409 agent_requires_https`。令牌管理和服务器移除沿用管理员会话与 CSRF 校验。
 
-### 节点 API（T8.2–T8.4）
+### 节点 API（T8.2–T8.7）
 
 前缀为 `/{web_path}/api/agent/v1`，只接受 HTTPS。带请求体的 POST 使用 `application/json`。节点使用签名认证。
-请求体限 8 KiB，`/traffic` 限 1 MiB。路径不含查询参数。所有 base64url 值均不带填充。
+请求体限 8 KiB，`/traffic` 限 1 MiB，`/interface-samples` 限 256 KiB。路径不含查询参数。所有 base64url 值均不带填充。
 
 | 方法 | 路径 | 请求与成功响应 |
 |---|---|---|
-| POST | `/join` | `{token, public_key, hostname, public_ip, version}`，201 `{server_id}` |
-| POST | `/heartbeat` | `{version, singbox_active, uptime, applied_generation?, sync_error?}`。携带 `applied_generation` 时 200 `{desired_generation}`，旧节点省略该字段时返回 204。uptime 为节点进程运行秒数 |
+| POST | `/join` | `{token, public_key, hostname, public_ip, version, protocol?}`，201 `{server_id}` |
+| POST | `/heartbeat` | `{version, protocol?, interfaces?, singbox_active, uptime, applied_generation?, sync_error?}`。提供 `protocol` 或 `applied_generation` 时 200 `{desired_generation, protocol, version, interface}`。旧格式均省略时返回 204。uptime 为节点进程运行秒数 |
 | GET | `/desired` | 空请求体，200 `{generation, inbounds, users, route}` |
 | POST | `/inbound-keys` | `{inbound_id, key_id, reality_public_key?, short_id?, hy2_cert_sha256?, hy2_cert_pem?}`，204 |
 | POST | `/traffic` | `{counters:[{user_id,epoch,up,down}]}`，204 |
+| POST | `/interface-samples` | `{samples:[{sampled_at,interface,rx,tx}]}`，204 |
+
+当前协议为 2，主控和节点的最低要求均为 2。旧请求省略 `protocol` 时按 1 处理。旧节点仍可注册和发心跳，
+其签名认证通过的期望状态、流量、网卡样本及公开密钥请求返回 `426 agent_upgrade_required`。心跳回复的
+`version` / `protocol` 属于主控，`interface` 是该节点的网卡偏好，空字符串表示自动检测。
+`interfaces` 是最多 32 个互不重复的非回环 Linux 网卡名称。省略时保留上次选择列表，空数组会清空列表。
+主控返回低于最低要求的协议、未返回协议，或同步接口返回 404 时，节点保持上次生效配置，并尝试用心跳上报
+`sync_error: "master_outdated"`。旧主控可能拒绝新增字段或错误码，节点会使用旧格式保持联系，并在本地日志和 `boxpanel info` 显示升级提示。
 
 注册按 TCP 对端 IP 限流，每分钟 10 次，返回 429 时带 `Retry-After`。`public_ip` 为空时记录连接对端 IP，
 不会采用转发头。非公网地址（包括未传地址且对端为私网的情况）返回 `422 agent_public_ip_required`，
@@ -289,11 +299,16 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 和 16 位十六进制 Short ID。Hysteria2 提交公开叶证书 PEM 和 DER 的 SHA-256 小写十六进制，主控验证 SNI、有效期、自签名和指纹。
 过期的 `key_id` 返回 `409 stale_inbound_keys`，无效的公开材料返回 `400 invalid_inbound_keys`。同一版本和材料允许重复上报。
 `sync_error` 可为空或为 `check_failed`、`port_in_use`、`restart_failed`、`firewall_failed`、`apply_timeout`、
-`rollback_failed`、`apply_failed`、`key_publication_failed`。主控拒绝其他值，避免向面板转发节点日志或凭证。
+`rollback_failed`、`apply_failed`、`key_publication_failed`、`master_outdated`。主控拒绝其他值，避免向面板转发节点日志或凭证。
 
 `/traffic` 只按签名认证取得的服务器 ID 记账，已移除服务器统一返回 `401 agent_unauthorized`。
 每批最多 10000 条，`user_id` 和 `epoch` 为正整数，`up`、`down` 为非负 int64 累计字节。
 重复 `user_id`、未知字段和无效 JSON 返回 `400 invalid_argument`，请求体超限返回 413。已删除的用户记录静默忽略。
+
+`/interface-samples` 每批最多 1000 条，按签名取得的服务器 ID 记账。`sampled_at` 为区间结束时的 UTC Unix **纳秒**，
+须为正数且最多比主控当前时间快 120 秒。`rx`、`tx` 是非负 int64 区间增量字节。非法网卡名、无效 JSON 或字段返回
+`400 invalid_argument`，超出体积限制返回 413。重复 `(server_id, sampled_at)` 保留首次记录，超过 62 天的样本过期，
+重传不会恢复过期数据。空批可用于确认接口存在。
 请求成功表示整批已确认。节点以新签名重试同一快照不会重复计数。较旧 epoch 忽略，同一 epoch 的每个方向独立保留最高确认值。
 收到较新 epoch 时，该 epoch 从零计量。总量和配额以主控为准。具体重置与补报口径见 [SPEC §19](SPEC.md#19-t84-远端流量汇总)。
 
@@ -625,18 +640,20 @@ JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未�
 | 方法 | 路径 | 请求与成功响应 |
 |---|---|---|
 | GET | `/alerts` | 200 `{billing,unread,unread_count,recent}` |
-| GET | `/alerts/settings` | 200 `{config,channels,interfaces}`，interfaces 是可选网卡名称数组 |
-| PUT | `/alerts/settings` | 接受 config 的部分字段，200 返回更新后的 config |
+| GET | `/alerts/settings` | 可选查询参数 `server_id`，200 `{config,channels,interfaces,billing}`，`interfaces` 是该服务器的可选网卡数组，`billing` 是当前账期用量 |
+| PUT | `/alerts/settings` | 接受 config 的部分字段及可选 `server_id`。也可在查询中指定 ID，同时提交时两处必须相同。200 返回更新后的 config |
 | PUT | `/alerts/channels/{channel}` | 接受通道部分字段，200 返回该通道的脱敏配置 |
 | POST | `/alerts/channels/{channel}/test` | 空请求体，202 `{id}` 表示已把测试通知加入持久化队列 |
 | POST | `/alerts/events/{key}/read` | 空请求体，204 标记已读，可重复请求。key 取自 unread，未知 key 返回 404 |
 
-- 读取和更新本机的 `config`，按本机的服务器 ID 记录网卡样本及告警。
+- 省略 `server_id` 选中本机。显式 ID 必须为正整数，服务器已移除或不存在时返回 404。远端设置不改变节点期望版本。
+  远端事件开关可修改 `server_quota_80`、`server_quota_100`。通知通道为主控共享配置。
 - `config` 包含 `interface`（空表示自动检测）、`quota_gb`（整数 0–9223372036）、`billing_day`（整数 1–28）、
   `billing_mode`（`out` / `both` / `max` / `in`）及 `events`（事件类型到布尔值的映射）。
   PUT 中省略的字段和事件保持原值。事件类型有 `user_quota_80`、`user_quota_100`、`user_expiring`、
   `user_expired`、`user_stopped`、`server_quota_80`、`server_quota_90`、`server_quota_100`、
-  `certificate_warning`、`core_down`、`core_recovered`。
+  `certificate_warning`、`core_down`、`core_recovered`、`server_offline`、`server_recovered`。本机设置中的
+  `server_offline` 默认开启，关闭时同时停用离线和恢复事件。恢复事件要求该次离线已有记录。
 - `channels` 按 `bark`、`server_chan`、`telegram` 为键。写入字段为 `enabled`、`credential`，Bark 可传
   `url`（空用默认 `https://api.day.app`），Telegram 可传 `chat_id`（数字 ID 字符串或 `@频道名`）。
   每次省略凭证字段保留原值，显式空字符串清除凭证。启用和测试需已有完整凭证。通道读取返回
@@ -645,8 +662,9 @@ JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未�
 - `billing` 包含 `supported`、`interface`（最近采样的网卡）、`sampled_at`（0 为尚无样本）、`stale`、
   `starts_at`、`ends_at`、`billing_mode`、`rx`、`tx`、`used`、`quota`、`percent`。未设额度时最后两项为 0。
   当最近样本超过三分钟或与手选网卡不一致时返回 `stale: true`。
-- `unread_count` 是未读总数，`unread` 按最新优先最多 30 条，字段为 `key`、`kind`、`address`、`used`、
-  `limit`、`created_at`，适用时包含 `username`、`threshold`、`deadline`。key 是稳定的去重键，作为不透明标识使用。
+- `/alerts` 的 `billing` 沿用本机口径。`unread_count` 是所有服务器的未读总数，`unread` 按最新优先最多 30 条，
+  字段为 `key`、`server_id`、`kind`、`address`、`used`、`limit`、`created_at`，适用时包含 `username`、`threshold`、
+  `deadline`。`server_recovered` 附 `offline_seconds`，为上次心跳至本次成功联系的秒数。`key` 是不透明的去重标识。
 - `recent` 取最近更新的至多 30 条投递。每条包含 `id`、`channel`、`kind`（测试为 `test`）、`status`（`pending`、
   `sent`、`failed`）、`attempts`、`updated_at`、`grouped`，适用时包含 `username` 和固定的 `error` 代码。
   失败代码包括 `unsafe_destination`、`timeout`、`network_error`、`http_error`、`invalid_response`、

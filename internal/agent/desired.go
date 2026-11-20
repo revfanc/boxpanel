@@ -50,6 +50,9 @@ func (m *Master) Desired(ctx context.Context, identity authenticated) (Desired, 
 		return out, fmt.Errorf("begin desired snapshot: %w", err)
 	}
 	defer tx.Rollback()
+	if err := requireNodeProtocol(ctx, tx, identity); err != nil {
+		return out, err
+	}
 	now := m.now().Unix()
 	out.Generation, err = m.refreshDesired(ctx, tx, identity, now)
 	if err != nil {
@@ -138,6 +141,9 @@ func (m *Master) PublishKeys(ctx context.Context, identity authenticated, keys I
 		return fmt.Errorf("begin inbound key publication: %w", err)
 	}
 	defer tx.Rollback()
+	if err := requireNodeProtocol(ctx, tx, identity); err != nil {
+		return err
+	}
 	var keyID, protocol, raw string
 	err = tx.QueryRowContext(ctx, `SELECT i.agent_key_id,i.protocol,i.options FROM inbounds i
 		WHERE i.id=? AND i.server_id=(SELECT id FROM servers WHERE `+agentIdentity+`)`,

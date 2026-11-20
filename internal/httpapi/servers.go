@@ -8,6 +8,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/revfanc/boxpanel/internal/agent"
 	"github.com/revfanc/boxpanel/internal/rules"
 	"github.com/revfanc/boxpanel/internal/traffic"
 )
@@ -20,6 +21,8 @@ type serverRecord struct {
 	Status            string               `json:"status"`
 	LastSeenAt        *int64               `json:"last_seen_at"`
 	Version           string               `json:"version"`
+	Protocol          int                  `json:"protocol"`
+	UpgradeRequired   bool                 `json:"upgrade_required,omitempty"`
 	CreatedAt         int64                `json:"created_at"`
 	UpdatedAt         int64                `json:"updated_at"`
 	DesiredGeneration int64                `json:"desired_generation,omitempty"`
@@ -38,7 +41,7 @@ type serverInboundCounts struct {
 	Pending int64 `json:"pending"`
 }
 
-const serverColumns = "id,name,public_host,is_local,status,last_seen_at,version,created_at,updated_at,desired_generation,applied_generation,sync_error,singbox_active,uptime"
+const serverColumns = "id,name,public_host,is_local,status,last_seen_at,version,created_at,updated_at,desired_generation,applied_generation,sync_error,singbox_active,uptime,protocol"
 
 func scanServer(row rowScanner, counts *serverInboundCounts) (serverRecord, error) {
 	var s serverRecord
@@ -47,7 +50,7 @@ func scanServer(row rowScanner, counts *serverInboundCounts) (serverRecord, erro
 	var active *bool
 	var uptime *int64
 	dest := []any{&s.ID, &s.Name, &s.PublicHost, &s.IsLocal, &s.Status, &s.LastSeenAt,
-		&s.Version, &s.CreatedAt, &s.UpdatedAt, &desired, &applied, &syncError, &active, &uptime}
+		&s.Version, &s.CreatedAt, &s.UpdatedAt, &desired, &applied, &syncError, &active, &uptime, &s.Protocol}
 	if counts != nil {
 		dest = append(dest, &counts.Ready, &counts.Pending)
 	}
@@ -56,15 +59,18 @@ func scanServer(row rowScanner, counts *serverInboundCounts) (serverRecord, erro
 	}
 	s.InboundCounts = counts
 	if !s.IsLocal {
+		s.UpgradeRequired = s.Protocol < agent.MinNodeProtocol
 		s.Uptime = uptime
 		s.DesiredGeneration, s.AppliedGeneration, s.SingboxActive = desired, &applied, active
 		s.SyncError = syncError
 		s.SyncStatus = "syncing"
-		if syncError != "" {
+		if syncError != "" || s.UpgradeRequired {
 			s.SyncStatus = "failed"
 		} else if applied == desired && active != nil && *active {
 			s.SyncStatus = "synced"
 		}
+	} else {
+		s.Protocol = agent.ProtocolVersion
 	}
 	return s, nil
 }

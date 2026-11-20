@@ -118,6 +118,10 @@ func printAgentInfo(ctx context.Context, conn *sql.DB, stdout io.Writer) error {
 		message = "认证失败，请检查节点时钟和主控中的服务器记录。"
 	case "clock_skew":
 		message = (&agent.ClockSkewError{Seconds: result.ClockSkewSeconds}).Error()
+	case agent.SyncMasterOutdated:
+		message = agent.ErrMasterOutdated.Error()
+	case "agent_upgrade_required":
+		message = agent.ErrAgentUpgradeRequired.Error()
 	}
 	fmt.Fprintf(stdout, "最近心跳: %s（%s）\n", message, time.Unix(result.At, 0).UTC().Format(time.RFC3339))
 	if result.RepeatedUnauthorized {
@@ -155,9 +159,11 @@ func serveAgent(ctx context.Context, conn *sql.DB, opts serveOptions, logger *sl
 	workerCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	node := agent.Node{Reader: reader, Writer: conn, Master: master, Key: key, Client: client, Manager: manager, Logger: logger}
+	var devices *alerts.Network
 	if !opts.dev && runtime.GOOS == "linux" {
 		native := host.Native{}
-		network := alerts.New(conn, reader, alerts.Options{Network: &alerts.Network{Files: native, Runner: native}, Logger: logger})
+		devices = &alerts.Network{Files: native, Runner: native}
+		network := alerts.New(conn, reader, alerts.Options{Network: devices, Logger: logger})
 		bootData, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
 		bootID := strings.TrimSpace(string(bootData))
 		if err != nil || bootID == "" {
@@ -174,9 +180,15 @@ func serveAgent(ctx context.Context, conn *sql.DB, opts serveOptions, logger *sl
 	started := time.Now()
 	send := func(ctx context.Context) error {
 		active := func() bool { return !opts.dev && manager.CoreActive(ctx) }
-		return node.Sync(ctx, agent.Heartbeat{
+		beat := agent.Heartbeat{
 			Version: version, SingboxActive: active(), Uptime: int64(time.Since(started) / time.Second),
-		}, active)
+		}
+		if devices != nil {
+			if names, err := devices.Interfaces(); err == nil {
+				beat.Interfaces = names[:min(agent.MaxInterfaceNames, len(names))]
+			}
+		}
+		return node.Sync(ctx, beat, active)
 	}
 	runHeartbeats(ctx, conn, master, send, logger)
 	return nil
@@ -226,6 +238,14 @@ func runHeartbeats(ctx context.Context, conn *sql.DB, master db.AgentConnection,
 }
 
 func logHeartbeatResult(logger *slog.Logger, last, next db.AgentHeartbeatResult) {
+	if next.Status != last.Status {
+		switch next.Status {
+		case agent.SyncMasterOutdated:
+			logger.Warn(agent.ErrMasterOutdated.Error())
+		case "agent_upgrade_required":
+			logger.Warn(agent.ErrAgentUpgradeRequired.Error())
+		}
+	}
 	if next.Status == "clock_skew" && last.Status != next.Status {
 		logger.Warn((&agent.ClockSkewError{Seconds: next.ClockSkewSeconds}).Error())
 	}
@@ -239,6 +259,14 @@ func nextHeartbeat(last db.AgentHeartbeatResult, err error, streak *int, backoff
 	if err == nil {
 		*streak, *backoff = 0, 5*time.Second
 		result.Status, result.RepeatedUnauthorized = "ok", false
+		return result, agent.SyncInterval
+	}
+	if errors.Is(err, agent.ErrMasterOutdated) || errors.Is(err, agent.ErrAgentUpgradeRequired) {
+		*streak, *backoff = 0, 5*time.Second
+		result.Status, result.RepeatedUnauthorized = agent.SyncMasterOutdated, false
+		if errors.Is(err, agent.ErrAgentUpgradeRequired) {
+			result.Status = "agent_upgrade_required"
+		}
 		return result, agent.SyncInterval
 	}
 	var skew *agent.ClockSkewError

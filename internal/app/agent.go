@@ -74,7 +74,6 @@ func JoinNode(ctx context.Context, paths Paths, masterURL, pin, token, hostname,
 		}
 		return agent.Identity{}, err
 	}
-
 	public, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return agent.Identity{}, fmt.Errorf("generate node Ed25519 key: %w", err)
@@ -114,6 +113,17 @@ func JoinNode(ctx context.Context, paths Paths, masterURL, pin, token, hostname,
 	}
 	if err := db.SetSetting(ctx, tx, db.BlockBittorrent, true); err != nil {
 		return agent.Identity{}, err
+	}
+	// A fresh identity starts after any samples retained by an earlier leave.
+	var lastSample sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT max(sampled_at) FROM server_traffic_samples
+		WHERE server_id=(SELECT id FROM servers WHERE is_local=1)`).Scan(&lastSample); err != nil {
+		return agent.Identity{}, fmt.Errorf("read samples retained from a previous node identity: %w", err)
+	}
+	if lastSample.Valid {
+		if err := db.SetSetting(ctx, tx, db.AgentInterfaceAck, lastSample.Int64); err != nil {
+			return agent.Identity{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return agent.Identity{}, fmt.Errorf("commit local node registration: %w", err)
@@ -169,7 +179,8 @@ func LeaveNode(ctx context.Context, paths Paths) error {
 	if role != db.RoleAgent {
 		return fmt.Errorf("当前实例是主控，请在面板移除相应服务器")
 	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM inbounds; DELETE FROM users; DELETE FROM agent_retired_traffic"); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM inbounds; DELETE FROM users; DELETE FROM agent_retired_traffic;
+		UPDATE servers SET alert_preferences=json_set(alert_preferences,'$.interface','') WHERE is_local=1`); err != nil {
 		return fmt.Errorf("clear mirrored node configuration: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM settings WHERE key <> 'singbox_version'"); err != nil {

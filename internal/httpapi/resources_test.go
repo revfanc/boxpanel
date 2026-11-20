@@ -32,14 +32,18 @@ import (
 type resourceRunner struct {
 	checks, restarts, healths int
 	failCheck, failRestart    bool
+	check                     func(context.Context, string) ([]byte, error)
 }
 
 func (f *resourceRunner) LookPath(name string) (string, error) { return name, nil }
-func (f *resourceRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+func (f *resourceRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	if len(args) > 0 && args[0] == "check" {
 		f.checks++
 		if f.failCheck {
 			return []byte("password=DO-NOT-LEAK"), errors.New("secret-check-error")
+		}
+		if f.check != nil {
+			return f.check(ctx, args[2])
 		}
 		return nil, nil
 	}

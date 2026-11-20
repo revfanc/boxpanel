@@ -1,8 +1,11 @@
 package httpapi
 
 import (
+	"database/sql"
 	"errors"
 	"net/http"
+	"net/url"
+	"strconv"
 
 	"github.com/revfanc/boxpanel/internal/alerts"
 )
@@ -25,6 +28,10 @@ func (a *api) alertsAvailable(w http.ResponseWriter) bool {
 }
 
 func alertError(w http.ResponseWriter, err error) {
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, 404, "not_found", "服务器不存在", "请刷新服务器列表并选择仍然存在的服务器。")
+		return
+	}
 	var validation alerts.ValidationError
 	if errors.As(err, &validation) {
 		hint := "请按设置页或接口文档填写后重试。"
@@ -39,6 +46,8 @@ func alertError(w http.ResponseWriter, err error) {
 			hint = "请输入 0 至 9223372036 之间的整数 GB。"
 		case "billing_day":
 			hint = "请输入 1 至 28 之间的 UTC 计费日。"
+		case "server_id":
+			hint = "请使用服务器列表返回的正整数 ID。"
 		}
 		writeJSON(w, 400, map[string]any{"error": map[string]string{
 			"code": "invalid_argument", "message": "告警设置无效", "hint": hint, "detail": string(validation),
@@ -64,7 +73,11 @@ func (a *api) alertSettings(w http.ResponseWriter, r *http.Request) {
 	if !a.alertsAvailable(w) {
 		return
 	}
-	result, err := a.opts.Alerts.Settings(r.Context())
+	id, ok := a.alertServerID(w, r)
+	if !ok {
+		return
+	}
+	result, err := a.opts.Alerts.ServerSettings(r.Context(), id)
 	if err != nil {
 		alertError(w, err)
 		return
@@ -77,12 +90,38 @@ func (a *api) alertSaveSettings(w http.ResponseWriter, r *http.Request) {
 	if !a.alertsAvailable(w) || !decodeResource(w, r, &in) {
 		return
 	}
+	id, ok := a.alertServerID(w, r)
+	if !ok {
+		return
+	}
+	if id != 0 {
+		if in.ServerID != nil && *in.ServerID != id {
+			a.resourceError(w, invalid("server_id", "请让查询参数和请求内容使用同一个服务器 ID。"))
+			return
+		}
+		in.ServerID = &id
+	}
 	result, err := a.opts.Alerts.SaveConfig(r.Context(), in)
 	if err != nil {
 		alertError(w, err)
 		return
 	}
 	writeJSON(w, 200, result)
+}
+
+func (a *api) alertServerID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	values, exists := query["server_id"]
+	if err == nil && !exists {
+		return 0, true
+	}
+	if err == nil && len(values) == 1 {
+		if id, err := strconv.ParseInt(values[0], 10, 64); err == nil && id > 0 {
+			return id, true
+		}
+	}
+	a.resourceError(w, invalid("server_id", "请使用服务器列表返回的正整数 ID。"))
+	return 0, false
 }
 
 func (a *api) alertSaveChannel(w http.ResponseWriter, r *http.Request) {

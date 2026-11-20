@@ -372,9 +372,10 @@ install_agent() {
 
 update_panel() {
     [[ -x $BINARY && -f $UNIT_DIR/boxpanel.service && ! -e $DATA_DIR/.installing ]] || die '安装尚未完成；请先运行 install。'
-    "$BINARY" info >/dev/null
+    local info
+    info=$("$BINARY" info)
     progress 3 '检查下载工具与内核计数依赖'
-    if ! command -v nft >/dev/null; then install_dependencies; fi
+    if [[ ${info%%$'\n'*} != '节点模式（agent）' ]] && ! command -v nft >/dev/null; then install_dependencies; fi
     for tool in curl tar; do command -v "$tool" >/dev/null || die "缺少 $tool；请通过系统包管理器安装后重试。"; done
     progress 4 '下载并校验新版本'
     stage_release

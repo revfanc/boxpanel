@@ -2,7 +2,51 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { expect, it, vi } from 'vitest'
 import { ServersPage } from '.'
 import { zhCN as t } from '@/i18n/zh-CN'
-import { failure, mockAPI, mountPage, server } from '@/test/resources'
+import { alertSettings, failure, mockAPI, mountPage, server } from '@/test/resources'
+
+it.each([
+  ['v0.5.0-rc.2', 'v0.5.0-rc.2', ' --version v0.5.0-rc.2', false],
+  ['dev', 'main', '', true],
+] as const)('offers the %s upgrade command and explains protocol errors', async (masterVersion, ref, suffix, outdated) => {
+  mockAPI({ '/servers': () => Response.json([
+    { ...server, version: masterVersion },
+    { ...server, id: 2, is_local: false, name: 'Edge', version: outdated ? masterVersion : 'v0.4.0',
+      upgrade_required: outdated, sync_error: outdated ? '' : 'master_outdated' },
+  ]) })
+  const { user } = mountPage(<ServersPage />)
+  const clipboard = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue()
+  const command = `bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/${ref}/scripts/install.sh) update${suffix}`
+  expect(await screen.findByLabelText(t.servers.upgradeCommand)).toHaveValue(command)
+  expect(screen.getByText(outdated ? t.servers.nodeOutdated : t.servers.syncErrors.master_outdated)).toBeVisible()
+  await user.click(screen.getByRole('button', { name: `${t.common.copy} ${t.servers.upgradeCommand}` }))
+  expect(clipboard).toHaveBeenCalledWith(command)
+})
+
+it('opens and saves billing settings for the selected remote server', async () => {
+  const fetch = mockAPI({
+    '/servers': () => Response.json([server, { ...server, id: 2, is_local: false, name: 'Edge' }]),
+    '/alerts/settings?server_id=2': () => Response.json({ ...alertSettings, interfaces: ['eth1'],
+      billing: { ...alertSettings.billing, supported: true, sampled_at: 1735689600, interface: 'eth1', used: 800e6, quota: 1e9, percent: 80 },
+    }),
+    'PUT /alerts/settings': (init) => Response.json(JSON.parse(String(init.body))),
+  })
+  const { user } = mountPage(<ServersPage />)
+  const button = await screen.findByRole('button', { name: t.servers.trafficAlerts })
+  expect(button).toHaveAttribute('aria-expanded', 'false')
+  await user.click(button)
+  expect(await screen.findByText('80.0%')).toBeVisible()
+  expect(screen.getByRole('switch', { name: t.alerts.event.server_quota_80 })).toBeChecked()
+  expect(screen.queryByRole('switch', { name: t.alerts.offlineNotifications })).not.toBeInTheDocument()
+  const field = screen.getByLabelText(t.alerts.network)
+  expect(document.getElementById(field.getAttribute('list')!)?.querySelector('option')).toHaveValue('eth1')
+  await user.type(field, 'eth1')
+  await user.click(screen.getByRole('button', { name: t.alerts.saveSettings }))
+  expect(await screen.findByText(t.alerts.settingsSaved)).toBeVisible()
+  const put = fetch.mock.calls.find(([, init]) => init?.method === 'PUT')
+  expect(JSON.parse(String(put?.[1]?.body))).toMatchObject({ server_id: 2, interface: 'eth1' })
+  await user.click(button)
+  expect(screen.queryByLabelText(t.alerts.network)).not.toBeInTheDocument()
+})
 
 it('shows server metadata and preserves the name while retrying a failed rename', async () => {
   let fail = true

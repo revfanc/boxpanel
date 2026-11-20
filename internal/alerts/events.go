@@ -15,43 +15,49 @@ import (
 )
 
 const (
-	userQuota80    = "user_quota_80"
-	userQuota100   = "user_quota_100"
-	userExpiring   = "user_expiring"
-	userExpired    = "user_expired"
-	userStopped    = "user_stopped"
-	serverQuota80  = "server_quota_80"
-	serverQuota90  = "server_quota_90"
-	serverQuota100 = "server_quota_100"
-	certWarning    = "certificate_warning"
-	coreDown       = "core_down"
-	coreRecovered  = "core_recovered"
+	userQuota80     = "user_quota_80"
+	userQuota100    = "user_quota_100"
+	userExpiring    = "user_expiring"
+	userExpired     = "user_expired"
+	userStopped     = "user_stopped"
+	serverQuota80   = "server_quota_80"
+	serverQuota90   = "server_quota_90"
+	serverQuota100  = "server_quota_100"
+	certWarning     = "certificate_warning"
+	coreDown        = "core_down"
+	coreRecovered   = "core_recovered"
+	serverOffline   = "server_offline"
+	serverRecovered = "server_recovered"
 )
 
 var eventTitles = map[string]string{
-	userQuota80:    "用户流量达到 80%",
-	userQuota100:   "用户流量达到 100%",
-	userExpiring:   "用户将在 3 天内到期",
-	userExpired:    "用户已到期",
-	userStopped:    "用户已自动停用",
-	serverQuota80:  "服务器流量达到 80%",
-	serverQuota90:  "服务器流量达到 90%",
-	serverQuota100: "服务器流量达到 100%",
-	certWarning:    "面板证书续期失败",
-	coreDown:       "sing-box 未运行",
-	coreRecovered:  "sing-box 已恢复",
+	userQuota80:     "用户流量达到 80%",
+	userQuota100:    "用户流量达到 100%",
+	userExpiring:    "用户将在 3 天内到期",
+	userExpired:     "用户已到期",
+	userStopped:     "用户已自动停用",
+	serverQuota80:   "服务器流量达到 80%",
+	serverQuota90:   "服务器流量达到 90%",
+	serverQuota100:  "服务器流量达到 100%",
+	certWarning:     "面板证书续期失败",
+	coreDown:        "sing-box 未运行",
+	coreRecovered:   "sing-box 已恢复",
+	serverOffline:   "服务器离线",
+	serverRecovered: "服务器已恢复连接",
 }
 
 type Event struct {
-	Key       string `json:"key"`
-	Kind      string `json:"kind"`
-	Address   string `json:"address"`
-	Username  string `json:"username,omitempty"`
-	Used      int64  `json:"used"`
-	Limit     int64  `json:"limit"`
-	Threshold int    `json:"threshold,omitempty"`
-	Deadline  int64  `json:"deadline,omitempty"`
-	CreatedAt int64  `json:"created_at"`
+	Key            string `json:"key"`
+	ServerID       int64  `json:"server_id"`
+	Kind           string `json:"kind"`
+	Address        string `json:"address"`
+	Username       string `json:"username,omitempty"`
+	Used           int64  `json:"used"`
+	Limit          int64  `json:"limit"`
+	Threshold      int    `json:"threshold,omitempty"`
+	Deadline       int64  `json:"deadline,omitempty"`
+	CreatedAt      int64  `json:"created_at"`
+	OfflineSeconds int64  `json:"offline_seconds,omitempty"`
 }
 
 func (event Event) message() message {
@@ -73,6 +79,9 @@ func (event Event) message() message {
 	}
 	if event.Deadline > 0 {
 		fmt.Fprintf(&text, "到期：%s\n", utcString(event.Deadline))
+	}
+	if event.OfflineSeconds > 0 {
+		fmt.Fprintf(&text, "离线时长：%d 秒\n", event.OfflineSeconds)
 	}
 	fmt.Fprintf(&text, "时间：%s", utcString(event.CreatedAt))
 	return message{Title: title, Body: text.String()}
@@ -118,12 +127,12 @@ func (r eventRecorder) record(ctx context.Context, event Event) (bool, error) {
 	if !r.cfg.Events[event.Kind] {
 		return false, nil
 	}
-	key := fmt.Sprintf("%x", sha256.Sum256([]byte(event.Key)))
+	key := eventDigest(event.Key)
 	now := r.now.Unix()
 	result, err := r.tx.ExecContext(ctx, `INSERT INTO alert_events
-		(event_key,server_id,kind,address,username,used,limit_bytes,threshold,deadline,created_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(event_key) DO NOTHING`, key, r.serverID, event.Kind, r.address,
-		event.Username, event.Used, event.Limit, event.Threshold, event.Deadline, now)
+		(event_key,server_id,kind,address,username,used,limit_bytes,threshold,deadline,created_at,offline_seconds)
+	VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(event_key) DO NOTHING`, key, r.serverID, event.Kind, r.address,
+		event.Username, event.Used, event.Limit, event.Threshold, event.Deadline, now, event.OfflineSeconds)
 	if err != nil {
 		return false, fmt.Errorf("record alert: %w", err)
 	}
@@ -140,6 +149,10 @@ func (r eventRecorder) record(ctx context.Context, event Event) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+func eventDigest(key string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(key)))
 }
 
 type userUsage struct {
@@ -241,6 +254,29 @@ func (r eventRecorder) serverKey(kind string, period int64) string {
 	return fmt.Sprintf("server:%d:%s:%d", r.serverID, kind, period)
 }
 
+// ServerAvailability runs in the same transaction as the node status transition.
+func (s *Service) ServerAvailability(ctx context.Context, tx *sql.Tx, id int64, address string, lastSeen, now time.Time, recovered bool) error {
+	r, err := recorder(ctx, tx, now)
+	if err != nil || !r.cfg.Events[serverOffline] {
+		return err
+	}
+	r.serverID, r.address = id, address
+	key := r.serverKey("offline", lastSeen.Unix())
+	event := Event{Key: key, Kind: serverOffline}
+	if recovered {
+		var wasAlerted bool
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM alert_events WHERE event_key=?)", eventDigest(key)).Scan(&wasAlerted); err != nil {
+			return fmt.Errorf("find matching offline alert: %w", err)
+		}
+		if !wasAlerted {
+			return nil
+		}
+		event = Event{Key: r.serverKey("recovered", lastSeen.Unix()), Kind: serverRecovered, OfflineSeconds: max(0, now.Unix()-lastSeen.Unix())}
+	}
+	_, err = r.record(ctx, event)
+	return err
+}
+
 func (r eventRecorder) coreEvent(ctx context.Context, running bool) error {
 	state, err := db.GetSetting(ctx, r.tx, db.AlertCore)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -292,22 +328,8 @@ func (s *Service) evaluate(ctx context.Context, now time.Time) error {
 	if err := r.userEvents(ctx); err != nil {
 		return err
 	}
-	if r.cfg.QuotaGB > 0 && s.opts.Network != nil {
-		usage, err := billing(ctx, tx, r.serverID, r.cfg, now, true)
-		if err != nil {
-			return err
-		}
-		for _, item := range []struct {
-			kind  string
-			level int
-		}{{serverQuota80, 80}, {serverQuota90, 90}, {serverQuota100, 100}} {
-			if thresholdReached(usage.Used, usage.Quota, item.level) {
-				if _, err := r.record(ctx, Event{Key: r.serverKey(item.kind, usage.StartsAt), Kind: item.kind,
-					Used: usage.Used, Limit: usage.Quota, Threshold: item.level}); err != nil {
-					return err
-				}
-			}
-		}
+	if err := r.serverBillingEvents(ctx, s.opts.Network != nil); err != nil {
+		return err
 	}
 	if cert.Mode == "acme" && cert.Warning {
 		if _, err := r.record(ctx, Event{Key: r.serverKey(certWarning, cert.NotAfter), Kind: certWarning, Deadline: cert.NotAfter}); err != nil {
@@ -321,6 +343,69 @@ func (s *Service) evaluate(ctx context.Context, now time.Time) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit alert events: %w", err)
+	}
+	return nil
+}
+
+func (r eventRecorder) serverBillingEvents(ctx context.Context, localSupported bool) error {
+	if _, err := r.tx.ExecContext(ctx, `DELETE FROM server_traffic_samples WHERE server_id IN
+		(SELECT id FROM servers WHERE is_local=0) AND sampled_at<?`, r.now.AddDate(0, 0, -62).UnixNano()); err != nil {
+		return fmt.Errorf("prune remote interface samples: %w", err)
+	}
+	if localSupported {
+		if err := r.billingEvents(ctx, true); err != nil {
+			return err
+		}
+	}
+	rows, err := r.tx.QueryContext(ctx, `SELECT id,public_host,alert_preferences FROM servers
+		WHERE is_local=0 AND status<>'removed' AND json_extract(alert_preferences,'$.quota_gb')>0`)
+	if err != nil {
+		return fmt.Errorf("list remote billing preferences: %w", err)
+	}
+	defer rows.Close()
+	var servers []billingServer
+	for rows.Next() {
+		var server billingServer
+		if err := rows.Scan(&server.id, &server.address, &server.preferences); err != nil {
+			return fmt.Errorf("read remote billing preferences: %w", err)
+		}
+		servers = append(servers, server)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate remote billing preferences: %w", err)
+	}
+	for _, server := range servers {
+		r.serverID, r.address = server.id, server.address
+		r.cfg, err = decodeConfig(server.preferences)
+		if err != nil {
+			return err
+		}
+		if err := r.billingEvents(ctx, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r eventRecorder) billingEvents(ctx context.Context, local bool) error {
+	if r.cfg.QuotaGB <= 0 {
+		return nil
+	}
+	usage, err := billing(ctx, r.tx, r.serverID, r.cfg, r.now, true)
+	if err != nil {
+		return err
+	}
+	for _, item := range []struct {
+		kind  string
+		level int
+	}{{serverQuota80, 80}, {serverQuota90, 90}, {serverQuota100, 100}} {
+		if !local && item.level == 90 || !thresholdReached(usage.Used, usage.Quota, item.level) {
+			continue
+		}
+		if _, err := r.record(ctx, Event{Key: r.serverKey(item.kind, usage.StartsAt), Kind: item.kind,
+			Used: usage.Used, Limit: usage.Quota, Threshold: item.level}); err != nil {
+			return err
+		}
 	}
 	return nil
 }

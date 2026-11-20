@@ -5,6 +5,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/revfanc/boxpanel/internal/host"
 )
@@ -91,6 +92,14 @@ func parseMemory(data []byte) (Usage, error) {
 
 // NetworkCounters holds cumulative bytes for one interface.
 type NetworkCounters struct{ RX, TX uint64 }
+
+// ValidNetworkInterface checks a non-loopback Linux device name.
+func ValidNetworkInterface(name string) bool {
+	return name != "" && len(name) <= 15 && name != "lo" && name != "." && name != ".." &&
+		!strings.ContainsAny(name, "/:\\") && !strings.ContainsFunc(name, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsControl(r)
+	})
+}
 
 // ReadNetworkCounters reads Linux interface byte counters (excluding loopback).
 func ReadNetworkCounters(files host.Files) (map[string]NetworkCounters, error) {
