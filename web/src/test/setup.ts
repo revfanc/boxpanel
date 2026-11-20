@@ -2,6 +2,11 @@ import '@testing-library/jest-dom/vitest'
 import { cleanup } from '@testing-library/react'
 import { afterEach, beforeEach, vi } from 'vitest'
 
+// Radix Select uses pointer capture and scrolls focused options into view.
+Element.prototype.hasPointerCapture ??= () => false
+Element.prototype.releasePointerCapture ??= () => {}
+Element.prototype.scrollIntoView ??= () => {}
+
 beforeEach(() => {
   // jsdom has no layout engine; Radix uses this only to size hidden form inputs.
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })

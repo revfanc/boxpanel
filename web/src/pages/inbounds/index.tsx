@@ -3,6 +3,8 @@ import { Link, useSearchParams } from 'react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Page, Panel, Empty, Confirm } from '@/components/ResourceUI'
 import { ErrorNotice, Loading } from '@/components/Feedback'
 import { inboundsQuery, refreshResources, serversQuery } from '@/lib/resources'
@@ -27,18 +29,21 @@ export function InboundsPage() {
     void operation.run(() => api<Inbound>(`/inbounds/${node.id}/toggle`, { method: 'POST', body: { enabled: !node.enabled } }), async () => { setAction(null); await refreshResources(client) })
   }
   return <Page title={t.pages.inbounds} description={t.inbounds.description} actions={<Button asChild><Link to={canCreateOnSelected ? `/inbounds/new?server=${selected.id}` : '/inbounds/new'}>{t.pages.newInbound}</Link></Button>}>
-    {serverList.length > 1 && <label className="flex flex-wrap items-center gap-3 text-sm font-medium">
-      {t.inbounds.server}
-      <select className="h-9 w-full rounded-md border bg-background px-3 text-sm sm:w-auto sm:max-w-sm" value={selected?.id ?? ''} onChange={(event) => {
+    {serverList.length > 1 && <div className="flex flex-wrap items-center gap-3">
+      <Label htmlFor="server-filter">{t.inbounds.server}</Label>
+      <Select value={selected ? String(selected.id) : 'all'} onValueChange={(value) => {
         const next = new URLSearchParams(params)
-        if (event.target.value) next.set('server', event.target.value)
-        else next.delete('server')
+        if (value === 'all') next.delete('server')
+        else next.set('server', value)
         setParams(next)
       }}>
-        <option value="">{t.inbounds.allServers}</option>
-        {serverList.map((server) => <option key={server.id} value={server.id}>{server.name}</option>)}
-      </select>
-    </label>}
+        <SelectTrigger id="server-filter" className="w-full sm:w-fit sm:max-w-sm"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">{t.inbounds.allServers}</SelectItem>
+          {serverList.map((server) => <SelectItem key={server.id} value={String(server.id)}>{server.name}</SelectItem>)}
+        </SelectContent>
+      </Select>
+    </div>}
     {operation.error != null && !action && <ErrorNotice error={operation.error} />}
     {servers.isError && <ErrorNotice error={servers.error} retry={() => { void servers.refetch() }} />}
     {query.isPending || (params.has('server') && servers.isPending) ? <Loading /> : query.isError ? <ErrorNotice error={query.error} retry={() => { void query.refetch() }} /> : visibleNodes.length === 0 ? <Empty>{selected ? t.inbounds.serverEmpty : t.inbounds.empty}</Empty> : <div className="grid min-w-0 gap-4 lg:grid-cols-2">

@@ -1300,6 +1300,35 @@ T8.2–T8.4 已有：生成加入命令、有效令牌与撤销、状态/版本/
     - 停止节点 boxpanel：约 100 s 后 `server_offline` 一次；离线期间重启主控不重复；启动节点后 `server_recovered` 一次（离线 133 s），
       70 s 后无重复。未配置通道时不入 outbox（与既有设计一致）。
 
+### T9.1 表单控件统一使用 UI 库组件
+
+**问题**：部分表单控件是原生元素手写样式，未用 shadcn 组件：下拉箭头贴右边、单选/复选为浏览器默认样式，与其余界面不一致。
+
+**范围**（`web/src` 中 components/ui 以外的全部原生控件）：
+- `<select>`：节点页服务器筛选（inbounds/index）、节点编辑器的服务器选择（inbounds/editor）、分流规则预览格式与规则源（rules/index）、
+  告警设置计费口径（AlertSettings）。
+- `<input type="radio">`：引导场景选择（setup/steps）、节点协议选择（inbounds/editor）、分流预设（rules/index）。
+- `<input type="checkbox">`：引导 Hysteria2 选项（setup/steps）。
+- `<textarea>`：CopyField。
+
+**做法**：
+- 在 `components/ui` 按 shadcn（new-york，使用已安装的 `radix-ui` 统一包）新增 `select.tsx`（Radix Select：Trigger 带 ChevronDown 图标与右内边距，
+  Content/Item/Value，键盘可用）、`radio-group.tsx`、`checkbox.tsx`、`textarea.tsx`，样式与现有 input/button 一致（高度 h-9、圆角、focus ring、
+  disabled、aria-invalid 红框、暗色）。
+- 替换上述全部用法。react-hook-form 字段用 `Controller`/`setValue` 接入 Select/RadioGroup/Checkbox，保持现有校验与提交行为、id/label 关联
+  （`<Label htmlFor>` 指向 Trigger 或 RadioGroupItem）与无障碍名称。卡片式单选（协议/预设/场景）保留整卡可点击与选中高亮，内部用 RadioGroupItem。
+- 「自动检测网卡」的 `Input + datalist` 可保留（属于可输入建议），但确认样式与 Input 一致。
+- 不改变任何文案、接口与业务逻辑。
+
+**测试**：更新受影响的组件测试改用组件的角色交互（combobox/option、radio、checkbox）；jsdom 中 Radix Select 需要的 `hasPointerCapture`/
+`scrollIntoView` 等在测试 setup 中补 polyfill。新增断言：Select Trigger 含图标且有右内边距类（防止箭头贴边回归）；
+`grep` 级检查：`web/src` 中 `components/ui` 以外不再出现 `<select`、`type="radio"`、`type="checkbox"`、`<textarea`（可写成一个 vitest 测试扫描源码）。
+
+- **验收**：
+  - [x] `make lint test build` 通过（审查者沙箱外复跑，含 e2e；Vitest 150 项，含原生控件残留扫描与箭头内边距断言）；FRONTEND.md 组件清单同步。
+  - [x] 浏览器（本地测试实例）桌面与 375px、暗色：节点页服务器筛选、节点编辑器服务器选择与协议卡片、分流预设卡片外观统一，下拉箭头有内边距、选中项带勾，无横向滚动。
+    审查时顺带修正：节点编辑器服务器选项对本机只显示名称（原为「本机 · 本机」）。
+
 ## M7 后续增强（MVP 之后，按需排期）
 
 - T7.1 见上方详细任务（已排期）
