@@ -941,9 +941,7 @@ sing-box 配置，已导入的设备可继续使用。本任务补齐两者，�
   - [x] 多服务器订阅渲染与本机过滤测试。同端口跨服务器可用，单服务器内冲突被拒。
     离线服务器节点仍可导出，配置、防火墙和流量计数按本机入站限定。
   - [x] 服务器页与 API。覆盖登录、CSRF、名称校验、改名、归属显示及非本机写入返回 422。
-  - [ ] 完整 make lint test build 通过。规格已同步，make lint 与 make build 通过。
-    安装脚本 19 项、除 `internal/e2e` 外的 Go 测试、前端类型检查和 129 项 Vitest 测试通过。
-    两个原回环用例均执行，因 macOS 沙箱 DNS 通知注册 `status 9` 启动失败，待普通终端或 CI 复跑。
+  - [x] 完整 make lint test build 通过（审查者沙箱外复跑含 `internal/e2e`；CI 通过）。规格已同步。
 
 **审查者真机（2026-11-19，香港 VPS，v0.3.0-test → v0.4.0-test）**
 - [x] 升级前后 3 用户 × 3 种订阅格式、`sing-box.json`、nft 计数规则**逐字节一致**；角色 master。
@@ -1286,15 +1284,13 @@ T8.2–T8.4 已有：生成加入命令、有效令牌与撤销、状态/版本/
 **测试**：上述各项的单元/接口测试；install.sh update 在 agent 角色下的测试；单机 golden 与现有告警测试不变。
 
 - **验收**：
-  - [ ] 以上测试；`make lint test build` 通过；SPEC/API/FRONTEND/INSTALL 同步。
+  - [x] 以上测试；`make lint test build` 通过；SPEC/API/FRONTEND/INSTALL 同步（见下方记录）。
 
 **实现与验证记录**
 
 - 协议 2 协商、升级命令、分服务器网卡样本补报与告警、离线和恢复事件均已实现。缺少协议字段的前序版本按 1 处理，先升级主控，再升级节点。
 - [x] 主控加两节点的进程内 HTTPS 生命周期、接口与迁移测试、22 项安装脚本用例和 149 项前端测试通过。SPEC、API、FRONTEND、INSTALL 已同步。
 - [x] `make lint` 和 `make build` 通过。
-- [ ] `make test` 的既有 `TestLoopback`、`TestTrafficLoopback` 在 macOS 沙箱内因 sing-box 注册 DNS 配置通知返回 `status 9` 失败。其余 Go 包通过，待沙箱外复跑。
-- [ ] Linux 主控加 LXD 节点的实机验收待执行。
   - [x] 完整 `make lint test build`（审查者沙箱外复跑，含 e2e、22 项 install.sh、149 项 Vitest）。
   - [x] 实机（2026-11-20，主控 HK VPS v0.5.0-test10，节点 bp-node1）：
     - 仅升级主控：旧节点（协议 1）心跳 200，拉取期望状态 426（applied 6 / desired 7），按最后配置继续服务。
