@@ -103,10 +103,24 @@ it('selects a reachable or offline server for creation and bypasses local Realit
   expect(screen.queryByRole('button', { name: t.inbounds.recommend })).not.toBeInTheDocument()
   await user.click(screen.getByRole('button', { name: t.common.create }))
   await waitFor(() => expect(router.state.location.pathname).toBe('/inbounds'))
+  expect(router.state.location.search).toBe('?server=2')
   for (const route of ['/inbounds/suggest', '/inbounds']) {
     const request = fetch.mock.calls.find(([url, init]) => url.endsWith(route) && init?.method === 'POST')
     expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ server_id: 2 })
   }
+})
+
+it('uses the server from the join wizard URL for a newly suggested node', async () => {
+  const fetch = mockAPI({
+    '/servers': () => Response.json([{ id: 1, name: 'Local', is_local: true, status: 'local' }, { id: 2, name: 'Edge', is_local: false, status: 'online' }]),
+    'POST /inbounds/suggest': () => Response.json({ protocol: 'vless_reality', port: 443, options: { server_name: '', handshake_server: '', handshake_port: 443, fingerprint: 'chrome', short_ids: [] } }),
+  })
+  const { user } = mountPage(<NewInboundPage />, '/inbounds/new?server=2', '/inbounds/new')
+  expect(await screen.findByRole('combobox', { name: t.inbounds.server })).toHaveValue('2')
+  await user.click(screen.getByRole('radio', { name: /VLESS/ }))
+  await screen.findByText(t.inbounds.remoteCheck)
+  const request = fetch.mock.calls.find(([url]) => url.endsWith('/inbounds/suggest'))
+  expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ server_id: 2 })
 })
 
 it('moves an inbound without sending its old Short IDs', async () => {

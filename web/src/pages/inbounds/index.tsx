@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -14,19 +14,36 @@ import { zhCN as t } from '@/i18n/zh-CN'
 export function InboundsPage() {
   const query = useQuery({ ...inboundsQuery, refetchInterval: (query) =>
     query.state.data?.some((node) => node.key_status === 'pending') ? 5000 : false })
-  const servers = useQuery({ ...serversQuery, enabled: !!query.data?.length })
+  const servers = useQuery(serversQuery)
+  const [params, setParams] = useSearchParams()
+  const serverList = servers.data ?? []
+  const selected = serverList.find(({ id }) => String(id) === params.get('server'))
+  const visibleNodes = query.data?.filter((node) => !selected || node.server_id === selected.id) ?? []
+  const canCreateOnSelected = selected && selected.status !== 'pending'
   const client = useQueryClient()
   const operation = useOperation()
   const [action, setAction] = useState<{ node: Inbound; kind: 'delete' | 'disable' } | null>(null)
   function toggle(node: Inbound) {
     void operation.run(() => api<Inbound>(`/inbounds/${node.id}/toggle`, { method: 'POST', body: { enabled: !node.enabled } }), async () => { setAction(null); await refreshResources(client) })
   }
-  return <Page title={t.pages.inbounds} description={t.inbounds.description} actions={<Button asChild><Link to="/inbounds/new">{t.pages.newInbound}</Link></Button>}>
+  return <Page title={t.pages.inbounds} description={t.inbounds.description} actions={<Button asChild><Link to={canCreateOnSelected ? `/inbounds/new?server=${selected.id}` : '/inbounds/new'}>{t.pages.newInbound}</Link></Button>}>
+    {serverList.length > 1 && <label className="flex flex-wrap items-center gap-3 text-sm font-medium">
+      {t.inbounds.server}
+      <select className="h-9 w-full rounded-md border bg-background px-3 text-sm sm:w-auto sm:max-w-sm" value={selected?.id ?? ''} onChange={(event) => {
+        const next = new URLSearchParams(params)
+        if (event.target.value) next.set('server', event.target.value)
+        else next.delete('server')
+        setParams(next)
+      }}>
+        <option value="">{t.inbounds.allServers}</option>
+        {serverList.map((server) => <option key={server.id} value={server.id}>{server.name}</option>)}
+      </select>
+    </label>}
     {operation.error != null && !action && <ErrorNotice error={operation.error} />}
-    {!!query.data?.length && servers.isError && <ErrorNotice error={servers.error} retry={() => { void servers.refetch() }} />}
-    {query.isPending ? <Loading /> : query.isError ? <ErrorNotice error={query.error} retry={() => { void query.refetch() }} /> : query.data.length === 0 ? <Empty>{t.inbounds.empty}</Empty> : <div className="grid min-w-0 gap-4 lg:grid-cols-2">
-      {query.data.map((node) => {
-        const server = servers.data?.find(({ id }) => id === node.server_id)
+    {servers.isError && <ErrorNotice error={servers.error} retry={() => { void servers.refetch() }} />}
+    {query.isPending || (params.has('server') && servers.isPending) ? <Loading /> : query.isError ? <ErrorNotice error={query.error} retry={() => { void query.refetch() }} /> : visibleNodes.length === 0 ? <Empty>{selected ? t.inbounds.serverEmpty : t.inbounds.empty}</Empty> : <div className="grid min-w-0 gap-4 lg:grid-cols-2">
+      {visibleNodes.map((node) => {
+        const server = serverList.find(({ id }) => id === node.server_id)
         return <Panel key={node.id} title={node.remark || node.tag} hint={node.tag}>
           <div className="flex flex-wrap gap-2"><Badge variant="secondary">{node.protocol === 'vless_reality' ? t.inbounds.reality : t.inbounds.hysteria2}</Badge><Badge variant={node.enabled ? 'default' : 'outline'}>{node.enabled ? t.common.enabled : t.common.disabled}</Badge></div>
           <p className="text-sm">{t.inbounds.port}: {node.port} / {node.protocol === 'vless_reality' ? 'TCP' : 'UDP'}</p>

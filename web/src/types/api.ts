@@ -110,6 +110,8 @@ export interface Server {
   sync_status?: 'synced' | 'syncing' | 'failed'
   sync_error?: string
   singbox_active?: boolean
+  uptime?: number
+  inbound_counts?: { ready: number; pending: number }
   traffic_up?: number
   traffic_down?: number
   last_seen_at: number | null
@@ -122,6 +124,7 @@ export interface JoinToken {
   id: number
   name: string
   expires_at: number
+  server_id?: number
 }
 
 export interface IssuedJoinToken extends JoinToken {
@@ -174,7 +177,9 @@ export interface User {
   remark: string
   created_at: number
   status: 'disabled' | 'expired' | 'exhausted' | 'active'
+  traffic_by_server?: UserServerTraffic[]
 }
+export interface UserServerTraffic { server_id: number; name: string; is_local: boolean; up: number; down: number }
 export interface UserInput { name: string; remark?: string; traffic_limit?: number; expire_at?: number; traffic_reset_day?: number }
 export interface UserLinks {
   subscription: { auto: string; singbox: string; clash: string; base64: string }

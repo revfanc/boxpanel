@@ -227,7 +227,7 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 | GET | `/reality/recommend` | `{targets: [{server, tls13, h2, latency_ms, ok}]}`，前 3 个推荐 |
 | POST | `/reality/check` | `{server, port?}` → 单个检测结果 |
 
-## 服务器（T8.1–T8.4）
+## 服务器（T8.1–T8.6）
 
 | 方法 | 路径 | 请求与成功响应 |
 |---|---|---|
@@ -236,7 +236,8 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 | DELETE | `/servers/{id}` | 移除远程服务器并撤销它的公钥，204 |
 | GET | `/servers/join-tokens` | 200，未过期且未使用令牌的元数据数组 |
 | POST | `/servers/join-tokens` | `{"name":"服务器名称"}`，201，返回元数据、`token`、`master_url` 和 `master_pin` |
-| DELETE | `/servers/join-tokens/{id}` | 撤销该编号的令牌，204（含已不存在） |
+| GET | `/servers/join-tokens/{id}` | 200，指定未过期令牌的元数据，若已注册则附 `server_id` |
+| DELETE | `/servers/join-tokens/{id}` | 撤销未使用的令牌，204（含已使用或已不存在） |
 
 每项返回 `id`、`name`、`public_host`、`is_local`、`status`、`last_seen_at`、`version`、`created_at` 和
 `updated_at`。状态为 `local`、`online`、`offline` 或 `pending`。时间使用 UTC Unix 秒，`last_seen_at` 可为 `null`。
@@ -247,9 +248,12 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 及最近心跳记录的 `singbox_active`。有失败时返回固定的 `sync_error` 代码，面板根据代码展示原因和处理建议。
 `GET /servers` 的远端行还包含 `traffic_up`、`traffic_down`，单位为字节。两项汇总该服务器所有未删除用户已确认的用量，
 包含历次节点 epoch，从 0 开始并饱和到 int64 上限。用户清零不改变服务器累计值。本机继续通过 `/alerts` 查看网卡计费用量。
-按服务器拆分单个用户的用量留给 T8.6。
+`GET /servers` 每项还包含 `inbound_counts: {ready, pending}`，按密钥就绪状态统计该服务器的入站，包含已停用的入站。
+远端有已保存的心跳运行时长时返回 `uptime`，单位为秒，取最近心跳时的节点进程时长。
 服务器列表排除 `removed`；本机、已移除或不存在的服务器无法通过 DELETE 移除，返回 404。
-令牌元数据为 `id`、`name`、`expires_at`。只有签发响应含令牌明文，使用和撤销后从列表消失。
+令牌元数据为 `id`、`name`、`expires_at`。只有签发响应含令牌明文。使用和撤销后从可用列表消失。
+令牌详情的 `server_id` 在注册成功时写入，首次心跳前也会返回；向导通过 `/servers` 确认该服务器的 `last_seen_at` 非空。
+令牌已过期、撤销、未知或关联服务器已移除时，详情返回 `404 not_found`。
 无论主控当前使用自签或 ACME 证书，`master_pin` 都是固定回退公钥 SPKI DER 的 SHA-256（无填充 base64url）。
 签发要求 HTTPS，HTTP 面板返回 `409 agent_requires_https`。令牌管理和服务器移除沿用管理员会话与 CSRF 校验。
 
@@ -333,6 +337,11 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 | POST | `/users/{id}/reset-token` | 重置订阅 token（旧链接立即失效） |
 | POST | `/users/{id}/reset-credentials` | 重置 uuid/password（需重新导入） |
 | GET | `/users/{id}/links` | 见下 |
+
+多台未移除服务器时，`GET /users/{id}` 增加 `traffic_by_server: [{server_id, name, is_local, up, down}]`，本机在前，远端按 ID 升序。
+`up`、`down` 是当前清零周期的字节数。远端账目缺失或用户周期不匹配时返回零。
+本机项各方向为用户总量减去列表中远端的对应方向之和，下限为零。升级前尚未拆分的用量及本周期内已移除节点的用量归入本机项。
+用户与明细取自同一数据库快照。单机详情、用户列表和写操作响应省略该字段。
 
 `/users/{id}/links`：
 

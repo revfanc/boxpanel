@@ -28,6 +28,10 @@ func TestServerListRenameAndLocalInboundWrites(t *testing.T) {
 	if strings.Contains(w.Body.String(), "reserved-key") || strings.Contains(w.Body.String(), "alert_preferences") {
 		t.Fatal("server list exposes internal fields")
 	}
+	if list[0].InboundCounts == nil || *list[0].InboundCounts != (serverInboundCounts{}) ||
+		list[1].InboundCounts == nil || *list[1].InboundCounts != (serverInboundCounts{Ready: 2}) || list[1].Uptime != nil {
+		t.Fatal("unexpected server node counts or uptime", list)
+	}
 	for _, body := range []string{`{}`, `{"name":"   "}`, `{"name":"a\tb"}`, `{"name":"new","public_host":"blocked.example"}`, `{"name":"` + strings.Repeat("名", 65) + `"}`} {
 		f.call(t, "PUT", "servers/1", body, 400)
 	}
@@ -47,6 +51,10 @@ func TestServerListRenameAndLocalInboundWrites(t *testing.T) {
 	w = f.call(t, "POST", "inbounds", `{"server_id":2,"protocol":"vless_reality","port":2443,"options":{"server_name":"www.example.com"}}`, 201)
 	if w.Header().Get("X-Boxpanel-Apply") != "queued" || f.apply.calls != calls {
 		t.Fatal("remote create proceeded to local Apply")
+	}
+	list = decodeResult[[]serverRecord](t, f.call(t, "GET", "servers", "", 200))
+	if list[1].InboundCounts == nil || *list[1].InboundCounts != (serverInboundCounts{Ready: 2, Pending: 1}) {
+		t.Fatal("remote pending entry not counted", list)
 	}
 	w = f.call(t, "POST", "inbounds", `{"server_id":1,"protocol":"vless_reality","port":443,"options":{"server_name":"www.example.com"}}`, 201)
 	var local inboundRecord

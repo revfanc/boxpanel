@@ -4,11 +4,54 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
 )
+
+func TestServerDetailsMigrationPreservesTrafficAndUnusedTokens(t *testing.T) {
+	ctx := t.Context()
+	conn, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "v7.db")+"?_pragma=foreign_keys(1)&_txlock=immediate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	names, err := fs.Glob(migrations, "migrations/*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := fstest.MapFS{}
+	for _, name := range names[:7] {
+		data, err := migrations.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		legacy[name] = &fstest.MapFile{Data: data}
+	}
+	if err := migrate(ctx, conn, legacy); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, conn, `INSERT INTO servers (id,name,public_host,status) VALUES (2,'edge','edge.example','online');
+		INSERT INTO users (id,name,uuid,password,sub_token,created_at,traffic_up,traffic_down,traffic_epoch)
+		VALUES (1,'legacy','id','secret','token',1,123,456,42);
+		INSERT INTO server_user_traffic VALUES (2,1,10,30,40,100,200,123);
+		INSERT INTO agent_join_tokens (id,token_hash,name,expires_at) VALUES (5,zeroblob(32),'open',2000000000);`)
+	if err := Migrate(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+	var values [8]int64
+	if err := conn.QueryRow(`SELECT epoch,up,down,total_up,total_down,user_epoch,cycle_up,cycle_down FROM server_user_traffic`).
+		Scan(&values[0], &values[1], &values[2], &values[3], &values[4], &values[5], &values[6], &values[7]); err != nil || values != [8]int64{10, 30, 40, 100, 200, 42, 0, 0} {
+		t.Fatalf("unexpected migrated accounting values: %v, %v", values, err)
+	}
+	var unused, unknownUptime bool
+	if err := conn.QueryRow(`SELECT (SELECT server_id IS NULL FROM agent_join_tokens WHERE id=5),
+		(SELECT uptime IS NULL FROM servers WHERE id=2)`).Scan(&unused, &unknownUptime); err != nil || !unused || !unknownUptime {
+		t.Fatal("existing token or unknown uptime changed during migration", unused, unknownUptime, err)
+	}
+}
 
 func TestMigrationsIdempotent(t *testing.T) {
 	ctx := context.Background()

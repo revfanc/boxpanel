@@ -18,7 +18,7 @@ func TestConcurrentRegistrationConsumesTokenOnce(t *testing.T) {
 	}
 	defer conn.Close()
 	master := NewMaster(conn, nil, nil)
-	_, token, err := master.IssueToken(ctx, "edge")
+	issued, token, err := master.IssueToken(ctx, "edge")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,9 +54,16 @@ func TestConcurrentRegistrationConsumesTokenOnce(t *testing.T) {
 	if succeeded != 1 {
 		t.Fatalf("successful registrations = %d", succeeded)
 	}
-	var servers, tokens int
-	if err := conn.QueryRow(`SELECT (SELECT count(*) FROM servers WHERE name='edge' AND status='pending'),
-		(SELECT count(*) FROM agent_join_tokens)`).Scan(&servers, &tokens); err != nil || servers != 1 || tokens != 0 {
-		t.Fatal("unexpected registration transaction result", servers, tokens, err)
+	var servers int
+	var id int64
+	if err := conn.QueryRow(`SELECT count(*),min(id) FROM servers WHERE name='edge' AND status='pending'`).Scan(&servers, &id); err != nil || servers != 1 {
+		t.Fatal("unexpected registration transaction result", servers, id, err)
+	}
+	meta, err := master.Token(ctx, issued.ID)
+	if err != nil || meta.ServerID == nil || *meta.ServerID != id {
+		t.Fatal("consumed token is not linked to the winning server", meta, err)
+	}
+	if tokens, err := master.Tokens(ctx); err != nil || len(tokens) != 0 {
+		t.Fatal("consumed token is still available", tokens, err)
 	}
 }

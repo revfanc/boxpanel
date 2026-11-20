@@ -122,6 +122,14 @@ func TestAgentJoinTokens(t *testing.T) {
 		return request(t, h, "POST", join, string(body), nil, map[string]string{"Origin": "https://other.test"})
 	}
 	first := issue()
+	tokenURL := func(id int64) string { return panel + "servers/join-tokens/" + strconv.FormatInt(id, 10) }
+	getToken := func(id int64, status int) *httptest.ResponseRecorder {
+		t.Helper()
+		w := request(t, h, "GET", tokenURL(id), "", cookie, nil)
+		requireStatus(t, w, status)
+		return w
+	}
+	requireStatus(t, request(t, h, "GET", tokenURL(first.ID), "", nil, nil), 401)
 	for _, address := range []string{"", "10.0.0.2", "127.0.0.1", "100.64.0.10", "198.51.100.5", "::ffff:127.0.0.1", "2001:db8::5", "240.0.0.1"} {
 		w := register(first.Token, address)
 		requireStatus(t, w, 422)
@@ -129,13 +137,28 @@ func TestAgentJoinTokens(t *testing.T) {
 			t.Fatal("missing public IP guidance", w.Body.String())
 		}
 	}
-	requireStatus(t, register(first.Token, "2606:4700::1111"), 201)
+	if meta := decodeResult[agent.JoinToken](t, getToken(first.ID, 200)); meta.ServerID != nil || meta.ID != first.ID {
+		t.Fatal("failed registration consumed the token", meta)
+	}
+	registered := register(first.Token, "2606:4700::1111")
+	requireStatus(t, registered, 201)
+	identity := decodeResult[agent.Identity](t, registered)
+	w := getToken(first.ID, 200)
+	meta := decodeResult[agent.JoinToken](t, w)
+	if meta.ServerID == nil || *meta.ServerID != identity.ServerID || strings.Contains(w.Body.String(), first.Token) {
+		t.Fatal("unexpected consumed token metadata")
+	}
+	requireStatus(t, request(t, h, "DELETE", tokenURL(first.ID), "", cookie, nil), 204)
+	getToken(first.ID, 200)
 	reused := register(first.Token, "8.8.8.8")
 	requireStatus(t, reused, 401)
 	revoked := issue()
-	requireStatus(t, request(t, h, "DELETE", panel+"servers/join-tokens/"+strconv.FormatInt(revoked.ID, 10), "", cookie, nil), 204)
+	requireStatus(t, request(t, h, "DELETE", tokenURL(revoked.ID), "", cookie, nil), 204)
+	getToken(revoked.ID, 404)
 	expired := issue()
 	now.Add(3600)
+	getToken(expired.ID, 404)
+	getToken(first.ID, 404)
 	for _, token := range []string{revoked.Token, expired.Token, "invalid"} {
 		w := register(token, "8.8.8.8")
 		requireStatus(t, w, 401)
@@ -143,7 +166,7 @@ func TestAgentJoinTokens(t *testing.T) {
 			t.Fatal("token authentication failure responses differ")
 		}
 	}
-	w := request(t, h, "GET", panel+"servers/join-tokens", "", cookie, nil)
+	w = request(t, h, "GET", panel+"servers/join-tokens", "", cookie, nil)
 	requireStatus(t, w, 200)
 	if w.Body.String() != "[]\n" {
 		t.Fatal("unusable tokens in listing")
@@ -238,6 +261,10 @@ func TestAgentTLSJoinHeartbeatOfflineAndRemoval(t *testing.T) {
 	login := request(t, h, "POST", panel+"auth/login", `{"username":"admin","password":"test-password"}`, nil, nil)
 	requireStatus(t, login, 200)
 	cookie := login.Result().Cookies()[0]
+	listed := decodeResult[[]serverRecord](t, request(t, h, "GET", panel+"servers", "", cookie, nil))
+	if len(listed) != 2 || listed[0].Uptime != nil || listed[1].Uptime == nil || *listed[1].Uptime != beat.Uptime {
+		t.Fatal("unexpected heartbeat uptime in server list", listed)
+	}
 	idPath := panel + "servers/" + strconv.FormatInt(id.ServerID, 10)
 	requireStatus(t, request(t, h, "DELETE", idPath, "", nil, nil), 401)
 	requireStatus(t, request(t, h, "DELETE", idPath, "", cookie, map[string]string{"Origin": "https://other.test"}), 403)

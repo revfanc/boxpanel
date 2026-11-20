@@ -63,11 +63,13 @@ func (m *Master) RecordTraffic(ctx context.Context, identity authenticated, repo
 
 func (m *Master) recordCounter(ctx context.Context, tx *sql.Tx, serverID int64, c TrafficCounter, now time.Time) (bool, error) {
 	user := confgen.User{ID: c.UserID}
-	var epoch, up, down, totalUp, totalDown int64
+	var epoch, up, down, totalUp, totalDown, userEpoch, recordedEpoch, cycleUp, cycleDown int64
 	err := tx.QueryRowContext(ctx, `SELECT u.enabled,u.traffic_limit,u.expire_at,u.traffic_up,u.traffic_down,
-		coalesce(t.epoch,0),coalesce(t.up,0),coalesce(t.down,0),coalesce(t.total_up,0),coalesce(t.total_down,0)
+		coalesce(t.epoch,0),coalesce(t.up,0),coalesce(t.down,0),coalesce(t.total_up,0),coalesce(t.total_down,0),
+		u.traffic_epoch,coalesce(t.user_epoch,0),coalesce(t.cycle_up,0),coalesce(t.cycle_down,0)
 		FROM users u LEFT JOIN server_user_traffic t ON t.user_id=u.id AND t.server_id=? WHERE u.id=?`, serverID, c.UserID).
-		Scan(&user.Enabled, &user.TrafficLimit, &user.ExpireAt, &user.TrafficUp, &user.TrafficDown, &epoch, &up, &down, &totalUp, &totalDown)
+		Scan(&user.Enabled, &user.TrafficLimit, &user.ExpireAt, &user.TrafficUp, &user.TrafficDown, &epoch, &up, &down,
+			&totalUp, &totalDown, &userEpoch, &recordedEpoch, &cycleUp, &cycleDown)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -88,11 +90,16 @@ func (m *Master) recordCounter(ctx context.Context, tx *sql.Tx, serverID int64, 
 		}
 	}
 	deltaUp, deltaDown := c.Up-up, c.Down-down
-	if _, err := tx.ExecContext(ctx, `INSERT INTO server_user_traffic (server_id,user_id,epoch,up,down,total_up,total_down,updated_at)
-		VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(server_id,user_id) DO UPDATE SET
+	if recordedEpoch != userEpoch {
+		cycleUp, cycleDown = 0, 0
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO server_user_traffic (server_id,user_id,epoch,up,down,total_up,total_down,updated_at,user_epoch,cycle_up,cycle_down)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(server_id,user_id) DO UPDATE SET
 		epoch=excluded.epoch,up=excluded.up,down=excluded.down,total_up=excluded.total_up,
-		total_down=excluded.total_down,updated_at=excluded.updated_at`, serverID, c.UserID, c.Epoch, c.Up, c.Down,
-		traffic.AddBytes(totalUp, deltaUp), traffic.AddBytes(totalDown, deltaDown), now.Unix()); err != nil {
+		total_down=excluded.total_down,updated_at=excluded.updated_at,user_epoch=excluded.user_epoch,
+		cycle_up=excluded.cycle_up,cycle_down=excluded.cycle_down`, serverID, c.UserID, c.Epoch, c.Up, c.Down,
+		traffic.AddBytes(totalUp, deltaUp), traffic.AddBytes(totalDown, deltaDown), now.Unix(), userEpoch,
+		traffic.AddBytes(cycleUp, deltaUp), traffic.AddBytes(cycleDown, deltaDown)); err != nil {
 		return false, fmt.Errorf("save node traffic baseline: %w", err)
 	}
 	newUp, newDown := traffic.AddBytes(user.TrafficUp, deltaUp), traffic.AddBytes(user.TrafficDown, deltaDown)

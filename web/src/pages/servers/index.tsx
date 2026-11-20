@@ -1,33 +1,25 @@
 import { useState } from 'react'
+import { Link } from 'react-router'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
-import { z } from 'zod'
-import { CopyField } from '@/components/CopyField'
 import { ErrorNotice, Loading } from '@/components/Feedback'
 import { Confirm, Empty, Field, Page, Panel, Submit } from '@/components/ResourceUI'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { useOperation } from '@/hooks/use-operation'
 import { zhCN as t } from '@/i18n/zh-CN'
-import { hostSchema } from '@/schemas/settings'
+import { serverSchema } from '@/schemas/server'
 import { api } from '@/lib/api'
-import { bytes } from '@/lib/format'
+import { bytes, duration, expiry, relativeTime } from '@/lib/format'
 import { refreshResources, serversQuery } from '@/lib/resources'
-import type { IssuedJoinToken, JoinToken, Server } from '@/types/api'
-
-const renameSchema = z.object({
-  name: z.string().refine((name) => {
-    const length = Array.from(name.trim()).length
-    return length >= 1 && length <= 64 && !/\p{Cc}/u.test(name)
-  }, t.servers.invalidName).transform((name) => name.trim()),
-})
-
-const serverSchema = renameSchema.extend({ public_host: hostSchema.optional() })
+import type { Server } from '@/types/api'
+import { JoinWizard } from './join-wizard'
 
 function EditServerForm({ server, close }: { server: Server; close: () => void }) {
   const client = useQueryClient()
   const operation = useOperation()
-  const form = useForm<z.infer<typeof serverSchema>>({
+  const form = useForm({
     resolver: zodResolver(serverSchema),
     defaultValues: server.is_local ? { name: server.name } : { name: server.name, public_host: server.public_host },
   })
@@ -36,7 +28,7 @@ function EditServerForm({ server, close }: { server: Server; close: () => void }
     async (updated) => {
       await client.cancelQueries({ queryKey: serversQuery.queryKey })
       client.setQueryData(serversQuery.queryKey, (current) => current?.map((row) => row.id === updated.id
-        ? { ...updated, traffic_up: row.traffic_up, traffic_down: row.traffic_down } : row))
+        ? { ...row, ...updated } : row))
       close()
       if (updated.name !== server.name || updated.public_host !== server.public_host) {
         await Promise.all([
@@ -56,72 +48,69 @@ function EditServerForm({ server, close }: { server: Server; close: () => void }
   </form>
 }
 
-const tokenKey = ['servers', 'join-tokens'] as const
 const syncErrors: Readonly<Record<string, string>> = t.servers.syncErrors
+const online = 'border-emerald-500/35 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300'
+const statusColors: Record<Server['status'], string> = {
+  local: online,
+  online,
+  offline: 'border-amber-500/35 bg-amber-500/10 text-amber-800 dark:text-amber-300',
+  pending: 'border-border bg-muted text-muted-foreground',
+}
+const failed = 'border-red-500/35 bg-red-500/10 text-red-800 dark:text-red-300'
 
-function joinCommand(issued: IssuedJoinToken) {
-  const version = window.__BOXPANEL__?.version ?? ''
-  const tag = /^v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*)?$/.test(version) ? version : ''
-  const script = `https://raw.githubusercontent.com/revfanc/boxpanel/${tag || 'main'}/scripts/install.sh`
-  const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'"
-  return `bash <(curl -fsSL ${script}) --join ${quote(issued.master_url)} --token ${quote(issued.token)}`
-    + ` --master-pin ${quote(issued.master_pin)}`
-    + (tag ? ` --version ${tag}` : '')
+function ServerOverview({ servers }: { servers: Server[] }) {
+  const stats = [
+    [t.servers.total, servers.length],
+    [t.servers.statuses.online, servers.filter((server) => server.status === 'online' || server.is_local).length],
+    [t.servers.statuses.offline, servers.filter((server) => server.status === 'offline').length],
+    [t.servers.syncStatuses.failed, servers.filter((server) => server.sync_status === 'failed').length],
+  ] as const
+  return <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+    {stats.map(([label, value]) => <div key={label} className="min-w-0 rounded-lg border bg-card px-4 py-3">
+      <dt className="text-sm text-muted-foreground">{label}</dt>
+      <dd className="text-xl font-semibold tabular-nums">{value}</dd>
+    </div>)}
+  </dl>
 }
 
-function JoinForm() {
-  const client = useQueryClient()
-  const operation = useOperation()
-  const revoke = useOperation()
-  const tokens = useQuery({
-    queryKey: tokenKey,
-    queryFn: ({ signal }) => api<JoinToken[]>('/servers/join-tokens', { signal }),
-    refetchInterval: 30_000,
-  })
-  const [issued, setIssued] = useState<IssuedJoinToken | null>(null)
-  const form = useForm<z.infer<typeof renameSchema>>({ resolver: zodResolver(renameSchema), defaultValues: { name: '' } })
-  const active = tokens.data ?? []
-  return <Panel title={t.servers.add} hint={t.servers.addHint}>
-    <form className="space-y-3" onSubmit={form.handleSubmit((body) => operation.run(
-      () => api<IssuedJoinToken>('/servers/join-tokens', { method: 'POST', body }),
-      async (result) => {
-        const { id, name, expires_at } = result
-        await client.cancelQueries({ queryKey: tokenKey })
-        client.setQueryData<JoinToken[]>(tokenKey, (current) => [{ id, name, expires_at }, ...(current ?? [])])
-        setIssued(result)
-        form.reset()
-        await client.invalidateQueries({ queryKey: tokenKey })
-      },
-    ))}>
-      <Field label={t.servers.name} error={form.formState.errors.name?.message} disabled={operation.pending} {...form.register('name')} />
-      {operation.error != null && <ErrorNotice error={operation.error} />}
-      <Submit pending={operation.pending} label={t.servers.generate} />
-    </form>
-    {issued && active.some((token) => token.id === issued.id) &&
-      <CopyField key={issued.id} label={t.servers.command} value={joinCommand(issued)} />}
-    <div className="space-y-2 border-t pt-4">
-      <h2 className="text-sm font-medium">{t.servers.activeTokens}</h2>
-      {tokens.isPending ? <Loading /> : tokens.isError ? <ErrorNotice error={tokens.error} retry={() => { void tokens.refetch() }} />
-        : active.length === 0 ? <p className="text-sm text-muted-foreground">{t.servers.noTokens}</p>
-          : <ul className="divide-y">
-            {active.map((token) => <li key={token.id} className="flex flex-wrap items-center justify-between gap-3 py-2">
-              <div className="min-w-0">
-                <p className="text-sm font-medium">{token.name}</p>
-                <p className="text-xs text-muted-foreground">{t.servers.expires} {new Date(token.expires_at * 1000).toLocaleString('zh-CN')}</p>
-              </div>
-              <Button type="button" size="sm" variant="outline" disabled={revoke.pending} aria-label={`${t.servers.revoke} ${token.name}`} onClick={() => {
-                void revoke.run(() => api<void>(`/servers/join-tokens/${token.id}`, { method: 'DELETE' }), async () => {
-                  if (issued?.id === token.id) setIssued(null)
-                  await client.cancelQueries({ queryKey: tokenKey })
-                  client.setQueryData<JoinToken[]>(tokenKey, (current) => current?.filter((row) => row.id !== token.id))
-                  await client.invalidateQueries({ queryKey: tokenKey })
-                })
-              }}>{t.servers.revoke}</Button>
-            </li>)}
-          </ul>}
-      {revoke.error != null && <ErrorNotice error={revoke.error} />}
-    </div>
-  </Panel>
+function ServerDetails({ server, multiple, masterVersion, now }: { server: Server; multiple: boolean; masterVersion?: string; now: number }) {
+  const lastSeen = server.last_seen_at
+  return <>
+    <dl className="grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm [&>dt]:text-muted-foreground">
+      <dt>{t.servers.address}</dt><dd>{server.public_host || t.common.unknown}</dd>
+      <dt>{t.servers.status}</dt><dd>{multiple
+        ? <Badge variant="outline" className={statusColors[server.status]}>{t.servers.statuses[server.status]}</Badge>
+        : t.servers.statuses[server.status]}</dd>
+      <dt>{t.servers.version}</dt><dd>{server.version || t.common.unknown}</dd>
+      {multiple && server.inbound_counts && <>
+        <dt>{t.servers.inboundCounts}</dt><dd>{server.inbound_counts.ready} / {server.inbound_counts.pending}</dd>
+      </>}
+      {!server.is_local && <>
+        {server.sync_status && <>
+          <dt>{t.servers.sync}</dt>
+          <dd>{server.sync_status === 'failed' ? <Badge variant="outline" className={failed}>{t.servers.syncStatuses.failed}</Badge>
+            : server.sync_status === 'syncing' && server.status !== 'online' ? t.servers.syncWaitingOnline
+              : t.servers.syncStatuses[server.sync_status]}</dd>
+          <dt>{t.servers.generations}</dt><dd>{server.applied_generation} / {server.desired_generation}</dd>
+        </>}
+        {server.singbox_active !== undefined && <>
+          <dt>{t.servers.core}</dt><dd>{server.singbox_active ? t.servers.coreActive : t.servers.coreInactive}</dd>
+        </>}
+        <dt>{t.servers.lastSeen}</dt><dd>{lastSeen === null ? t.servers.noHeartbeat
+          : <time dateTime={new Date(lastSeen * 1000).toISOString()} title={expiry(lastSeen)}>{relativeTime(lastSeen, now)}</time>}</dd>
+        {server.uptime !== undefined && <>
+          <dt>{t.servers.uptime}</dt><dd>{server.uptime < 60 ? t.servers.uptimeSeconds(server.uptime) : duration(server.uptime)}</dd>
+        </>}
+        {server.traffic_up !== undefined && server.traffic_down !== undefined && <>
+          <dt>{t.servers.traffic}</dt><dd>{bytes(server.traffic_up)} / {bytes(server.traffic_down)}</dd>
+        </>}
+      </>}
+    </dl>
+    {!server.is_local && server.version && masterVersion && server.version !== masterVersion &&
+      <p className="text-sm text-muted-foreground">{t.servers.versionDifference(masterVersion)}</p>}
+    {server.sync_error && <p role="status" className="text-sm text-destructive">{syncErrors[server.sync_error] ?? t.servers.syncErrors.apply_failed}</p>}
+    {!server.is_local && <p className="text-xs text-muted-foreground">{t.servers.keyRefresh}</p>}
+  </>
 }
 
 export function ServersPage() {
@@ -131,38 +120,26 @@ export function ServersPage() {
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<number | null>(null)
   const [removing, setRemoving] = useState<Server | null>(null)
+  const servers = query.data ?? []
+  const multiple = servers.length > 1
+  const masterVersion = servers.find((server) => server.is_local)?.version
   return <Page title={t.pages.servers} actions={<Button aria-expanded={adding} onClick={() => setAdding(!adding)}>{adding ? t.servers.closeAdd : t.servers.add}</Button>}>
-    {adding && <JoinForm />}
+    {adding && <JoinWizard />}
     {query.isPending ? <Loading /> : query.isError ? <ErrorNotice error={query.error} retry={() => { void query.refetch() }} />
-      : query.data.length === 0 ? <Empty>{t.servers.empty}</Empty> : <div className="grid min-w-0 gap-4 lg:grid-cols-2">
-        {query.data.map((server) => <Panel key={server.id} title={server.name}>
-          <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
-            <dt className="text-muted-foreground">{t.servers.address}</dt><dd>{server.public_host || t.common.unknown}</dd>
-            <dt className="text-muted-foreground">{t.servers.status}</dt><dd>{t.servers.statuses[server.status]}</dd>
-            <dt className="text-muted-foreground">{t.servers.version}</dt><dd>{server.version || t.common.unknown}</dd>
-            {!server.is_local && <>
-              {server.sync_status && <>
-                <dt className="text-muted-foreground">{t.servers.sync}</dt><dd>{t.servers.syncStatuses[server.sync_status]}</dd>
-                <dt className="text-muted-foreground">{t.servers.generations}</dt><dd>{server.applied_generation} / {server.desired_generation}</dd>
-              </>}
-              {server.singbox_active !== undefined && <>
-                <dt className="text-muted-foreground">{t.servers.core}</dt><dd>{server.singbox_active ? t.servers.coreActive : t.servers.coreInactive}</dd>
-              </>}
-              <dt className="text-muted-foreground">{t.servers.lastSeen}</dt><dd>{server.last_seen_at === null ? t.servers.noHeartbeat : new Date(server.last_seen_at * 1000).toLocaleString('zh-CN')}</dd>
-              {server.traffic_up !== undefined && server.traffic_down !== undefined && <>
-                <dt className="text-muted-foreground">{t.servers.traffic}</dt><dd>{bytes(server.traffic_up)} / {bytes(server.traffic_down)}</dd>
-              </>}
-            </>}
-          </dl>
-          {server.sync_error && <p role="status" className="text-sm text-destructive">{syncErrors[server.sync_error] ?? t.servers.syncErrors.apply_failed}</p>}
-          {!server.is_local && <p className="text-xs text-muted-foreground">{t.servers.keyRefresh}</p>}
+      : servers.length === 0 ? <Empty>{t.servers.empty}</Empty> : <>
+        {multiple && <ServerOverview servers={servers} />}
+        <div className="grid min-w-0 gap-4 lg:grid-cols-2">
+        {servers.map((server) => <Panel key={server.id} title={server.name}>
+          <ServerDetails server={server} multiple={multiple} masterVersion={masterVersion} now={query.dataUpdatedAt} />
           {editing === server.id ? <EditServerForm server={server} close={() => setEditing(null)} />
             : <div className="flex flex-wrap gap-2">
+              {multiple && <Button variant="outline" asChild><Link to={`/inbounds?server=${server.id}`}>{t.servers.viewInbounds}</Link></Button>}
               <Button variant="outline" disabled={editing !== null} onClick={() => setEditing(server.id)}>{server.is_local ? t.servers.rename : t.common.edit}</Button>
               {!server.is_local && <Button variant="outline" disabled={editing !== null} onClick={() => { operation.reset(); setRemoving(server) }}>{t.servers.remove}</Button>}
             </div>}
         </Panel>)}
-      </div>}
+        </div>
+      </>}
     {removing && <Confirm open onOpenChange={(open) => { if (!open) setRemoving(null) }}
       title={t.servers.remove} description={t.servers.removeHint(removing.name)} pending={operation.pending} error={operation.error} onConfirm={() => {
         void operation.run(() => api<void>(`/servers/${removing.id}`, { method: 'DELETE' }), async () => {

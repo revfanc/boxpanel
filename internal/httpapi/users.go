@@ -12,6 +12,7 @@ import (
 
 	"github.com/revfanc/boxpanel/internal/auth"
 	"github.com/revfanc/boxpanel/internal/db"
+	"github.com/revfanc/boxpanel/internal/traffic"
 )
 
 type userView struct {
@@ -28,6 +29,14 @@ type userView struct {
 	Remark          string `json:"remark"`
 	CreatedAt       int64  `json:"created_at"`
 	Status          string `json:"status"`
+}
+
+type userServerTraffic struct {
+	ServerID int64  `json:"server_id"`
+	Name     string `json:"name"`
+	IsLocal  bool   `json:"is_local"`
+	Up       int64  `json:"up"`
+	Down     int64  `json:"down"`
 }
 
 type rowScanner interface{ Scan(...any) error }
@@ -100,12 +109,62 @@ func (a *api) userGet(w http.ResponseWriter, r *http.Request) {
 		a.resourceError(w, err)
 		return
 	}
-	u, err := readUser(r.Context(), conn, id)
+	ctx := r.Context()
+	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		a.resourceError(w, fmt.Errorf("begin user detail: %w", err))
+		return
+	}
+	defer tx.Rollback()
+	u, err := readUser(ctx, tx, id)
 	if err != nil {
 		a.resourceError(w, err)
 		return
 	}
-	writeJSON(w, 200, u)
+	byServer, err := readUserServerTraffic(ctx, tx, u)
+	if err != nil {
+		a.resourceError(w, err)
+		return
+	}
+	writeJSON(w, 200, struct {
+		userView
+		TrafficByServer []userServerTraffic `json:"traffic_by_server,omitempty"`
+	}{u, byServer})
+}
+
+func readUserServerTraffic(ctx context.Context, tx *sql.Tx, u userView) ([]userServerTraffic, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT s.id,s.name,s.is_local,coalesce(t.cycle_up,0),coalesce(t.cycle_down,0)
+		FROM servers s CROSS JOIN users u
+		LEFT JOIN server_user_traffic t ON t.server_id=s.id AND t.user_id=u.id AND t.user_epoch=u.traffic_epoch
+		WHERE u.id=? AND s.status<>'removed' ORDER BY s.is_local DESC,s.id`, u.ID)
+	if err != nil {
+		return nil, fmt.Errorf("read user traffic by server: %w", err)
+	}
+	defer rows.Close()
+	var result []userServerTraffic
+	var remoteUp, remoteDown int64
+	for rows.Next() {
+		var row userServerTraffic
+		if err := rows.Scan(&row.ServerID, &row.Name, &row.IsLocal, &row.Up, &row.Down); err != nil {
+			return nil, fmt.Errorf("scan user traffic by server: %w", err)
+		}
+		if !row.IsLocal {
+			remoteUp = traffic.AddBytes(remoteUp, row.Up)
+			remoteDown = traffic.AddBytes(remoteDown, row.Down)
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list user traffic by server: %w", err)
+	}
+	if len(result) < 2 {
+		return nil, nil
+	}
+	if result[0].IsLocal {
+		result[0].Up = max(0, u.TrafficUp-remoteUp)
+		result[0].Down = max(0, u.TrafficDown-remoteDown)
+	}
+	return result, nil
 }
 
 type userInput struct {
