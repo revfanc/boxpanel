@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -153,10 +154,17 @@ func serveAgent(ctx context.Context, conn *sql.DB, opts serveOptions, logger *sl
 	}
 	workerCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	node := agent.Node{Reader: reader, Writer: conn, Master: master, Key: key, Client: client, Manager: manager, Logger: logger}
 	if !opts.dev && runtime.GOOS == "linux" {
 		native := host.Native{}
 		network := alerts.New(conn, reader, alerts.Options{Network: &alerts.Network{Files: native, Runner: native}, Logger: logger})
-		scheduler := traffic.NewScheduler(traffic.NewCollector(conn, reader, nil), nil, nil, logger)
+		bootData, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+		bootID := strings.TrimSpace(string(bootData))
+		if err != nil || bootID == "" {
+			logger.Warn("无法读取系统启动编号；请检查节点的 /proc 挂载，进程重启期间的内核用量可能无法补报。")
+		}
+		node.Accounting = traffic.NewNodeCollector(conn, reader, nil, bootID)
+		scheduler := traffic.NewScheduler(node.Accounting, nil, nil, logger)
 		netDone, trafficDone := make(chan struct{}), make(chan struct{})
 		go func() { defer close(netDone); network.RunTraffic(workerCtx) }()
 		go func() { defer close(trafficDone); scheduler.RunAccounting(workerCtx) }()
@@ -164,7 +172,6 @@ func serveAgent(ctx context.Context, conn *sql.DB, opts serveOptions, logger *sl
 	}
 	logger.Info("已启动节点模式", "server_id", master.ServerID)
 	started := time.Now()
-	node := agent.Node{Reader: reader, Master: master, Key: key, Client: client, Manager: manager}
 	send := func(ctx context.Context) error {
 		active := func() bool { return !opts.dev && manager.CoreActive(ctx) }
 		return node.Sync(ctx, agent.Heartbeat{

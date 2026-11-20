@@ -588,7 +588,9 @@ input 按 ct mark + reply 方向统计下载；两条 filter 链的 mangle 优�
 不使用只处理首包的 NAT 链。独立命名计数器在用户集合变化时保留交集、不清零；
 规则引用一次原子替换，启停/恢复/pending/卸载复用现有 Firewall.Sync。
 语法依据 [nftables 官方手册](https://www.netfilter.org/projects/nftables/manpage.html)。
-口径、重置基线、10 秒采集/60 秒落库及边界见 SPEC §14。
+主控每 10 秒采样、60 秒落库。节点使用相同 nft 规则，每 10 秒采样、30 秒落库并随心跳上报累计值。
+节点的用户集合由主控总量决定，跨配额边界和月度恢复都通过期望状态同步，复用标准 Apply 流程。
+内核基线、离线补报和重置归属见 SPEC §14、§19。
 
 服务端 golden 包含 Linux marks。macOS 的锁定内核连 check 也会拒绝 marks，
 测试先断言这个平台限制，再仅从临时校验副本去掉 routing_mark、校验其他字段；

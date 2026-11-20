@@ -4,6 +4,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"net/url"
@@ -13,6 +14,16 @@ import (
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )
+
+// Commit discards a pinned connection on commit failure. SQLite can leave an
+// open transaction even after database/sql marks it done.
+func Commit(conn *sql.Conn, tx *sql.Tx) error {
+	err := tx.Commit()
+	if err != nil {
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+	}
+	return err
+}
 
 // Open opens a filesystem database and applies all pending migrations. The parent
 // directory must already exist. The caller owns the returned DB and must close it.

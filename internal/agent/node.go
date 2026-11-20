@@ -6,10 +6,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/revfanc/boxpanel/internal/db"
 	"github.com/revfanc/boxpanel/internal/singbox"
+	"github.com/revfanc/boxpanel/internal/traffic"
 )
 
 type NodeManager interface {
@@ -18,19 +21,31 @@ type NodeManager interface {
 }
 
 type Node struct {
-	Reader  *sql.DB
-	Master  db.AgentConnection
-	Key     ed25519.PrivateKey
-	Client  *Client
-	Manager NodeManager
+	Reader     *sql.DB
+	Writer     *sql.DB
+	Master     db.AgentConnection
+	Key        ed25519.PrivateKey
+	Client     *Client
+	Manager    NodeManager
+	Accounting *traffic.Collector
+	Logger     *slog.Logger
 
-	syncError string
-	published map[int64]InboundKeys
+	syncError       string
+	published       map[int64]InboundKeys
+	reportedTraffic map[int64]TrafficCounter
 }
 
 // Sync is called serially by the heartbeat loop. An unreachable master leaves
 // the last committed configuration and credentials in service.
 func (n *Node) Sync(ctx context.Context, beat Heartbeat, coreActive func() bool) error {
+	// Upload before asking for the generation so a quota crossing can be
+	// applied on this heartbeat. Upload failure must not block a policy sync.
+	uploadCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	trafficErr := n.reportTraffic(uploadCtx)
+	cancel()
+	if trafficErr != nil && ctx.Err() == nil && n.Logger != nil {
+		n.Logger.Warn("节点流量暂未获主控确认，将自动重试。请检查主控版本、连接与节点数据库。")
+	}
 	applied, err := db.GetSetting(ctx, n.Reader, db.AgentAppliedGeneration)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
@@ -52,9 +67,15 @@ func (n *Node) Sync(ctx context.Context, beat Heartbeat, coreActive func() bool)
 		if err != nil {
 			return err
 		}
-		if err := n.Manager.Apply(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		mutation := func(ctx context.Context, tx *sql.Tx) error {
 			return n.replaceMirror(ctx, tx, desired)
-		}); err != nil {
+		}
+		if n.Accounting != nil {
+			err = n.Accounting.ApplyMirror(ctx, n.Manager, mutation)
+		} else {
+			err = n.Manager.Apply(ctx, mutation)
+		}
+		if err != nil {
 			n.syncError = syncErrorCode(err)
 			return n.report(ctx, beat, coreActive)
 		}

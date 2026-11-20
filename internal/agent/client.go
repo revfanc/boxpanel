@@ -193,6 +193,18 @@ func (c *Client) PublishKeys(ctx context.Context, id int64, key ed25519.PrivateK
 	return nodeResponse(resp, http.StatusNoContent)
 }
 
+func (c *Client) ReportTraffic(ctx context.Context, id int64, key ed25519.PrivateKey, report TrafficReport) error {
+	resp, err := c.post(ctx, "/traffic", report, id, key)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	return nodeResponse(resp, http.StatusNoContent)
+}
+
 func nodeResponse(resp *http.Response, want int) error {
 	switch resp.StatusCode {
 	case want:

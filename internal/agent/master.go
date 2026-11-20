@@ -40,6 +40,10 @@ type nonceEntry struct {
 }
 
 type Master struct {
+	// OnStopped records a quota stop for a user with no local configuration
+	// to apply. It shares the transaction and deduplication with local stops.
+	OnStopped      func(context.Context, *sql.Tx, int64, string, time.Time) error
+	Logger         *slog.Logger
 	writer, reader *sql.DB
 	now            func() time.Time
 	mu             sync.Mutex
@@ -56,7 +60,7 @@ func NewMaster(writer, reader *sql.DB, now func() time.Time) *Master {
 	if now == nil {
 		now = time.Now
 	}
-	return &Master{writer: writer, reader: reader, now: now, joins: make(map[string][]time.Time), nonces: make(map[nonceKey]struct{})}
+	return &Master{writer: writer, reader: reader, now: now, Logger: slog.Default(), joins: make(map[string][]time.Time), nonces: make(map[nonceKey]struct{})}
 }
 
 func (m *Master) AllowJoin(peer string) (bool, int) {

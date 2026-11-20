@@ -211,8 +211,8 @@ func (r eventRecorder) recordUserUsage(ctx context.Context, u userUsage) error {
 	return err
 }
 
-// UserStopped runs inside the scheduler's Apply transaction. A failed apply
-// rolls back the event and its outbox rows with the rest of the mutation.
+// UserStopped runs in the local Apply or remote quota transition transaction.
+// It records the same event and outbox rows for both paths.
 func (s *Service) UserStopped(ctx context.Context, tx *sql.Tx, id int64, why string, now time.Time) error {
 	r, err := recorder(ctx, tx, now)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ func (a *api) agentEndpoints() http.Handler {
 	routes := map[string]string{
 		agent.Prefix + "/join": http.MethodPost, agent.Prefix + "/heartbeat": http.MethodPost,
 		agent.Prefix + "/desired": http.MethodGet, agent.Prefix + "/inbound-keys": http.MethodPost,
+		agent.TrafficPath: http.MethodPost,
 	}
 	return middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method, ok := routes[r.URL.Path]
@@ -80,8 +82,16 @@ func (a *api) agentJoin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) agentAuthenticated(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 8*1024))
+	limit := int64(8 * 1024)
+	if r.URL.Path == agent.TrafficPath {
+		limit = agent.MaxTrafficBody
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {
+		if _, tooLarge := err.(*http.MaxBytesError); r.URL.Path == agent.TrafficPath && tooLarge {
+			writeError(w, 413, "invalid_argument", "节点流量上报超过大小限制", "请将每批流量上报拆分至 1 MiB 以内后重试。")
+			return
+		}
 		a.rejectAgent(w, false)
 		return
 	}
@@ -97,6 +107,18 @@ func (a *api) agentAuthenticated(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	switch r.URL.Path {
+	case agent.TrafficPath:
+		media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		var report agent.TrafficReport
+		if err != nil || media != "application/json" || strictObject(body, &report) != nil {
+			a.agentOperationError(w, agent.ErrInvalidTraffic)
+			return
+		}
+		if err := a.opts.Agents.RecordTraffic(r.Context(), identity, report); err != nil {
+			a.agentOperationError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	case agent.Prefix + "/desired":
 		if len(body) != 0 {
 			a.rejectAgent(w, false)
@@ -149,6 +171,8 @@ func (a *api) agentOperationError(w http.ResponseWriter, err error) {
 		writeError(w, 409, "stale_inbound_keys", "入站密钥版本已变更", "请等待节点重新拉取配置后自动重试。")
 	case agent.ErrInvalidKeys:
 		writeError(w, 400, "invalid_inbound_keys", "入站公开材料无效", "请检查节点时间和证书，或更新节点版本后重试。")
+	case agent.ErrInvalidTraffic:
+		writeError(w, 400, "invalid_argument", "节点流量上报内容无效", "请检查节点版本；每批最多上报 10000 个用户，每个用户只能出现一次。")
 	default:
 		a.resourceError(w, err)
 	}
