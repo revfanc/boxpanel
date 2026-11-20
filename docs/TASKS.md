@@ -1092,9 +1092,14 @@ host 变化后回退密钥 SPKI 不变；系统 CA 分支拒绝主机名不匹�
     订阅、失败回滚、无变化免重启及离线保留。节点保留流量采样，跳过本地停用调度。
   - [x] 面板支持创建和编辑时选服务器、显示同步状态与版本、编辑远端公网地址。新增前端组件测试。
   - [x] `make lint`、`make build` 和单机配置/订阅 golden 通过。SPEC、API、FRONTEND、CONFIG、INSTALL 已同步。
-  - [ ] 完整 `make test`。已执行，两项原有 `internal/e2e` 测试启动 sing-box 时触发 macOS 沙箱 DNS 通知 `status 9`。
-    安装脚本、其余 Go 包、前端类型检查、lint 和 134 项 Vitest 测试通过。
-  - [ ] LXD 实机生效耗时、端口映射和客户端连通。
+  - [x] 完整 `make lint test build`（审查者在沙箱外复跑）：含 `internal/e2e`、134 项 Vitest，CI ubuntu/macos 均通过。
+  - [x] LXD 实机（2026-11-19，主控 HK VPS v0.5.0-test6，节点 bp-node1 容器，LXD proxy 映射 20443/tcp、28443/udp）：
+    - 为「测试节点2」建 Reality 20443 与 Hysteria2 28443（与面板创建等价的入库 + generation 递增）；
+      节点在一个心跳周期内 applied=desired=2，sing-box 监听两端口。
+    - 主控库中 Reality 仅有公钥与 short_id（private_key 为空），Hysteria2 仅有证书与指纹；私钥只在节点。
+    - 订阅同时包含本机两节点与 85.189.54.156:20443/28443，公钥/指纹与节点上报一致。
+    - 用订阅参数起 sing-box 客户端：Reality、Hysteria2 均出口 85.189.54.156，10 MB 下载约 18 MB/s。
+    - 停用用户 14 s 后节点移除该用户、连接失败；重新启用 22 s 后恢复（gen 4/4），均在 30 s 内。
 
 ## M7 后续增强（MVP 之后，按需排期）
 
