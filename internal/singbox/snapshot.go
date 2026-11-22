@@ -55,18 +55,24 @@ func snapshot(ctx context.Context, tx *sql.Tx) (confgen.Snapshot, []string, erro
 	if err != nil {
 		return s, nil, fmt.Errorf("read inbounds: %w", err)
 	}
-	rows, err = tx.QueryContext(ctx, "SELECT id,name,uuid,password,enabled,traffic_limit,traffic_up,traffic_down,expire_at,sub_token FROM users ORDER BY id")
+	// Users without access to this server stay out of its config; their
+	// credentials are still redacted from diagnostics.
+	rows, err = tx.QueryContext(ctx, "SELECT id,name,uuid,password,enabled,traffic_limit,traffic_up,traffic_down,expire_at,sub_token,"+
+		db.UserServerAccess+" FROM users ORDER BY id", s.ServerID)
 	if err != nil {
 		return s, nil, fmt.Errorf("read users: %w", err)
 	}
 	for rows.Next() {
 		var u confgen.User
 		var token string
-		if err := rows.Scan(&u.ID, &u.Name, &u.UUID, &u.Password, &u.Enabled, &u.TrafficLimit, &u.TrafficUp, &u.TrafficDown, &u.ExpireAt, &token); err != nil {
+		var allowed bool
+		if err := rows.Scan(&u.ID, &u.Name, &u.UUID, &u.Password, &u.Enabled, &u.TrafficLimit, &u.TrafficUp, &u.TrafficDown, &u.ExpireAt, &token, &allowed); err != nil {
 			rows.Close()
 			return s, nil, fmt.Errorf("scan user: %w", err)
 		}
-		s.Users = append(s.Users, u)
+		if allowed {
+			s.Users = append(s.Users, u)
+		}
 		secrets = append(secrets, u.UUID, u.Password, token)
 	}
 	err = rows.Err()

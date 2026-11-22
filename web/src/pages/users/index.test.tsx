@@ -1,7 +1,7 @@
 import { act, screen, waitFor, within } from '@testing-library/react'
 import { expect, it } from 'vitest'
 import { UsersPage } from '.'
-import { deferred, failure, mockAPI, mountPage, proxyUser } from '@/test/resources'
+import { deferred, failure, mockAPI, mountPage, proxyUser, server } from '@/test/resources'
 import { zhCN as t } from '@/i18n/zh-CN'
 
 it('loads and recovers to an empty state, then creates a user with bytes and Unix seconds', async () => {
@@ -30,7 +30,28 @@ it('loads and recovers to an empty state, then creates a user with bytes and Uni
   expect(screen.getByText('alice')).toBeVisible()
   expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuemax', '100')
   const body = JSON.parse(String(fetch.mock.calls.find(([, init]) => init?.method === 'POST')?.[1]?.body))
-  expect(body).toEqual({ name: 'alice', remark: '', traffic_reset_day: 16, traffic_limit: 1610612736, expire_at: 0 })
+  expect(body).toEqual({ name: 'alice', remark: '', traffic_reset_day: 16, traffic_limit: 1610612736, expire_at: 0, all_servers: true })
+  expect(screen.queryByText(t.users.servers)).not.toBeInTheDocument()
+})
+it('limits a user to selected servers and requires at least one', async () => {
+  const edge = { ...server, id: 2, name: 'edge', public_host: 'edge.example', is_local: false, status: 'online' as const }
+  let users = [proxyUser]
+  const fetch = mockAPI({ '/servers': () => Response.json([server, edge]), '/users': () => Response.json(users),
+    'PUT /users/1': (init) => { users = [{ ...proxyUser, ...JSON.parse(String(init.body)) }]; return Response.json(users[0]) } })
+  const { user } = mountPage(<UsersPage />)
+  await user.click(await screen.findByRole('button', { name: t.common.edit }))
+  const dialog = screen.getByRole('dialog')
+  const all = await within(dialog).findByRole('checkbox', { name: t.users.allServers })
+  expect(all).toBeChecked()
+  await user.click(all)
+  await user.click(within(dialog).getByRole('button', { name: t.common.save }))
+  expect(await within(dialog).findByText(t.users.serversRequired)).toBeVisible()
+  await user.click(within(dialog).getByRole('checkbox', { name: 'edge · edge.example' }))
+  await user.click(within(dialog).getByRole('button', { name: t.common.save }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  const body = JSON.parse(String(fetch.mock.calls.find(([, init]) => init?.method === 'PUT')?.[1]?.body))
+  expect(body).toMatchObject({ all_servers: false, server_ids: [2] })
+  expect(await screen.findByText(`${t.users.servers}: ${t.users.serverAccess(1)}`)).toBeVisible()
 })
 it('edits with pending/error states and confirms user deletion before invalidating the list', async () => {
   let users = [proxyUser]

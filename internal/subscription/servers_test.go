@@ -111,6 +111,46 @@ func TestMultiServerSubscription(t *testing.T) {
 
 }
 
+func TestSubscriptionFollowsUserServerAccess(t *testing.T) {
+	_, store := publicFixture(t)
+	run := func(query string, args ...any) {
+		t.Helper()
+		if _, err := store.DB.Exec(query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run("INSERT INTO servers(id,name,public_host,status) VALUES(2,'Edge','edge.example','online'),(3,'West','west.example','online')")
+	run(`INSERT INTO inbounds(id,server_id,tag,protocol,port,options,created_at,updated_at,agent_keys_ready)
+		SELECT ?,?,?,protocol,port,json_remove(options,'$.private_key'),0,0,1 FROM inbounds WHERE id=1`, 2, 2, "edge")
+	run(`INSERT INTO inbounds(id,server_id,tag,protocol,port,options,created_at,updated_at,agent_keys_ready)
+		SELECT ?,?,?,protocol,port,json_remove(options,'$.private_key'),0,0,1 FROM inbounds WHERE id=1`, 3, 3, "west")
+	hosts := func() []string {
+		t.Helper()
+		d, err := store.Load(t.Context(), 1, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, n := range d.Nodes {
+			got = append(got, n.Host)
+		}
+		return got
+	}
+	all := hosts()
+	if len(all) != 3 {
+		t.Fatalf("every-server user sees %v", all)
+	}
+	run("UPDATE users SET all_servers=0 WHERE id=1")
+	run("INSERT INTO user_servers(user_id,server_id) VALUES(1,3)")
+	if got := hosts(); !slices.Equal(got, []string{"west.example"}) {
+		t.Fatalf("west-only user sees %v", got)
+	}
+	run("INSERT INTO user_servers(user_id,server_id) VALUES(1,1)")
+	if got := hosts(); !slices.Equal(got, []string{all[0], "west.example"}) {
+		t.Fatalf("local+west user sees %v", got)
+	}
+}
+
 func TestSubscriptionServerOrderAndStableNames(t *testing.T) {
 	_, store := publicFixture(t)
 	run := func(query string, args ...any) {

@@ -147,9 +147,12 @@ func (s *Store) Load(ctx context.Context, id int64, token *string) (Data, error)
 	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM servers WHERE status<>'removed'").Scan(&serverCount); err != nil {
 		return d, fmt.Errorf("count subscription servers: %w", err)
 	}
+	// Only servers the user may use; see db.UserServerAccess.
 	rows, err := tx.QueryContext(ctx, `SELECT i.id,i.remark,i.protocol,i.port,i.options,s.public_host,s.name,s.is_local,s.id
-		FROM inbounds i JOIN servers s ON s.id=i.server_id WHERE i.enabled=1 AND s.status<>'removed' AND (s.is_local=1 OR i.agent_keys_ready=1)
-		ORDER BY s.is_local DESC,s.id,i.id`)
+		FROM inbounds i JOIN servers s ON s.id=i.server_id JOIN users u ON u.id=?
+		WHERE i.enabled=1 AND s.status<>'removed' AND (s.is_local=1 OR i.agent_keys_ready=1)
+		AND (u.all_servers=1 OR EXISTS (SELECT 1 FROM user_servers us WHERE us.user_id=u.id AND us.server_id=s.id))
+		ORDER BY s.is_local DESC,s.id,i.id`, u.ID)
 	if err != nil {
 		return d, fmt.Errorf("read subscription inbounds: %w", err)
 	}

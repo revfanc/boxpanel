@@ -155,11 +155,20 @@ CREATE TABLE users (
   traffic_epoch INTEGER NOT NULL DEFAULT 0,     -- 内部采集代号，不出 API
   expire_at INTEGER NOT NULL DEFAULT 0,       -- unix 秒，0=永不
   remark TEXT NOT NULL DEFAULT '',
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  all_servers INTEGER NOT NULL DEFAULT 1      -- T9.2：1=全部服务器（含以后新增），0=仅 user_servers
+);
+
+CREATE TABLE user_servers (                   -- T9.2，仅 all_servers=0 的用户有行
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  server_id INTEGER NOT NULL REFERENCES servers(id),
+  PRIMARY KEY (user_id, server_id)
 );
 ```
 
-启用的用户在所有服务器共享。每台服务器仅生成属于自己的启用入站。超额或过期的用户从配置中剔除。
+启用的用户默认在所有服务器共享；`all_servers=0` 的用户只用于 `user_servers` 中的服务器（T9.2）。每台服务器仅生成属于自己的启用入站，
+并只包含可用该服务器的用户：主控本机生成配置与下发远端期望状态都按服务器过滤，节点镜像收到的就是过滤后的用户（协议不变）。
+超额或过期的用户从配置中剔除。用户订阅只含其可用服务器上的节点。
 
 ### T1.1 存储约定
 

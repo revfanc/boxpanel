@@ -53,7 +53,8 @@ func legacySnapshot(t *testing.T, source *sql.DB, version int) []byte {
 	if version == 1 {
 		exec(`INSERT INTO users SELECT id,name,uuid,password,sub_token,enabled,traffic_limit,traffic_up,traffic_down,expire_at,remark,created_at FROM src.users`)
 	} else {
-		exec(`INSERT INTO users SELECT * FROM src.users;
+		exec(`INSERT INTO users SELECT id,name,uuid,password,sub_token,enabled,traffic_limit,traffic_up,traffic_down,expire_at,remark,created_at,
+				traffic_reset_day,traffic_reset_at,traffic_epoch,alert_identity FROM src.users;
 			INSERT INTO settings SELECT 'alert_preferences', alert_preferences FROM src.servers WHERE is_local=1;`)
 	}
 	if err := legacy.Close(); err != nil {

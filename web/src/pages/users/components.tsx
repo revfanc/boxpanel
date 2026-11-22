@@ -1,20 +1,22 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { useForm, useWatch } from 'react-hook-form'
+import { Controller, useForm, useWatch, type Control } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger } from '@/components/ui/dialog'
 import { Field, Submit, Confirm } from '@/components/ResourceUI'
 import { ErrorNotice } from '@/components/Feedback'
 import { useOperation } from '@/hooks/use-operation'
 import { api } from '@/lib/api'
-import { refreshResources } from '@/lib/resources'
+import { refreshResources, serversQuery } from '@/lib/resources'
 import { bytes, expiry } from '@/lib/format'
 import { userSchema, userDefaults, userBody, type UserFormValues } from '@/schemas/user'
-import type { User } from '@/types/api'
+import type { Server, User } from '@/types/api'
 import { zhCN as t } from '@/i18n/zh-CN'
 
 function userEligible(user: User, now: number) {
@@ -32,6 +34,7 @@ export function UserUsage({ user }: { user: User }) {
     <p className="text-muted-foreground">{t.users.usageHint}</p>
     <Progress value={percent} aria-label={t.users.usage} aria-valuenow={percent} aria-valuetext={usage} />
     <p className="text-muted-foreground">{t.users.expire}: {expiry(user.expire_at)}</p>
+    {!user.all_servers && <p>{t.users.servers}: {t.users.serverAccess(user.server_ids.length)}</p>}
     <p>{t.users.resetDay}: {user.traffic_reset_day ? t.users.resetOnDay(user.traffic_reset_day) : t.users.resetDisabled}</p>
     {user.traffic_reset_at > 0 && <p>{t.users.resetAt}: {new Date(user.traffic_reset_at * 1000).toISOString()}</p>}
   </div>
@@ -47,13 +50,20 @@ export function UserForm({ user, close, setBusy, onSaved, defaultName, submitLab
   const [now] = useState(() => Math.floor(Date.now() / 1000))
   const active = user ? userEligible(user, now) : false
   const nextActive = user && next ? userEligible({ ...user, ...next }, now) : active
-  const changesConfig = !user || active !== nextActive || (active && next?.name !== undefined && next.name !== user.name)
+  const servers = useQuery(serversQuery).data ?? []
+  const accessChanged = !!user && !!next && (next.all_servers !== user.all_servers ||
+    !next.all_servers && !sameIDs(next.server_ids ?? [], user.server_ids))
+  const changesConfig = !user || active !== nextActive || (active && (accessChanged || next?.name !== undefined && next.name !== user.name))
   const operation = useOperation()
   const client = useQueryClient()
   const errors = form.formState.errors
+  // The choice only matters with several servers, but a narrowed user must be able to go back.
+  const showAccess = servers.length > 1 || (user ? !user.all_servers : false)
   return <form className="min-w-0 space-y-4" noValidate onSubmit={form.handleSubmit((values) => {
     setBusy?.(true)
-    void operation.run(() => api<User>(user ? `/users/${user.id}` : '/users', { method: user ? 'PUT' : 'POST', body: userBody(values) }), async (saved) => { await refreshResources(client); if (onSaved) await onSaved(saved); else close?.() }).finally(() => setBusy?.(false))
+    const known = new Set(servers.map((server) => server.id))
+    const body = userBody(servers.length ? { ...values, server_ids: values.server_ids.filter((id) => known.has(id)) } : values)
+    void operation.run(() => api<User>(user ? `/users/${user.id}` : '/users', { method: user ? 'PUT' : 'POST', body }), async (saved) => { await refreshResources(client); if (onSaved) await onSaved(saved); else close?.() }).finally(() => setBusy?.(false))
   })}>
     <fieldset disabled={operation.pending} className="min-w-0 space-y-4">
       <Field label={t.users.name} {...form.register('name')} error={errors.name?.message} />
@@ -61,12 +71,43 @@ export function UserForm({ user, close, setBusy, onSaved, defaultName, submitLab
       <Field label={t.users.limit} type="number" step="any" hint={t.users.limitHint} {...form.register('limit_gib', { valueAsNumber: true })} error={errors.limit_gib?.message} />
       <Field label={t.users.expire} type="datetime-local" step="1" hint={t.users.expireHint} {...form.register('expiry')} error={errors.expiry?.message} />
       <Field label={t.users.resetDay} type="number" min="0" max="28" step="1" hint={t.users.resetDayHint} {...form.register('traffic_reset_day', { valueAsNumber: true })} error={errors.traffic_reset_day?.message} />
+      {showAccess && <ServerAccess control={form.control} servers={servers} error={errors.server_ids?.message} />}
     </fieldset>
     {changesConfig && <p className="text-sm text-muted-foreground">{t.common.applyHint}</p>}
     {operation.error != null && <ErrorNotice error={operation.error} />}
     <div className="flex flex-wrap justify-end gap-2">{close && <Button type="button" variant="outline" disabled={operation.pending} onClick={close}>{t.common.cancel}</Button>}<Submit pending={operation.pending} label={submitLabel ?? (user ? t.common.save : t.common.create)} /></div>
   </form>
 }
+function sameIDs(a: number[], b: number[]) {
+  const set = new Set(a)
+  return set.size === new Set(b).size && b.every((id) => set.has(id))
+}
+
+function ServerAccess({ control, servers, error }: { control: Control<UserFormValues>; servers: Server[]; error?: string }) {
+  const id = useId()
+  const all = useWatch({ control, name: 'all_servers' })
+  return <div role="group" aria-labelledby={`${id}-label`} className="space-y-2">
+    <p id={`${id}-label`} className="text-sm font-medium">{t.users.servers}</p>
+    <Controller name="all_servers" control={control} render={({ field }) => (
+      <Label htmlFor={`${id}-all`} className="cursor-pointer gap-3 font-normal">
+        <Checkbox id={`${id}-all`} name={field.name} checked={field.value} onCheckedChange={(checked) => field.onChange(checked === true)} onBlur={field.onBlur} ref={field.ref} />
+        <span>{t.users.allServers}</span>
+      </Label>
+    )} />
+    {!all && <Controller name="server_ids" control={control} render={({ field, fieldState }) => (
+      <div className="space-y-2 rounded-lg border p-3">
+        {servers.map((server) => <Label key={server.id} htmlFor={`${id}-${server.id}`} className="cursor-pointer gap-3 font-normal">
+          <Checkbox id={`${id}-${server.id}`} checked={field.value.includes(server.id)} aria-invalid={fieldState.invalid}
+            onCheckedChange={(checked) => field.onChange(checked === true ? [...field.value.filter((value) => value !== server.id), server.id] : field.value.filter((value) => value !== server.id))} onBlur={field.onBlur} />
+          <span className="min-w-0 break-all">{server.name}{server.is_local ? '' : ` · ${server.public_host}`}</span>
+        </Label>)}
+      </div>
+    )} />}
+    <p className="text-sm text-muted-foreground">{t.users.serversHint}</p>
+    {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+  </div>
+}
+
 export function UserEditor({ user }: { user?: User }) {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)

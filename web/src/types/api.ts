@@ -179,10 +179,12 @@ export interface User {
   remark: string
   created_at: number
   status: 'disabled' | 'expired' | 'exhausted' | 'active'
+  all_servers: boolean
+  server_ids: number[]
   traffic_by_server?: UserServerTraffic[]
 }
 export interface UserServerTraffic { server_id: number; name: string; is_local: boolean; up: number; down: number }
-export interface UserInput { name: string; remark?: string; traffic_limit?: number; expire_at?: number; traffic_reset_day?: number }
+export interface UserInput { name: string; remark?: string; traffic_limit?: number; expire_at?: number; traffic_reset_day?: number; all_servers?: boolean; server_ids?: number[] }
 export interface UserLinks {
   subscription: { auto: string; singbox: string; clash: string; base64: string }
   import: { singbox: string; clash: string }
