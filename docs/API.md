@@ -345,13 +345,20 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/users` | 列表（含流量、到期、状态） |
-| POST | `/users` | `{name, remark?, traffic_limit?, expire_at?, traffic_reset_day?}`，uuid/password/token 自动生成 |
+| POST | `/users` | `{name, remark?, traffic_limit?, expire_at?, traffic_reset_day?, all_servers?, server_ids?}`，uuid/password/token 自动生成 |
 | GET/PUT/DELETE | `/users/{id}` | |
 | POST | `/users/{id}/toggle` | `{enabled}` |
 | POST | `/users/{id}/reset-traffic` | 清零上传/下载；走 Manager.Apply，200 返回最新脱敏用户 |
 | POST | `/users/{id}/reset-token` | 重置订阅 token（旧链接立即失效） |
 | POST | `/users/{id}/reset-credentials` | 重置 uuid/password（需重新导入） |
 | GET | `/users/{id}/links` | 见下 |
+
+T9.2 可用服务器：用户响应总含 `all_servers`（布尔）与 `server_ids`（数组，`all_servers=true` 时为空，只列未移除服务器，升序）。
+`all_servers=true`（默认，升级前的用户亦然）表示全部服务器，含以后新增的服务器。POST/PUT 可带 `all_servers` 与 `server_ids`：
+只给 `server_ids` 等同 `all_servers=false`；`all_servers=false` 且省略 `server_ids` 时保留原选择；改为 true 清空选择。
+`server_ids` 至多 1000 项、须为正整数并指向未移除服务器（可为本机、在线、离线或待连接），重复项忽略；结果为空时 400
+`invalid_argument`（`field=server_ids`）。不可用的服务器不为该用户生成内核配置用户，也不出现在其订阅与 `/users/{id}/links` 中；
+修改只使受影响的远端服务器期望版本递增，生成配置不变的服务器不重启。
 
 多台未移除服务器时，`GET /users/{id}` 增加 `traffic_by_server: [{server_id, name, is_local, up, down}]`，本机在前，远端按 ID 升序。
 `up`、`down` 是当前清零周期的字节数。远端账目缺失或用户周期不匹配时返回零。

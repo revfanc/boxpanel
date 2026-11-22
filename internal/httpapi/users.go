@@ -29,6 +29,10 @@ type userView struct {
 	Remark          string `json:"remark"`
 	CreatedAt       int64  `json:"created_at"`
 	Status          string `json:"status"`
+	// AllServers includes servers added later; otherwise ServerIDs lists the
+	// non-removed servers whose config and subscription include the user.
+	AllServers bool    `json:"all_servers"`
+	ServerIDs  []int64 `json:"server_ids"`
 }
 
 type userServerTraffic struct {
@@ -43,12 +47,16 @@ type rowScanner interface{ Scan(...any) error }
 type rowReader interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
+type userReader interface {
+	rowReader
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
 
-const userColumns = "id,name,uuid,enabled,traffic_limit,traffic_up,traffic_down,expire_at,remark,created_at,traffic_reset_day,traffic_reset_at"
+const userColumns = "id,name,uuid,enabled,traffic_limit,traffic_up,traffic_down,expire_at,remark,created_at,traffic_reset_day,traffic_reset_at,all_servers"
 
 func scanUser(row rowScanner) (userView, error) {
-	var u userView
-	if err := row.Scan(&u.ID, &u.Name, &u.UUID, &u.Enabled, &u.TrafficLimit, &u.TrafficUp, &u.TrafficDown, &u.ExpireAt, &u.Remark, &u.CreatedAt, &u.TrafficResetDay, &u.TrafficResetAt); err != nil {
+	u := userView{ServerIDs: []int64{}}
+	if err := row.Scan(&u.ID, &u.Name, &u.UUID, &u.Enabled, &u.TrafficLimit, &u.TrafficUp, &u.TrafficDown, &u.ExpireAt, &u.Remark, &u.CreatedAt, &u.TrafficResetDay, &u.TrafficResetAt, &u.AllServers); err != nil {
 		return u, fmt.Errorf("read user: %w", err)
 	}
 	if len(u.UUID) > 8 {
@@ -67,8 +75,93 @@ func scanUser(row rowScanner) (userView, error) {
 	}
 	return u, nil
 }
-func readUser(ctx context.Context, q rowReader, id int64) (userView, error) {
-	return scanUser(q.QueryRowContext(ctx, "SELECT "+userColumns+" FROM users WHERE id=?", id))
+func readUser(ctx context.Context, q userReader, id int64) (userView, error) {
+	u, err := scanUser(q.QueryRowContext(ctx, "SELECT "+userColumns+" FROM users WHERE id=?", id))
+	if err != nil {
+		return u, err
+	}
+	access, err := readUserServers(ctx, q, id)
+	if ids := access[id]; ids != nil {
+		u.ServerIDs = ids
+	}
+	return u, err
+}
+
+// readUserServers maps user IDs to their selected non-removed servers; id=0
+// reads every user. Rows of users with all_servers=1 are never stored.
+func readUserServers(ctx context.Context, q userReader, id int64) (map[int64][]int64, error) {
+	rows, err := q.QueryContext(ctx, `SELECT us.user_id,us.server_id FROM user_servers us
+		JOIN servers s ON s.id=us.server_id WHERE s.status<>'removed' AND (?=0 OR us.user_id=?)
+		ORDER BY us.user_id,us.server_id`, id, id)
+	if err != nil {
+		return nil, fmt.Errorf("read user servers: %w", err)
+	}
+	defer rows.Close()
+	result := map[int64][]int64{}
+	for rows.Next() {
+		var user, server int64
+		if err := rows.Scan(&user, &server); err != nil {
+			return nil, fmt.Errorf("scan user server: %w", err)
+		}
+		result[user] = append(result[user], server)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read user servers: %w", err)
+	}
+	return result, nil
+}
+
+// saveUserServers stores the access of a user after validating the selected
+// servers. A nil ids keeps the current selection.
+func saveUserServers(ctx context.Context, tx *sql.Tx, userID int64, all bool, ids *[]int64) error {
+	if _, err := tx.ExecContext(ctx, "UPDATE users SET all_servers=? WHERE id=?", all, userID); err != nil {
+		return fmt.Errorf("save user server scope: %w", err)
+	}
+	if all {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM user_servers WHERE user_id=?", userID); err != nil {
+			return fmt.Errorf("clear user servers: %w", err)
+		}
+		return nil
+	}
+	if ids != nil {
+		wanted := map[int64]bool{}
+		for _, id := range *ids {
+			var ok bool
+			if err := tx.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM servers WHERE id=? AND status<>'removed')", id).Scan(&ok); err != nil {
+				return fmt.Errorf("check user server: %w", err)
+			}
+			if !ok {
+				return invalid("server_ids", "所选服务器不存在或已被移除；请刷新页面后重新选择。")
+			}
+			wanted[id] = true
+		}
+		current, err := readUserServers(ctx, tx, userID)
+		if err != nil {
+			return err
+		}
+		// Only touch rows that change, so untouched nodes keep their generation.
+		for _, id := range current[userID] {
+			if wanted[id] {
+				delete(wanted, id)
+			} else if _, err := tx.ExecContext(ctx, "DELETE FROM user_servers WHERE user_id=? AND server_id=?", userID, id); err != nil {
+				return fmt.Errorf("remove user server: %w", err)
+			}
+		}
+		for id := range wanted {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO user_servers (user_id,server_id) VALUES (?,?)", userID, id); err != nil {
+				return fmt.Errorf("add user server: %w", err)
+			}
+		}
+	}
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM user_servers us JOIN servers s ON s.id=us.server_id
+		WHERE us.user_id=? AND s.status<>'removed'`, userID).Scan(&count); err != nil {
+		return fmt.Errorf("count user servers: %w", err)
+	}
+	if count == 0 {
+		return invalid("server_ids", "请至少选择一台服务器，或选择「全部服务器」。")
+	}
+	return nil
 }
 
 func (a *api) userList(w http.ResponseWriter, r *http.Request) {
@@ -95,6 +188,17 @@ func (a *api) userList(w http.ResponseWriter, r *http.Request) {
 	if err := rows.Err(); err != nil {
 		a.resourceError(w, fmt.Errorf("list users: %w", err))
 		return
+	}
+	rows.Close()
+	access, err := readUserServers(r.Context(), conn, 0)
+	if err != nil {
+		a.resourceError(w, err)
+		return
+	}
+	for i := range result {
+		if ids := access[result[i].ID]; ids != nil {
+			result[i].ServerIDs = ids
+		}
 	}
 	writeJSON(w, 200, result)
 }
@@ -168,14 +272,26 @@ func readUserServerTraffic(ctx context.Context, tx *sql.Tx, u userView) ([]userS
 }
 
 type userInput struct {
-	TrafficResetDay *int    `json:"traffic_reset_day"`
-	Name            *string `json:"name"`
-	Remark          *string `json:"remark"`
-	TrafficLimit    *int64  `json:"traffic_limit"`
-	ExpireAt        *int64  `json:"expire_at"`
+	TrafficResetDay *int     `json:"traffic_reset_day"`
+	Name            *string  `json:"name"`
+	Remark          *string  `json:"remark"`
+	TrafficLimit    *int64   `json:"traffic_limit"`
+	ExpireAt        *int64   `json:"expire_at"`
+	AllServers      *bool    `json:"all_servers"`
+	ServerIDs       *[]int64 `json:"server_ids"`
 }
 
 func (in userInput) validate(create bool) error {
+	if in.ServerIDs != nil {
+		if len(*in.ServerIDs) > 1000 {
+			return invalid("server_ids", "所选服务器过多；请改为选择「全部服务器」。")
+		}
+		for _, id := range *in.ServerIDs {
+			if id <= 0 {
+				return invalid("server_ids", "服务器编号无效；请刷新页面后重新选择。")
+			}
+		}
+	}
 	if create && in.Name == nil || in.Name != nil && !auth.ValidUsername(*in.Name) {
 		return invalid("name", "请使用 1–32 位字母、数字、下划线或连字符作为用户名称。")
 	}
@@ -263,6 +379,9 @@ func (a *api) userCreate(w http.ResponseWriter, r *http.Request) {
 		if err := db.SetSetting(ctx, tx, db.UserIDHighWatermark, id); err != nil {
 			return err
 		}
+		if err := applyUserServers(ctx, tx, id, input); err != nil {
+			return err
+		}
 		result, err = readUser(ctx, tx, id)
 		return err
 	}) {
@@ -329,9 +448,24 @@ func (a *api) userUpdate(w http.ResponseWriter, r *http.Request) {
 		if err := uniqueUserName(ctx, tx, u.Name, u.ID); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, "UPDATE users SET name=?,remark=?,traffic_limit=?,expire_at=?,traffic_reset_day=? WHERE id=?", u.Name, u.Remark, u.TrafficLimit, u.ExpireAt, u.TrafficResetDay, u.ID)
-		return err
+		if _, err := tx.ExecContext(ctx, "UPDATE users SET name=?,remark=?,traffic_limit=?,expire_at=?,traffic_reset_day=? WHERE id=?", u.Name, u.Remark, u.TrafficLimit, u.ExpireAt, u.TrafficResetDay, u.ID); err != nil {
+			return err
+		}
+		return applyUserServers(ctx, tx, u.ID, input)
 	})
+}
+
+// applyUserServers saves server access when the input mentions it. Giving
+// only server_ids selects exactly those servers.
+func applyUserServers(ctx context.Context, tx *sql.Tx, id int64, input userInput) error {
+	if input.AllServers == nil && input.ServerIDs == nil {
+		return nil
+	}
+	all := false
+	if input.AllServers != nil {
+		all = *input.AllServers
+	}
+	return saveUserServers(ctx, tx, id, all, input.ServerIDs)
 }
 func (a *api) userToggle(w http.ResponseWriter, r *http.Request) {
 	enabled, ok := decodeToggle(w, r)

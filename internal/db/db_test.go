@@ -121,11 +121,12 @@ func TestEnableWALCancelledWhileLocked(t *testing.T) {
 func TestSchemaColumns(t *testing.T) {
 	conn := openTestDB(t)
 	tables := map[string][]string{
-		"admins":   {"id", "username", "password_hash", "totp_secret", "created_at"},
-		"sessions": {"id", "admin_id", "expires_at", "created_at"},
-		"settings": {"key", "value"},
-		"inbounds": {"id", "tag", "protocol", "port", "enabled", "remark", "options", "created_at", "updated_at", "server_id", "agent_key_id", "agent_keys_ready", "agent_cert_id"},
-		"users":    {"id", "name", "uuid", "password", "sub_token", "enabled", "traffic_limit", "traffic_up", "traffic_down", "expire_at", "remark", "created_at", "traffic_reset_day", "traffic_reset_at", "traffic_epoch", "alert_identity"},
+		"admins":       {"id", "username", "password_hash", "totp_secret", "created_at"},
+		"sessions":     {"id", "admin_id", "expires_at", "created_at"},
+		"settings":     {"key", "value"},
+		"inbounds":     {"id", "tag", "protocol", "port", "enabled", "remark", "options", "created_at", "updated_at", "server_id", "agent_key_id", "agent_keys_ready", "agent_cert_id"},
+		"users":        {"id", "name", "uuid", "password", "sub_token", "enabled", "traffic_limit", "traffic_up", "traffic_down", "expire_at", "remark", "created_at", "traffic_reset_day", "traffic_reset_at", "traffic_epoch", "alert_identity", "all_servers"},
+		"user_servers": {"user_id", "server_id"},
 	}
 	for table, want := range tables {
 		rows, err := conn.Query("SELECT name FROM pragma_table_info(?) ORDER BY cid", table)

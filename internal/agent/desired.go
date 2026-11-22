@@ -62,7 +62,7 @@ func (m *Master) Desired(ctx context.Context, identity authenticated) (Desired, 
 	if err != nil {
 		return out, err
 	}
-	out.Users, err = desiredUsers(ctx, tx, now)
+	out.Users, err = desiredUsers(ctx, tx, identity.id, now)
 	if err != nil {
 		return out, err
 	}
@@ -115,9 +115,10 @@ func desiredInbounds(ctx context.Context, tx *sql.Tx, serverID int64) ([]Desired
 	return inbounds, rows.Err()
 }
 
-func desiredUsers(ctx context.Context, tx *sql.Tx, now int64) ([]DesiredUser, error) {
+// desiredUsers lists the eligible users that may use serverID.
+func desiredUsers(ctx context.Context, tx *sql.Tx, serverID, now int64) ([]DesiredUser, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT id,name,uuid,password,enabled,traffic_limit,traffic_up,traffic_down,expire_at
-		FROM users ORDER BY id`)
+		FROM users WHERE `+db.UserServerAccess+` ORDER BY id`, serverID)
 	if err != nil {
 		return nil, fmt.Errorf("read desired users: %w", err)
 	}
