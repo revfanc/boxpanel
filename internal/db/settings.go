@@ -50,7 +50,15 @@ var (
 	AgentTrafficEpoch      = SettingKey[int64]{"agent_traffic_epoch"}
 	AgentTrafficCheckpoint = SettingKey[TrafficCheckpoint]{"agent_traffic_checkpoint"}
 	AgentInterfaceAck      = SettingKey[int64]{"agent_interface_ack"}
+	AgentUpgradeAttempt    = SettingKey[UpgradeAttempt]{"agent_upgrade_attempt"}
 )
+
+// UpgradeAttempt records the last automatic upgrade a node started, so a
+// failed release is not retried on every restart.
+type UpgradeAttempt struct {
+	Tag string `json:"tag"`
+	At  int64  `json:"at"`
+}
 
 type TrafficCheckpoint struct {
 	BootID  string                  `json:"boot_id"`

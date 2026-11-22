@@ -34,6 +34,7 @@ type serverRecord struct {
 	TrafficDown       *int64               `json:"traffic_down,omitempty"`
 	Uptime            *int64               `json:"uptime,omitempty"`
 	InboundCounts     *serverInboundCounts `json:"inbound_counts,omitempty"`
+	AutoUpgrade       *bool                `json:"auto_upgrade,omitempty"`
 }
 
 type serverInboundCounts struct {
@@ -41,7 +42,7 @@ type serverInboundCounts struct {
 	Pending int64 `json:"pending"`
 }
 
-const serverColumns = "id,name,public_host,is_local,status,last_seen_at,version,created_at,updated_at,desired_generation,applied_generation,sync_error,singbox_active,uptime,protocol"
+const serverColumns = "id,name,public_host,is_local,status,last_seen_at,version,created_at,updated_at,desired_generation,applied_generation,sync_error,singbox_active,uptime,protocol,auto_upgrade"
 
 func scanServer(row rowScanner, counts *serverInboundCounts) (serverRecord, error) {
 	var s serverRecord
@@ -49,8 +50,9 @@ func scanServer(row rowScanner, counts *serverInboundCounts) (serverRecord, erro
 	var syncError string
 	var active *bool
 	var uptime *int64
+	var autoUpgrade bool
 	dest := []any{&s.ID, &s.Name, &s.PublicHost, &s.IsLocal, &s.Status, &s.LastSeenAt,
-		&s.Version, &s.CreatedAt, &s.UpdatedAt, &desired, &applied, &syncError, &active, &uptime, &s.Protocol}
+		&s.Version, &s.CreatedAt, &s.UpdatedAt, &desired, &applied, &syncError, &active, &uptime, &s.Protocol, &autoUpgrade}
 	if counts != nil {
 		dest = append(dest, &counts.Ready, &counts.Pending)
 	}
@@ -60,6 +62,7 @@ func scanServer(row rowScanner, counts *serverInboundCounts) (serverRecord, erro
 	s.InboundCounts = counts
 	if !s.IsLocal {
 		s.UpgradeRequired = s.Protocol < agent.MinNodeProtocol
+		s.AutoUpgrade = &autoUpgrade
 		s.Uptime = uptime
 		s.DesiredGeneration, s.AppliedGeneration, s.SingboxActive = desired, &applied, active
 		s.SyncError = syncError
@@ -150,14 +153,15 @@ func (a *api) serverRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Name       *string `json:"name"`
-		PublicHost *string `json:"public_host"`
+		Name        *string `json:"name"`
+		PublicHost  *string `json:"public_host"`
+		AutoUpgrade *bool   `json:"auto_upgrade"`
 	}
 	if !decodeResource(w, r, &input) {
 		return
 	}
-	if input.Name == nil && input.PublicHost == nil {
-		a.resourceError(w, invalid("body", "请提供服务器名称或公网地址后重试。"))
+	if input.Name == nil && input.PublicHost == nil && input.AutoUpgrade == nil {
+		a.resourceError(w, invalid("body", "请提供服务器名称、公网地址或自动升级设置后重试。"))
 		return
 	}
 	if input.Name != nil {
@@ -179,20 +183,28 @@ func (a *api) serverRename(w http.ResponseWriter, r *http.Request) {
 			a.resourceError(w, invalid("public_host", "请输入公网域名或裸 IPv4/IPv6 地址。"))
 			return
 		}
+	}
+	if input.PublicHost != nil || input.AutoUpgrade != nil {
 		var local bool
 		if err := conn.QueryRowContext(ctx, "SELECT is_local FROM servers WHERE id=? AND status<>'removed'", id).Scan(&local); err != nil {
 			a.resourceError(w, err)
 			return
 		}
-		if local {
+		if local && input.PublicHost != nil {
 			a.resourceError(w, invalid("public_host", "请在设置页修改本机公网地址。"))
 			return
 		}
+		if local && input.AutoUpgrade != nil {
+			a.resourceError(w, invalid("auto_upgrade", "主控请用 install.sh update 升级；自动升级只用于远端服务器。"))
+			return
+		}
 	}
-	// These are subscription metadata and do not affect either running kernel.
+	// These are subscription metadata or node preferences delivered with the
+	// next heartbeat; neither affects a running kernel.
 	s, err := scanServer(conn.QueryRowContext(ctx, `UPDATE servers SET name=coalesce(?,name),
-		public_host=coalesce(?,public_host),updated_at=unixepoch() WHERE id=? AND status<>'removed' RETURNING `+
-		serverColumns, input.Name, input.PublicHost, id), nil)
+		public_host=coalesce(?,public_host),auto_upgrade=coalesce(?,auto_upgrade),updated_at=unixepoch()
+		WHERE id=? AND status<>'removed' RETURNING `+
+		serverColumns, input.Name, input.PublicHost, input.AutoUpgrade, id), nil)
 	if err != nil {
 		a.resourceError(w, err)
 		return

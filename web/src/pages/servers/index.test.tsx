@@ -242,6 +242,25 @@ it('shows remote sync and traffic totals while updating the subscription host', 
   expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ public_host: 'new.edge.example.com' })
 })
 
+it('enables automatic upgrades for a remote server and shows the pending upgrade', async () => {
+  const edge = { ...server, id: 2, name: 'Edge', is_local: false, status: 'online' as const, public_host: 'edge.example.com', version: 'v0.3.1', auto_upgrade: false }
+  let current = edge
+  const fetch = mockAPI({
+    '/servers': () => Response.json([{ ...server, version: 'v0.4.0' }, current]),
+    'PUT /servers/2': (init) => { current = { ...edge, ...JSON.parse(String(init.body)) }; return Response.json(current) },
+  })
+  const { user } = mountPage(<ServersPage />)
+  expect(await screen.findByText(t.servers.autoUpgradeOff)).toBeVisible()
+  expect(screen.queryByText(t.servers.autoUpgradePending)).not.toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: t.common.edit }))
+  await user.click(screen.getByRole('checkbox', { name: t.servers.autoUpgrade }))
+  await user.click(screen.getByRole('button', { name: t.common.save }))
+  expect(await screen.findByText(t.servers.autoUpgradeOn)).toBeVisible()
+  expect(screen.getByText(t.servers.autoUpgradePending)).toBeVisible()
+  const request = fetch.mock.calls.find(([, init]) => init?.method === 'PUT')
+  expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ auto_upgrade: true })
+})
+
 it('counts server states independently and shows the card badges, heartbeat and node links', async () => {
   // Freeze only the clock so the relative heartbeat time cannot drift on a slow runner.
   vi.useFakeTimers({ toFake: ['Date'] })

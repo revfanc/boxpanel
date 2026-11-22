@@ -1,14 +1,16 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { Link } from 'react-router'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useForm } from 'react-hook-form'
+import { Controller, useForm } from 'react-hook-form'
 import { RemoteAlertSettings } from '@/components/AlertSettings'
 import { CopyField } from '@/components/CopyField'
 import { ErrorNotice, Loading } from '@/components/Feedback'
 import { Confirm, Empty, Field, Page, Panel, Submit } from '@/components/ResourceUI'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
 import { useOperation } from '@/hooks/use-operation'
 import { zhCN as t } from '@/i18n/zh-CN'
 import { serverSchema } from '@/schemas/server'
@@ -24,8 +26,9 @@ function EditServerForm({ server, close }: { server: Server; close: () => void }
   const operation = useOperation()
   const form = useForm({
     resolver: zodResolver(serverSchema),
-    defaultValues: server.is_local ? { name: server.name } : { name: server.name, public_host: server.public_host },
+    defaultValues: server.is_local ? { name: server.name } : { name: server.name, public_host: server.public_host, auto_upgrade: server.auto_upgrade ?? false },
   })
+  const autoID = useId()
   return <form className="space-y-3" onSubmit={form.handleSubmit((body) => operation.run(
     () => api<Server>(`/servers/${server.id}`, { method: 'PUT', body }),
     async (updated) => {
@@ -43,6 +46,16 @@ function EditServerForm({ server, close }: { server: Server; close: () => void }
   ))}>
     <Field label={t.servers.name} hint={t.servers.renameHint} error={form.formState.errors.name?.message} disabled={operation.pending} {...form.register('name')} />
     {!server.is_local && <Field label={t.servers.address} error={form.formState.errors.public_host?.message} disabled={operation.pending} {...form.register('public_host')} />}
+    {!server.is_local && <div className="space-y-1">
+      <Label htmlFor={autoID} className="cursor-pointer gap-3 font-normal">
+        <Controller name="auto_upgrade" control={form.control} render={({ field }) => (
+          <Checkbox id={autoID} name={field.name} checked={field.value ?? false} disabled={operation.pending}
+            onCheckedChange={(checked) => field.onChange(checked === true)} onBlur={field.onBlur} ref={field.ref} />
+        )} />
+        <span>{t.servers.autoUpgrade}</span>
+      </Label>
+      <p className="text-sm text-muted-foreground">{t.servers.autoUpgradeHint}</p>
+    </div>}
     {operation.error != null && <ErrorNotice error={operation.error} />}
     <div className="flex flex-wrap gap-2">
       <Submit pending={operation.pending} />
@@ -108,9 +121,13 @@ function ServerDetails({ server, multiple, masterVersion, now }: { server: Serve
         {server.traffic_up !== undefined && server.traffic_down !== undefined && <>
           <dt>{t.servers.traffic}</dt><dd>{bytes(server.traffic_up)} / {bytes(server.traffic_down)}</dd>
         </>}
+        {server.auto_upgrade !== undefined && <>
+          <dt>{t.servers.autoUpgrade}</dt><dd>{server.auto_upgrade ? t.servers.autoUpgradeOn : t.servers.autoUpgradeOff}</dd>
+        </>}
       </>}
     </dl>
     {!server.is_local && versionDiffers && <p className="text-sm text-muted-foreground">{t.servers.versionDifference(masterVersion)}</p>}
+    {!server.is_local && versionDiffers && server.auto_upgrade && <p role="status" className="text-sm text-muted-foreground">{t.servers.autoUpgradePending}</p>}
     {!server.is_local && server.upgrade_required && <p role="status" className="text-sm text-destructive">{t.servers.nodeOutdated}</p>}
     {!server.is_local && (server.upgrade_required || versionDiffers) &&
       <CopyField label={t.servers.upgradeCommand} value={installCommand(masterVersion ?? '', 'update')} />}

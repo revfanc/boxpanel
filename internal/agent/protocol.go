@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -134,6 +135,42 @@ type HeartbeatReply struct {
 	Protocol          int    `json:"protocol"`
 	Version           string `json:"version"`
 	Interface         string `json:"interface"`
+	// AutoUpgrade asks the node to follow Version when it is a newer release.
+	// Older nodes ignore the field, so the protocol version is unchanged.
+	AutoUpgrade bool `json:"auto_upgrade,omitempty"`
+}
+
+var releaseTag = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)(?:-rc\.([0-9]+))?$`)
+
+// ReleaseTag reports whether version is a published release or release candidate.
+func ReleaseTag(version string) bool { return releaseTag.MatchString(version) }
+
+// NewerRelease reports whether target is a release newer than current. Either
+// side being a development build never qualifies, so nothing is downgraded.
+func NewerRelease(target, current string) bool {
+	a, b := releaseTag.FindStringSubmatch(target), releaseTag.FindStringSubmatch(current)
+	if a == nil || b == nil {
+		return false
+	}
+	for i := 1; i <= 3; i++ {
+		x, _ := strconv.ParseUint(a[i], 10, 64)
+		y, _ := strconv.ParseUint(b[i], 10, 64)
+		if x != y {
+			return x > y
+		}
+	}
+	// A final release sorts after its candidates.
+	switch {
+	case a[4] == b[4]:
+		return false
+	case a[4] == "":
+		return true
+	case b[4] == "":
+		return false
+	}
+	x, _ := strconv.ParseUint(a[4], 10, 64)
+	y, _ := strconv.ParseUint(b[4], 10, 64)
+	return x > y
 }
 
 type InterfaceSamples struct {

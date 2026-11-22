@@ -106,6 +106,9 @@ func printAgentInfo(ctx context.Context, conn *sql.DB, stdout io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(stdout, "节点模式（agent）\n主控: %s\nserver_id: %d\n", master.MasterURL, master.ServerID)
+	if attempt, err := db.GetSetting(ctx, conn, db.AgentUpgradeAttempt); err == nil {
+		fmt.Fprintf(stdout, "最近自动升级: %s（%s 开始，日志见 journalctl -u boxpanel-upgrade-%s）\n", attempt.Tag, time.Unix(attempt.At, 0).UTC().Format(time.RFC3339), attempt.Tag)
+	}
 	if result.At == 0 {
 		fmt.Fprintln(stdout, "最近心跳: 尚未发送，请启动 boxpanel 服务。")
 		return nil
@@ -169,6 +172,7 @@ func serveAgent(ctx context.Context, conn *sql.DB, opts serveOptions, logger *sl
 		if err != nil || bootID == "" {
 			logger.Warn("无法读取系统启动编号；请检查节点的 /proc 挂载，进程重启期间的内核用量可能无法补报。")
 		}
+		node.Upgrade = newAutoUpgrader(conn, version, logger).Handle
 		node.Accounting = traffic.NewNodeCollector(conn, reader, nil, bootID)
 		scheduler := traffic.NewScheduler(node.Accounting, nil, nil, logger)
 		netDone, trafficDone := make(chan struct{}), make(chan struct{})
