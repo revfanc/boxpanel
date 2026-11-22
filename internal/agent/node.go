@@ -29,6 +29,9 @@ type Node struct {
 	Manager    NodeManager
 	Accounting *traffic.Collector
 	Logger     *slog.Logger
+	// Upgrade, when set, sees every heartbeat reply and may start an
+	// automatic upgrade; it must return quickly and never stop the sync.
+	Upgrade func(context.Context, HeartbeatReply)
 
 	syncError              string
 	published              map[int64]InboundKeys
@@ -48,6 +51,10 @@ func (n *Node) Sync(ctx context.Context, beat Heartbeat, coreActive func() bool)
 	reply, err := n.Client.SyncHeartbeat(ctx, n.Master.ServerID, n.Key, beat)
 	if err != nil {
 		return err
+	}
+	if n.Upgrade != nil {
+		// Before the protocol checks: an upgrade is how an outdated node recovers.
+		n.Upgrade(ctx, reply)
 	}
 	if reply.Protocol < MinMasterProtocol {
 		return n.reportOutdatedMaster(ctx, beat, coreActive)

@@ -104,13 +104,18 @@ func runServer(args []string, stdout, stderr io.Writer) int {
 	if releaseTag.MatchString(version) {
 		tag = version
 	}
-	script := "https://raw.githubusercontent.com/revfanc/boxpanel/" + map[bool]string{true: tag, false: "main"}[tag != ""] + "/scripts/install.sh"
+	script := installScriptURL(map[bool]string{true: tag, false: "main"}[tag != ""])
 	command := fmt.Sprintf("bash <(curl -fsSL %s) --join %s --token %s --master-pin %s", script, shellQuote(cfg.URL()), shellQuote(plaintext), shellQuote(pin))
 	if tag != "" {
 		command += " --version " + tag
 	}
 	fmt.Fprintf(stdout, "已为「%s」生成一次性加入令牌（编号 %d，1 小时内有效，只能使用一次）。\n在新服务器上以 root 执行：\n\n%s\n\n", token.Name, token.ID, command)
 	return 0
+}
+
+// installScriptURL is the installer published with a tag or branch.
+func installScriptURL(ref string) string {
+	return "https://raw.githubusercontent.com/revfanc/boxpanel/" + ref + "/scripts/install.sh"
 }
 
 func shellQuote(value string) string {

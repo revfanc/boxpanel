@@ -232,7 +232,7 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 | 方法 | 路径 | 请求与成功响应 |
 |---|---|---|
 | GET | `/servers` | 200，服务器数组，本机优先，其余按 ID 升序 |
-| PUT | `/servers/{id}` | `{name?, public_host?}`，至少提供一项，200 返回更新后的服务器 |
+| PUT | `/servers/{id}` | `{name?, public_host?, auto_upgrade?}`，至少提供一项，200 返回更新后的服务器 |
 | DELETE | `/servers/{id}` | 移除远程服务器并撤销它的公钥，204 |
 | GET | `/servers/join-tokens` | 200，未过期且未使用令牌的元数据数组 |
 | POST | `/servers/join-tokens` | `{"name":"服务器名称"}`，201，返回元数据、`token`、`master_url` 和 `master_pin` |
@@ -252,6 +252,8 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 包含历次节点 epoch，从 0 开始并饱和到 int64 上限。用户清零不改变服务器累计值。本机继续通过 `/alerts` 查看网卡计费用量。
 `GET /servers` 每项还包含 `inbound_counts: {ready, pending}`，按密钥就绪状态统计该服务器的入站，包含已停用的入站。
 远端有已保存的心跳运行时长时返回 `uptime`，单位为秒，取最近心跳时的节点进程时长。
+T9.3：远端行返回 `auto_upgrade`（布尔，默认 false），本机不返回；对本机设置返回 400。修改不递增期望版本、不重启任何内核，
+随下次心跳回复下发。心跳回复增加可选字段 `auto_upgrade`（仅 true 时出现），旧节点忽略它，协议版本不变。
 服务器列表排除 `removed`；本机、已移除或不存在的服务器无法通过 DELETE 移除，返回 404。
 令牌元数据为 `id`、`name`、`expires_at`。只有签发响应含令牌明文。使用和撤销后从可用列表消失。
 令牌详情的 `server_id` 在注册成功时写入，首次心跳前也会返回；向导通过 `/servers` 确认该服务器的 `last_seen_at` 非空。

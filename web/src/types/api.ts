@@ -111,6 +111,7 @@ export interface Server {
   sync_error?: string
   protocol?: number
   upgrade_required?: boolean
+  auto_upgrade?: boolean
   singbox_active?: boolean
   uptime?: number
   inbound_counts?: { ready: number; pending: number }

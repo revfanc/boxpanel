@@ -357,8 +357,8 @@ func (m *Master) RecordHeartbeat(ctx context.Context, identity authenticated, in
 	var status, address string
 	var lastSeen sql.NullInt64
 	err = tx.QueryRowContext(ctx, `SELECT status,public_host,last_seen_at,coalesce(json_extract(alert_preferences,'$.interface'),''),
-		(SELECT version FROM servers WHERE is_local=1) FROM servers WHERE `+agentIdentity, identity.id, identity.publicKey).
-		Scan(&status, &address, &lastSeen, &reply.Interface, &reply.Version)
+		(SELECT version FROM servers WHERE is_local=1),auto_upgrade FROM servers WHERE `+agentIdentity, identity.id, identity.publicKey).
+		Scan(&status, &address, &lastSeen, &reply.Interface, &reply.Version, &reply.AutoUpgrade)
 	if errors.Is(err, sql.ErrNoRows) {
 		return reply, ErrUnauthorized
 	}

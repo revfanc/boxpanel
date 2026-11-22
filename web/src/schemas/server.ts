@@ -9,4 +9,4 @@ export const serverNameSchema = z.object({
   }, t.servers.invalidName).transform((name) => name.trim()),
 })
 
-export const serverSchema = serverNameSchema.extend({ public_host: hostSchema.optional() })
+export const serverSchema = serverNameSchema.extend({ public_host: hostSchema.optional(), auto_upgrade: z.boolean().optional() })

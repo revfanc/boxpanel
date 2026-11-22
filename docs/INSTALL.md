@@ -540,5 +540,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/main/script
 - `install.sh update` 在 `agent` 角色下校验并原子替换 boxpanel，重启 `boxpanel.service`，用节点的 `system ready` 检查本机内核。
   脚本保留 `agent.key`、镜像 DB、sing-box 配置及内核二进制，不运行初始化、加入向导或 sing-box 安装。节点启动仍按原流程迁移 DB，
   校验并恢复本地配置。失败按 §2 尝试恢复原二进制。升级无需新的加入令牌。
+- T9.3 自动跟随主控升级（按服务器开启，默认关闭）：节点在心跳回复中收到 `auto_upgrade` 且主控版本是比本机更新的正式版
+  （`vX.Y.Z` 或 `-rc.N`；任一方为开发构建时不升级，从不降级）时，下载该 tag 的 `scripts/install.sh` 到 `/run`，
+  经 `systemd-run --unit=boxpanel-upgrade-<tag>` 执行 `update --version <tag> --non-interactive`，沿用上面的校验与失败回滚。
+  仅当二进制位于 `/usr/local/bin/boxpanel`（安装脚本布局）时启用；开始前把 `{tag, at}` 记入 `agent_upgrade_attempt`，
+  同一 tag 6 小时内不重试，重启后也不重复。`boxpanel info` 显示最近一次尝试，进度见 `journalctl -u 'boxpanel-upgrade-*'`。
+  该功能需要节点已运行包含 T9.3 的版本，首次仍需手动升级一次。
 - 主控的网卡账期用量可从远端卡片「流量告警」查看。网卡选择经心跳下发，无需重启节点内核。
   主控备份复制到节点留待后续。
