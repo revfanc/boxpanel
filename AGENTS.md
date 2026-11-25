@@ -19,7 +19,7 @@
 ## 技术栈（不要擅自替换）
 
 - 后端：Go 1.23+，标准库 `net/http`（1.22+ 路由模式），`modernc.org/sqlite`（纯 Go，**禁止 CGO**），`log/slog`
-- 前端：Vite + React 19 + TypeScript（strict）+ Tailwind CSS v4 + shadcn/ui + React Router（`createBrowserRouter`，**history 模式**）+ TanStack Query + react-hook-form + zod
+- 前端：Vite + React 19 + TypeScript（strict）+ Tailwind CSS v4 + shadcn/ui（Base UI，`base-nova`）+ React Router（`createBrowserRouter`，**history 模式**）+ TanStack Query + react-hook-form + zod
 - 包管理：前端用 `pnpm`；Go 用 modules
 - 前端产物通过 `//go:embed all:dist` 打进单个二进制（`web/embed.go`）
 

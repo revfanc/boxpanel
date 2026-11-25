@@ -32,12 +32,15 @@ type Node struct {
 	// Upgrade, when set, sees every heartbeat reply and may start an
 	// automatic upgrade; it must return quickly and never stop the sync.
 	Upgrade func(context.Context, HeartbeatReply)
+	// ReadLogs provides redacted journal lines after an acknowledged cursor.
+	ReadLogs func(context.Context, string, int) ([]string, string, error)
 
 	syncError              string
 	published              map[int64]InboundKeys
 	reportedTraffic        map[int64]TrafficCounter
 	interfaceEndpointReady bool
 	interfacePreference    *string
+	logs                   nodeLogs
 }
 
 // Sync is called serially by the heartbeat loop. An unreachable master leaves
@@ -52,6 +55,7 @@ func (n *Node) Sync(ctx context.Context, beat Heartbeat, coreActive func() bool)
 	if err != nil {
 		return err
 	}
+	n.syncLogs(ctx, reply)
 	if reply.ReadOnly {
 		return nil
 	}
@@ -92,6 +96,10 @@ func (n *Node) Sync(ctx context.Context, beat Heartbeat, coreActive func() bool)
 		if err != nil {
 			return err
 		}
+		if reply.ReadOnly {
+			n.logs = nodeLogs{}
+			return nil
+		}
 		if reply.Protocol < MinMasterProtocol {
 			return n.reportOutdatedMaster(ctx, beat, coreActive)
 		}
@@ -101,12 +109,12 @@ func (n *Node) Sync(ctx context.Context, beat Heartbeat, coreActive func() bool)
 	}
 
 	keys, materialErr := n.publicKeys(ctx)
-	apply := reply.DesiredGeneration != applied || materialErr != nil || !beat.SingboxActive
-	if !apply && n.syncError == "" && !n.needsPublication(keys) {
+	needsApply := reply.DesiredGeneration != applied || materialErr != nil || !beat.SingboxActive
+	if !needsApply && !reply.RestartPending && n.syncError == "" && !n.needsPublication(keys) {
 		return nil
 	}
 
-	if apply {
+	if needsApply || reply.RestartPending {
 		desired, err := n.Client.Desired(ctx, n.Master.ServerID, n.Key)
 		if errors.Is(err, ErrMasterOutdated) {
 			return n.reportOutdatedMaster(ctx, beat, coreActive)
@@ -114,20 +122,31 @@ func (n *Node) Sync(ctx context.Context, beat Heartbeat, coreActive func() bool)
 		if err != nil {
 			return err
 		}
-		mutation := func(ctx context.Context, tx *sql.Tx) error {
-			return n.replaceMirror(ctx, tx, desired)
+		var applyErr error
+		if desired.Generation != applied || materialErr != nil || !beat.SingboxActive && desired.RestartID == "" {
+			mutation := func(ctx context.Context, tx *sql.Tx) error {
+				return n.replaceMirror(ctx, tx, desired)
+			}
+			if n.Accounting != nil {
+				applyErr = n.Accounting.ApplyMirror(ctx, n.Manager, mutation)
+			} else {
+				applyErr = n.Manager.Apply(ctx, mutation)
+			}
+			if applyErr == nil {
+				applied = desired.Generation
+				keys, materialErr = n.publicKeys(ctx)
+			}
 		}
-		if n.Accounting != nil {
-			err = n.Accounting.ApplyMirror(ctx, n.Manager, mutation)
-		} else {
-			err = n.Manager.Apply(ctx, mutation)
+		if desired.RestartID != "" {
+			beat.RestartResult, err = n.restart(ctx, desired.RestartID)
+			if err != nil {
+				return err
+			}
 		}
-		if err != nil {
-			n.syncError = syncErrorCode(err)
+		if applyErr != nil {
+			n.syncError = syncErrorCode(applyErr)
 			return n.report(ctx, beat, coreActive)
 		}
-		applied = desired.Generation
-		keys, materialErr = n.publicKeys(ctx)
 	}
 
 	n.syncError = ""

@@ -1,7 +1,8 @@
-import { useId, useRef, type ReactNode, type ComponentProps } from 'react'
+import { useId, useRef, type ReactElement, type ReactNode, type ComponentProps } from 'react'
 import { Link } from 'react-router'
 import { LoaderCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { LinkButton } from '@/components/LinkButton'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -27,7 +28,7 @@ export function Empty({ children }: { children: ReactNode }) {
 export function Notice({ children }: { children: ReactNode }) {
   return <p role="status" className="rounded-lg border bg-muted/40 p-4 text-sm leading-6">{children}</p>
 }
-export function BackLink({ to }: { to: string }) { return <Button variant="outline" asChild><Link to={to}>{t.common.back}</Link></Button> }
+export function BackLink({ to }: { to: string }) { return <LinkButton variant="outline"  render={<Link to={to} />}>{t.common.back}</LinkButton> }
 export function Field({ label, hint, error, id: given, ...props }: ComponentProps<typeof Input> & { label: string; hint?: string; error?: string }) {
   const auto = useId()
   const id = given ?? auto
@@ -54,20 +55,20 @@ export function Submit({ pending, label = t.common.save }: { pending: boolean; l
   return <Button type="submit" disabled={pending}>{pending && <LoaderCircle aria-hidden="true" className="animate-spin" />}{pending ? t.common.saving : label}</Button>
 }
 export function Confirm({ open, onOpenChange, title, description, pending, error, onConfirm, trigger }: {
-  open: boolean; onOpenChange: (open: boolean) => void; title: string; description: ReactNode; pending: boolean; error?: unknown; onConfirm: () => void; trigger?: ReactNode
+  open: boolean; onOpenChange: (open: boolean) => void; title: string; description: ReactNode; pending: boolean; error?: unknown; onConfirm: () => void; trigger?: ReactElement
 }) {
   const previousFocus = useRef<HTMLElement | null>(null)
-  return <AlertDialog open={open} onOpenChange={(value) => { if (!pending) onOpenChange(value) }}>
-    {trigger && <AlertDialogTrigger asChild>{trigger}</AlertDialogTrigger>}
-    <AlertDialogContent className="max-h-[90svh] max-w-[calc(100vw-2rem)] overflow-y-auto sm:max-w-lg" onOpenAutoFocus={() => { previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null }} onCloseAutoFocus={(event) => {
-      // List actions share a controlled dialog without a Radix Trigger.
-      event.preventDefault()
-      if (previousFocus.current?.isConnected) previousFocus.current.focus()
-      else document.getElementById('main-content')?.focus()
-    }}>
+  return <AlertDialog open={open} onOpenChange={(value, details) => { if (pending) details.cancel(); else onOpenChange(value) }}>
+    {trigger && <AlertDialogTrigger render={trigger} />}
+    <AlertDialogContent className="max-h-[90svh] max-w-[calc(100vw-2rem)] overflow-y-auto sm:max-w-lg"
+      initialFocus={() => {
+        previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+        return true
+      }}
+      finalFocus={() => previousFocus.current?.isConnected ? previousFocus.current : document.getElementById('main-content')}>
       <AlertDialogHeader><AlertDialogTitle>{title}</AlertDialogTitle><AlertDialogDescription className="leading-6 [overflow-wrap:anywhere]">{description}</AlertDialogDescription></AlertDialogHeader>
       {error != null && <ErrorNotice error={error} />}
-      <AlertDialogFooter><AlertDialogCancel disabled={pending}>{t.common.cancel}</AlertDialogCancel><AlertDialogAction disabled={pending} onClick={(event) => { event.preventDefault(); if (!pending) onConfirm() }}>{pending ? t.common.working : t.common.confirm}</AlertDialogAction></AlertDialogFooter>
+      <AlertDialogFooter><AlertDialogCancel disabled={pending}>{t.common.cancel}</AlertDialogCancel><AlertDialogAction disabled={pending} onClick={onConfirm}>{pending ? t.common.working : t.common.confirm}</AlertDialogAction></AlertDialogFooter>
     </AlertDialogContent>
   </AlertDialog>
 }

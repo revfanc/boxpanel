@@ -12,7 +12,6 @@ import (
 
 	"github.com/revfanc/boxpanel/internal/auth"
 	"github.com/revfanc/boxpanel/internal/db"
-	"github.com/revfanc/boxpanel/internal/traffic"
 )
 
 type userView struct {
@@ -246,15 +245,14 @@ func readUserServerTraffic(ctx context.Context, tx *sql.Tx, u userView) ([]userS
 	}
 	defer rows.Close()
 	var result []userServerTraffic
-	var remoteUp, remoteDown int64
+	var remote cycleBytes
 	for rows.Next() {
 		var row userServerTraffic
 		if err := rows.Scan(&row.ServerID, &row.Name, &row.IsLocal, &row.Up, &row.Down); err != nil {
 			return nil, fmt.Errorf("scan user traffic by server: %w", err)
 		}
 		if !row.IsLocal {
-			remoteUp = traffic.AddBytes(remoteUp, row.Up)
-			remoteDown = traffic.AddBytes(remoteDown, row.Down)
+			remote.add(cycleBytes{row.Up, row.Down})
 		}
 		result = append(result, row)
 	}
@@ -265,8 +263,8 @@ func readUserServerTraffic(ctx context.Context, tx *sql.Tx, u userView) ([]userS
 		return nil, nil
 	}
 	if result[0].IsLocal {
-		result[0].Up = max(0, u.TrafficUp-remoteUp)
-		result[0].Down = max(0, u.TrafficDown-remoteDown)
+		local := (cycleBytes{u.TrafficUp, u.TrafficDown}).remaining(remote)
+		result[0].Up, result[0].Down = local.Up, local.Down
 	}
 	return result, nil
 }

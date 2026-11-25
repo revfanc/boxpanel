@@ -33,7 +33,8 @@ func TestServerDetailsMigrationPreservesTrafficAndUnusedTokens(t *testing.T) {
 	if err := migrate(ctx, conn, legacy); err != nil {
 		t.Fatal(err)
 	}
-	mustExec(t, conn, `INSERT INTO servers (id,name,public_host,status) VALUES (2,'edge','edge.example','online');
+	mustExec(t, conn, `INSERT INTO servers (id,name,public_host,status,alert_preferences)
+		VALUES (2,'edge','edge.example','online','{"quota_gb":2,"billing_day":4,"interface":"","billing_mode":"out","events":{"server_quota_90":true,"server_quota_80":false}}');
 		INSERT INTO users (id,name,uuid,password,sub_token,created_at,traffic_up,traffic_down,traffic_epoch)
 		VALUES (1,'legacy','id','secret','token',1,123,456,42);
 		INSERT INTO server_user_traffic VALUES (2,1,10,30,40,100,200,123);
@@ -46,10 +47,14 @@ func TestServerDetailsMigrationPreservesTrafficAndUnusedTokens(t *testing.T) {
 		Scan(&values[0], &values[1], &values[2], &values[3], &values[4], &values[5], &values[6], &values[7]); err != nil || values != [8]int64{10, 30, 40, 100, 200, 42, 0, 0} {
 		t.Fatalf("unexpected migrated accounting values: %v, %v", values, err)
 	}
-	var unused, unknownUptime bool
+	var unused, unknownUptime, unknownMetrics, quota90 bool
+	var quota, day int
 	if err := conn.QueryRow(`SELECT (SELECT server_id IS NULL FROM agent_join_tokens WHERE id=5),
-		(SELECT uptime IS NULL FROM servers WHERE id=2)`).Scan(&unused, &unknownUptime); err != nil || !unused || !unknownUptime {
-		t.Fatal("existing token or unknown uptime changed during migration", unused, unknownUptime, err)
+		uptime IS NULL,monitoring IS NULL,json_extract(alert_preferences,'$.events.server_quota_90'),
+		json_extract(alert_preferences,'$.quota_gb'),json_extract(alert_preferences,'$.billing_day') FROM servers WHERE id=2`).
+		Scan(&unused, &unknownUptime, &unknownMetrics, &quota90, &quota, &day); err != nil ||
+		!unused || !unknownUptime || !unknownMetrics || quota90 || quota != 2 || day != 4 {
+		t.Fatalf("invalid migrated availability or preferences: %v %v %v %v %d %d: %v", unused, unknownUptime, unknownMetrics, quota90, quota, day, err)
 	}
 }
 

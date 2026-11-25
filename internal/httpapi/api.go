@@ -96,12 +96,20 @@ func New(service *auth.Service, opts Options) http.Handler {
 		a.cookiePath = "/" + opts.WebPath + "/"
 	}
 	mux := http.NewServeMux()
+	// The established token-ID route and server detail subpaths overlap on
+	// nonnumeric server IDs. Dispatch the reserved token namespace first.
+	const joinTokens = "/api/v1/servers/join-tokens"
+	tokens := http.NewServeMux()
 	routes := map[string]string{}
 	handlers := map[string]map[string]http.Handler{}
 	register := func(method, path string, handler http.HandlerFunc, protected bool) {
 		if handlers[path] == nil {
 			handlers[path] = map[string]http.Handler{}
-			mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+			target := mux
+			if path == joinTokens || strings.HasPrefix(path, joinTokens+"/") {
+				target = tokens
+			}
+			target.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
 				if h := handlers[path][r.Method]; h != nil {
 					h.ServeHTTP(w, r)
 					return
@@ -151,16 +159,24 @@ func New(service *auth.Service, opts Options) http.Handler {
 	register("POST", "/api/v1/migration/token", a.issueMigration, true)
 	a.registerAlerts(register)
 	a.registerResources(register)
+	a.registerServerPanel(register)
 	a.registerSubscriptions(register)
 	if opts.Agents != nil {
-		register("GET", "/api/v1/servers/join-tokens", a.joinTokenList, true)
-		register("GET", "/api/v1/servers/join-tokens/{id}", a.joinTokenGet, true)
-		register("POST", "/api/v1/servers/join-tokens", a.joinTokenCreate, true)
-		register("DELETE", "/api/v1/servers/join-tokens/{id}", a.joinTokenRevoke, true)
+		register("GET", joinTokens, a.joinTokenList, true)
+		register("GET", joinTokens+"/{id}", a.joinTokenGet, true)
+		register("POST", joinTokens, a.joinTokenCreate, true)
+		register("DELETE", joinTokens+"/{id}", a.joinTokenRevoke, true)
 		register("DELETE", "/api/v1/servers/{id}", a.serverRemove, true)
 	}
 	mux.HandleFunc("/", notFound)
-	panel := middleware(csrf(mux), opts.Logger, routes)
+	tokens.HandleFunc("/", notFound)
+	panel := middleware(csrf(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if opts.Agents != nil && (r.URL.Path == joinTokens || strings.HasPrefix(r.URL.Path, joinTokens+"/")) {
+			tokens.ServeHTTP(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})), opts.Logger, routes)
 	if opts.Agents == nil && opts.Migration == nil {
 		return panel
 	}

@@ -1,13 +1,16 @@
-import { useParams } from 'react-router'
+import { Link, useParams } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { QRCodeSVG } from 'qrcode.react'
 import { Button } from '@/components/ui/button'
+import { LinkButton } from '@/components/LinkButton'
 import { Progress } from '@/components/ui/progress'
 import { Page, Panel, Notice, Empty, BackLink } from '@/components/ResourceUI'
+import { PageTabs } from '@/components/PageTabs'
 import { CopyField } from '@/components/CopyField'
 import { ErrorNotice, Loading } from '@/components/Feedback'
-import { UserUsage, UserActions } from './components'
-import { userQuery } from '@/lib/resources'
+import { UserUsage, UserActions, UserForm } from './components'
+import { serversQuery, userQuery } from '@/lib/resources'
+import { serverPath } from '@/lib/navigation'
 import { api } from '@/lib/api'
 import { bytes } from '@/lib/format'
 import type { User, UserLinks } from '@/types/api'
@@ -15,12 +18,15 @@ import { zhCN as t, subscriptionText as sub } from '@/i18n/zh-CN'
 
 function SubscriptionLinks({ id }: { id: string }) {
   const links = useQuery({ queryKey: ['users', id, 'links'], queryFn: ({ signal }) => api<UserLinks>(`/users/${id}/links`, { signal }), gcTime: 0, staleTime: 0 })
-  return <Panel title={t.pages.userDetail} hint={sub.privacy}>
+  return <Panel title={t.users.tabs.subscription} hint={sub.privacy}>
     <Button variant="outline" disabled={links.isFetching} onClick={() => { void links.refetch() }}>{t.common.refresh}</Button>
     {links.isFetching || links.isPending ? <Loading /> : links.isError ? <ErrorNotice error={links.error} retry={() => { void links.refetch() }} /> : <>
       <div className="flex justify-center rounded-lg bg-white p-3"><QRCodeSVG value={links.data.subscription.auto} size={224} marginSize={4} title={sub.qr} role="img" aria-label={sub.qr} className="h-auto max-w-full" /></div>
       <p className="text-sm leading-6 text-muted-foreground">{sub.scan}</p>
-      <div className="flex flex-wrap gap-2"><Button asChild variant="outline" className="h-auto whitespace-normal py-2"><a href={links.data.import.singbox} rel="noreferrer">{sub.singboxImport}</a></Button><Button asChild variant="outline" className="h-auto whitespace-normal py-2"><a href={links.data.import.clash} rel="noreferrer">{sub.clashImport}</a></Button></div>
+      <div className="flex flex-wrap gap-2">
+        <LinkButton render={<a href={links.data.import.singbox} rel="noreferrer" />} variant="outline" className="h-auto whitespace-normal py-2">{sub.singboxImport}</LinkButton>
+        <LinkButton render={<a href={links.data.import.clash} rel="noreferrer" />} variant="outline" className="h-auto whitespace-normal py-2">{sub.clashImport}</LinkButton>
+      </div>
       {(['auto', 'singbox', 'clash', 'base64'] as const).map((format) => <CopyField key={links.data.subscription[format]} label={t.users[format]} value={links.data.subscription[format]} />)}
       <Notice>{sub.compatibility}</Notice>
       <h2 className="pt-3 font-medium">{t.users.nodes}</h2>
@@ -32,10 +38,15 @@ function SubscriptionLinks({ id }: { id: string }) {
 const percent = new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFractionDigits: 1 })
 
 function TrafficByServer({ user }: { user: User }) {
-  if (!user.traffic_by_server?.length) return null
+  const breakdown = user.traffic_by_server
+  const servers = useQuery({ ...serversQuery, enabled: !breakdown?.length })
+  const local = servers.data?.find((row) => row.is_local)
+  const rows = breakdown?.length ? breakdown : local
+    ? [{ server_id: local.id, name: local.name, is_local: true, up: user.traffic_up, down: user.traffic_down }] : []
   const total = user.traffic_up + user.traffic_down
   return <Panel title={t.users.trafficByServer} hint={t.users.trafficByServerHint}>
-    <table className="w-full table-fixed text-sm" aria-label={t.users.trafficByServer}>
+    {!breakdown?.length && (servers.isPending ? <Loading /> : servers.isError && <ErrorNotice error={servers.error} retry={() => { void servers.refetch() }} />)}
+    {rows.length > 0 && <table className="w-full table-fixed text-sm" aria-label={t.users.trafficByServer}>
       <thead className="border-b text-muted-foreground">
         <tr>
           <th scope="col" className="w-[34%] pb-2 text-left font-medium">{t.pages.servers}</th>
@@ -45,10 +56,10 @@ function TrafficByServer({ user }: { user: User }) {
         </tr>
       </thead>
       <tbody className="divide-y">
-        {user.traffic_by_server.map((row) => {
+        {rows.map((row) => {
           const share = total > 0 ? Math.min(1, (row.up + row.down) / total) : 0
           return <tr key={row.server_id} className="align-top">
-            <th scope="row" className="py-2 pr-1 text-left font-medium">{row.name}{' '}
+            <th scope="row" className="py-2 pr-1 text-left font-medium"><Link to={serverPath(row.server_id, 'traffic')} className="underline-offset-4 hover:underline">{row.name}</Link>{' '}
               {row.is_local && row.name !== t.users.localAndUnattributed && <span className="block text-xs font-normal text-muted-foreground">{t.users.localAndUnattributed}</span>}
             </th>
             <td className="py-2 pl-1 text-right tabular-nums">{bytes(row.up)}</td>
@@ -59,19 +70,30 @@ function TrafficByServer({ user }: { user: User }) {
           </tr>
         })}
       </tbody>
-    </table>
+    </table>}
   </Panel>
 }
 
 export function UserDetailPage() {
   const { id = '' } = useParams()
   const user = useQuery(userQuery(id))
-  return <Page title={t.pages.userDetail} actions={<BackLink to="/users" />}>
-    {user.isPending ? <Loading /> : user.isError ? <ErrorNotice error={user.error} retry={() => { void user.refetch() }} /> : <>
-      <Panel title={user.data.name} hint={user.data.remark}><UserUsage user={user.data} /><UserActions user={user.data} detail /></Panel>
-      <TrafficByServer user={user.data} />
-      {user.data.status !== 'active' && <Notice>{t.users.unavailable}</Notice>}
-      <SubscriptionLinks key={id} id={id} />
-    </>}
+  const current = user.data
+  return <Page title={current?.name ?? t.pages.userDetail} description={current?.remark} actions={<BackLink to="/users" />}>
+    {user.isPending ? <Loading /> : user.isError ? <ErrorNotice error={user.error} retry={() => { void user.refetch() }} /> : current &&
+      <PageTabs key={id} label={t.pages.userDetail} tabs={[
+        { id: 'subscription', label: t.users.tabs.subscription, content: <>
+          {current.status !== 'active' && <Notice>{t.users.unavailable}</Notice>}
+          <SubscriptionLinks id={id} />
+          <UserActions user={current} scope="subscription" />
+        </> },
+        { id: 'traffic', label: t.users.tabs.traffic, content: <>
+          <Panel title={t.servers.userTraffic}><UserUsage user={current} trafficOnly /><UserActions user={current} scope="traffic" /></Panel>
+          <TrafficByServer user={current} />
+        </> },
+        { id: 'settings', label: t.users.tabs.settings, content: <Panel title={t.users.edit}>
+          <UserForm user={current} showServers />
+          <UserActions user={current} scope="settings" />
+        </Panel> },
+      ]} />}
   </Page>
 }

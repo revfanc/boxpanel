@@ -1,20 +1,17 @@
 import { queryOptions } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { AlertOverview, AlertSettings } from '@/types/api'
+import type { AlertSettings, ServerAlertSettings } from '@/types/api'
 
-export function alertSettingsFor(serverID?: number) {
+export function alertSettingsFor(serverID: number) {
   return queryOptions({
-    queryKey: serverID === undefined ? ['alerts', 'settings'] : ['alerts', 'settings', serverID],
-    queryFn: ({ signal }) => api<AlertSettings>(`/alerts/settings${serverID === undefined ? '' : `?server_id=${serverID}`}`, { signal }),
+    queryKey: ['servers', serverID, 'alerts'],
+    queryFn: ({ signal }) => api<ServerAlertSettings>(`/servers/${serverID}/alerts`, { signal }),
   })
 }
 
-export const alertSettingsQuery = alertSettingsFor()
-
-export const alertOverviewQuery = queryOptions({
-  queryKey: ['alerts', 'overview'],
-  queryFn: ({ signal }) => api<AlertOverview>('/alerts', { signal }),
-  refetchInterval: 15000,
+export const alertSettingsQuery = queryOptions({
+  queryKey: ['alerts', 'settings'],
+  queryFn: ({ signal }) => api<AlertSettings>('/alerts/settings', { signal }),
 })
 
 export function utcDate(seconds: number) {

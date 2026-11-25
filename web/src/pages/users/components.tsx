@@ -9,7 +9,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger } from '@/components/ui/dialog'
-import { Field, Submit, Confirm } from '@/components/ResourceUI'
+import { Field, Submit, Confirm, Notice } from '@/components/ResourceUI'
 import { ErrorNotice } from '@/components/Feedback'
 import { useOperation } from '@/hooks/use-operation'
 import { api } from '@/lib/api'
@@ -24,24 +24,25 @@ function userEligible(user: User, now: number) {
     (user.traffic_limit === 0 || user.traffic_up < user.traffic_limit && user.traffic_down < user.traffic_limit - user.traffic_up)
 }
 
-export function UserUsage({ user }: { user: User }) {
+export function UserUsage({ user, trafficOnly = false }: { user: User; trafficOnly?: boolean }) {
   const used = user.traffic_up + user.traffic_down
   const percent = user.traffic_limit > 0 ? Math.min(100, Math.max(0, used / user.traffic_limit * 100)) : 0
   const usage = `${bytes(used)} / ${user.traffic_limit ? bytes(user.traffic_limit) : t.common.unlimited}`
   return <div className="space-y-3 text-sm">
     <Badge variant={user.status === 'active' ? 'default' : 'secondary'}>{t.users[user.status]}</Badge>
     <p>{t.users.usage}: {usage}</p>
+    {trafficOnly && <p>{t.users.upload} {bytes(user.traffic_up)} · {t.users.download} {bytes(user.traffic_down)}</p>}
     <p className="text-muted-foreground">{t.users.usageHint}</p>
     <Progress value={percent} aria-label={t.users.usage} aria-valuenow={percent} aria-valuetext={usage} />
-    <p className="text-muted-foreground">{t.users.expire}: {expiry(user.expire_at)}</p>
-    {!user.all_servers && <p>{t.users.servers}: {t.users.serverAccess(user.server_ids.length)}</p>}
+    {!trafficOnly && <><p className="text-muted-foreground">{t.users.expire}: {expiry(user.expire_at)}</p>
+      {!user.all_servers && <p>{t.users.servers}: {t.users.serverAccess(user.server_ids.length)}</p>}</>}
     <p>{t.users.resetDay}: {user.traffic_reset_day ? t.users.resetOnDay(user.traffic_reset_day) : t.users.resetDisabled}</p>
     {user.traffic_reset_at > 0 && <p>{t.users.resetAt}: {new Date(user.traffic_reset_at * 1000).toISOString()}</p>}
   </div>
 }
-export function UserForm({ user, close, setBusy, onSaved, defaultName, submitLabel }: {
+export function UserForm({ user, close, setBusy, onSaved, defaultName, submitLabel, showServers = false }: {
   user?: User; close?: () => void; setBusy?: (busy: boolean) => void
-  onSaved?: (user: User) => void | Promise<void>; defaultName?: string; submitLabel?: string
+  onSaved?: (user: User) => void | Promise<void>; defaultName?: string; submitLabel?: string; showServers?: boolean
 }) {
   const form = useForm<UserFormValues>({ resolver: zodResolver(userSchema), defaultValues: { ...userDefaults(user), name: user?.name ?? defaultName ?? '' } })
   const values = useWatch({ control: form.control })
@@ -58,12 +59,17 @@ export function UserForm({ user, close, setBusy, onSaved, defaultName, submitLab
   const client = useQueryClient()
   const errors = form.formState.errors
   // The choice only matters with several servers, but a narrowed user must be able to go back.
-  const showAccess = servers.length > 1 || (user ? !user.all_servers : false)
+  const showAccess = showServers || servers.length > 1 || (user ? !user.all_servers : false)
   return <form className="min-w-0 space-y-4" noValidate onSubmit={form.handleSubmit((values) => {
     setBusy?.(true)
     const known = new Set(servers.map((server) => server.id))
     const body = userBody(servers.length ? { ...values, server_ids: values.server_ids.filter((id) => known.has(id)) } : values)
-    void operation.run(() => api<User>(user ? `/users/${user.id}` : '/users', { method: user ? 'PUT' : 'POST', body }), async (saved) => { await refreshResources(client); if (onSaved) await onSaved(saved); else close?.() }).finally(() => setBusy?.(false))
+    void operation.run(() => api<User>(user ? `/users/${user.id}` : '/users', { method: user ? 'PUT' : 'POST', body }), async (saved) => {
+      await refreshResources(client)
+      if (onSaved) await onSaved(saved)
+      else if (close) close()
+      else form.reset(userDefaults(saved))
+    }).finally(() => setBusy?.(false))
   })}>
     <fieldset disabled={operation.pending} className="min-w-0 space-y-4">
       <Field label={t.users.name} {...form.register('name')} error={errors.name?.message} />
@@ -75,6 +81,7 @@ export function UserForm({ user, close, setBusy, onSaved, defaultName, submitLab
     </fieldset>
     {changesConfig && <p className="text-sm text-muted-foreground">{t.common.applyHint}</p>}
     {operation.error != null && <ErrorNotice error={operation.error} />}
+    {operation.success && !close && !onSaved && <Notice>{t.common.saved}</Notice>}
     <div className="flex flex-wrap justify-end gap-2">{close && <Button type="button" variant="outline" disabled={operation.pending} onClick={close}>{t.common.cancel}</Button>}<Submit pending={operation.pending} label={submitLabel ?? (user ? t.common.save : t.common.create)} /></div>
   </form>
 }
@@ -90,7 +97,7 @@ function ServerAccess({ control, servers, error }: { control: Control<UserFormVa
     <p id={`${id}-label`} className="text-sm font-medium">{t.users.servers}</p>
     <Controller name="all_servers" control={control} render={({ field }) => (
       <Label htmlFor={`${id}-all`} className="cursor-pointer gap-3 font-normal">
-        <Checkbox id={`${id}-all`} name={field.name} checked={field.value} onCheckedChange={(checked) => field.onChange(checked === true)} onBlur={field.onBlur} ref={field.ref} />
+        <Checkbox id={`${id}-all`} name={field.name} checked={field.value} onCheckedChange={(checked) => field.onChange(checked)} onBlur={field.onBlur} ref={field.ref} />
         <span>{t.users.allServers}</span>
       </Label>
     )} />
@@ -98,7 +105,7 @@ function ServerAccess({ control, servers, error }: { control: Control<UserFormVa
       <div className="space-y-2 rounded-lg border p-3">
         {servers.map((server) => <Label key={server.id} htmlFor={`${id}-${server.id}`} className="cursor-pointer gap-3 font-normal">
           <Checkbox id={`${id}-${server.id}`} checked={field.value.includes(server.id)} aria-invalid={fieldState.invalid}
-            onCheckedChange={(checked) => field.onChange(checked === true ? [...field.value.filter((value) => value !== server.id), server.id] : field.value.filter((value) => value !== server.id))} onBlur={field.onBlur} />
+            onCheckedChange={(checked) => field.onChange(checked ? [...field.value, server.id] : field.value.filter((value) => value !== server.id))} onBlur={field.onBlur} />
           <span className="min-w-0 break-all">{server.name}{server.is_local ? '' : ` · ${server.public_host}`}</span>
         </Label>)}
       </div>
@@ -111,8 +118,8 @@ function ServerAccess({ control, servers, error }: { control: Control<UserFormVa
 export function UserEditor({ user }: { user?: User }) {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
-  return <Dialog open={open} onOpenChange={(value) => { if (!busy) setOpen(value) }}>
-    <DialogTrigger asChild><Button variant={user ? 'outline' : 'default'}>{user ? t.common.edit : t.users.create}</Button></DialogTrigger>
+  return <Dialog open={open} onOpenChange={(value, details) => { if (busy) details.cancel(); else setOpen(value) }}>
+    <DialogTrigger render={<Button variant={user ? 'outline' : 'default'} />}>{user ? t.common.edit : t.users.create}</DialogTrigger>
     <DialogContent showCloseButton={false} className="max-h-[90svh] max-w-[calc(100vw-2rem)] overflow-y-auto sm:max-w-lg">
       <DialogHeader><DialogTitle>{user ? t.users.edit : t.users.create}</DialogTitle><DialogDescription>{t.users.description}</DialogDescription></DialogHeader>
       <UserForm user={user} close={() => setOpen(false)} setBusy={setBusy} />
@@ -122,7 +129,7 @@ export function UserEditor({ user }: { user?: User }) {
 type Action = 'reset-traffic' | 'delete' | 'disable' | 'reset-token' | 'reset-credentials'
 const descriptions = { 'reset-traffic': t.users.resetTrafficHint, delete: t.users.deleteHint, disable: t.common.disableHint, 'reset-token': t.users.tokenHint, 'reset-credentials': t.users.credentialsHint }
 const titles = { 'reset-traffic': t.users.resetTraffic, delete: t.users.deleteTitle, disable: t.common.disable, 'reset-token': t.users.resetToken, 'reset-credentials': t.users.resetCredentials }
-export function UserActions({ user, detail = false }: { user: User; detail?: boolean }) {
+export function UserActions({ user, scope = 'list' }: { user: User; scope?: 'list' | 'subscription' | 'traffic' | 'settings' }) {
   const [action, setAction] = useState<Action | null>(null)
   const operation = useOperation()
   const client = useQueryClient()
@@ -135,21 +142,29 @@ export function UserActions({ user, detail = false }: { user: User; detail?: boo
       await client.cancelQueries({ queryKey: linksKey })
       await client.resetQueries({ queryKey: linksKey })
       setAction(null)
-      if (kind === 'delete' && detail) void navigate('/users')
+      if (kind === 'delete' && scope === 'settings') void navigate('/users')
       await refreshResources(client)
     })
   }
   const changesConfig = action === 'delete' || action === 'disable' || action === 'reset-credentials'
   const [now] = useState(() => Math.floor(Date.now() / 1000))
   const active = userEligible(user, now)
+  const account = scope === 'list' || scope === 'settings'
   function ask(kind: Action) { operation.reset(); setAction(kind) }
   return <div className="space-y-3">
-    <div className="flex flex-wrap gap-2"><UserEditor user={user} />
-      <Button variant="outline" disabled={operation.pending} onClick={() => user.enabled ? ask('disable') : perform('enable')}>{operation.pending ? t.common.working : user.enabled ? t.common.disable : t.common.enable}</Button>
-      {detail && <><Button variant="outline" disabled={operation.pending} onClick={() => ask('reset-traffic')}>{t.users.resetTraffic}</Button><Button variant="outline" disabled={operation.pending} onClick={() => ask('reset-token')}>{t.users.resetToken}</Button><Button variant="outline" disabled={operation.pending} onClick={() => ask('reset-credentials')}>{t.users.resetCredentials}</Button></>}
-      <Button variant="destructive" disabled={operation.pending} onClick={() => ask('delete')}>{t.common.delete}</Button>
+    <div className="flex flex-wrap gap-2">
+      {scope === 'list' && <UserEditor user={user} />}
+      {account && <>
+        <Button variant="outline" disabled={operation.pending} onClick={() => user.enabled ? ask('disable') : perform('enable')}>{operation.pending ? t.common.working : user.enabled ? t.common.disable : t.common.enable}</Button>
+        <Button variant="destructive" disabled={operation.pending} onClick={() => ask('delete')}>{t.common.delete}</Button>
+      </>}
+      {scope === 'traffic' && <Button variant="outline" disabled={operation.pending} onClick={() => ask('reset-traffic')}>{t.users.resetTraffic}</Button>}
+      {scope === 'subscription' && <>
+        <Button variant="outline" disabled={operation.pending} onClick={() => ask('reset-token')}>{t.users.resetToken}</Button>
+        <Button variant="outline" disabled={operation.pending} onClick={() => ask('reset-credentials')}>{t.users.resetCredentials}</Button>
+      </>}
     </div>
-    {!user.enabled && userEligible({ ...user, enabled: true }, now) && <p className="text-sm text-muted-foreground">{t.common.applyHint}</p>}
+    {account && !user.enabled && userEligible({ ...user, enabled: true }, now) && <p className="text-sm text-muted-foreground">{t.common.applyHint}</p>}
     {operation.error != null && !action && <ErrorNotice error={operation.error} />}
     <Confirm open={!!action} onOpenChange={(open) => { if (!open) setAction(null) }} title={action ? titles[action] : ''} description={<>{user.name}<br />{action ? descriptions[action] : ''}{changesConfig && active && <><br />{t.common.applyHint}</>}</>} pending={operation.pending} error={operation.error} onConfirm={() => { if (action) perform(action) }} />
   </div>

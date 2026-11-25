@@ -5,6 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import type { z } from 'zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Page, Panel, Field, Toggle, Submit, Notice, Confirm } from '@/components/ResourceUI'
+import { PageTabs } from '@/components/PageTabs'
 import { ErrorNotice, Loading } from '@/components/Feedback'
 import { AlertSettingsPanel } from '@/components/AlertSettings'
 import { BackupPanel } from '@/components/Backup'
@@ -23,8 +24,6 @@ type SettingsForm = z.infer<typeof settingsSchema>
 function PanelForm({ settings }: { settings: PanelSettings }) {
   const form = useForm<SettingsForm>({ resolver: zodResolver(settingsSchema), defaultValues: settings })
   const operation = useOperation()
-  const blockBT = useWatch({ control: form.control, name: 'block_bittorrent' })
-  const autoGroup = useWatch({ control: form.control, name: 'subscription_auto_group' })
   const client = useQueryClient()
   const [confirmation, setConfirmation] = useState<SettingsForm | null>(null)
   const [redirect, setRedirect] = useState<SettingsResult | null>(null)
@@ -61,8 +60,6 @@ function PanelForm({ settings }: { settings: PanelSettings }) {
         <div className="grid min-w-0 gap-4 sm:grid-cols-2"><Field label={t.settings.port} type="number" {...form.register('web_port', { valueAsNumber: true })} error={errors.web_port?.message} /><Field label={t.settings.webPath} hint={t.settings.pathHint} {...form.register('web_path')} error={errors.web_path?.message} /></div>
         <Field label={t.settings.subPath} {...form.register('sub_path')} error={errors.sub_path?.message} />
         <p className="text-sm text-muted-foreground">{t.settings.tls}: {settings.panel_tls_mode}</p>
-        <Toggle label={t.settings.blockBT} checked={blockBT} onChange={(checked) => form.setValue('block_bittorrent', checked, { shouldDirty: true })} />
-        <Toggle label={t.settings.autoGroup} hint={t.settings.autoGroupHint} checked={autoGroup} onChange={(checked) => form.setValue('subscription_auto_group', checked, { shouldDirty: true })} />
         <Submit pending={operation.pending} />
       </fieldset>
       {operation.error != null && !confirmation && <ErrorNotice error={operation.error} />}
@@ -70,6 +67,30 @@ function PanelForm({ settings }: { settings: PanelSettings }) {
       {redirect && <Notice>{t.settings.redirect}<a className="mt-2 block break-all underline" href={redirect.panel_url}>{redirect.panel_url}</a></Notice>}
     </form>
     <Confirm open={!!confirmation} onOpenChange={(open) => { if (!open) setConfirmation(null) }} title={t.settings.confirmTitle} description={<>{t.settings.confirmHint}<br />{t.settings.port}: {confirmation?.web_port}<br />{t.settings.webPath}: /{confirmation?.web_path}<br />{t.settings.subPath}: /{confirmation?.sub_path}</>} pending={operation.pending} error={operation.error} onConfirm={() => { if (confirmation) save(confirmation) }} />
+  </Panel>
+}
+
+function SubscriptionSettings({ enabled }: { enabled: boolean }) {
+  const form = useForm({ defaultValues: { subscription_auto_group: enabled } })
+  const selected = useWatch({ control: form.control, name: 'subscription_auto_group' })
+  const operation = useOperation()
+  const client = useQueryClient()
+  return <Panel title={t.settings.tabs.subscription}>
+    <form className="space-y-4" onSubmit={form.handleSubmit((body) => operation.run(
+      () => api<SettingsResult>('/settings', { method: 'PUT', body }),
+      async (result) => {
+        await client.cancelQueries({ queryKey: queryKeys.settings, exact: true })
+        form.reset({ subscription_auto_group: result.subscription_auto_group })
+        client.setQueryData(queryKeys.settings, result)
+        await refreshResources(client)
+      },
+    ))}>
+      <Toggle label={t.settings.autoGroup} hint={t.settings.autoGroupHint} checked={selected} disabled={operation.pending}
+        onChange={(checked) => form.setValue('subscription_auto_group', checked, { shouldDirty: true })} />
+      <Submit pending={operation.pending} />
+      {operation.error != null && <ErrorNotice error={operation.error} />}
+      {operation.success && <Notice>{t.common.saved}</Notice>}
+    </form>
   </Panel>
 }
 
@@ -96,7 +117,13 @@ function AccountForms() {
 }
 export function SettingsPage() {
   const settings = useQuery(settingsQuery)
-  return <Page title={t.pages.settings} description={t.settings.description}>
-    {settings.isPending ? <Loading /> : settings.isError ? <ErrorNotice error={settings.error} retry={() => { void settings.refetch() }} /> : <><PanelForm settings={settings.data} /><CertificatePanel /><AlertSettingsPanel /><BackupPanel publicHost={settings.data.public_host} /><AccountForms /></>}
+  return <Page title={t.pages.settings}>
+    {settings.isPending ? <Loading /> : settings.isError ? <ErrorNotice error={settings.error} retry={() => { void settings.refetch() }} /> :
+      <PageTabs label={t.pages.settings} tabs={[
+        { id: 'panel', label: t.settings.tabs.panel, content: <><PanelForm settings={settings.data} /><CertificatePanel /><AccountForms /></> },
+        { id: 'subscription', label: t.settings.tabs.subscription, content: <SubscriptionSettings enabled={settings.data.subscription_auto_group} /> },
+        { id: 'notifications', label: t.settings.tabs.notifications, content: <AlertSettingsPanel /> },
+        { id: 'backup', label: t.settings.tabs.backup, content: <BackupPanel publicHost={settings.data.public_host} /> },
+      ]} />}
   </Page>
 }

@@ -91,7 +91,7 @@ func (a *api) singboxError(w http.ResponseWriter, err error) {
 			status = 500
 			code = "singbox_rollback_failed"
 			message = "配置生效失败，自动恢复也未完成，数据库修改未提交"
-			hint = "请检查 sing-box.json.bak、systemd 和防火墙状态，修复后运行 boxpanel apply；恢复完成前不要继续修改节点。"
+			hint = "请检查 sing-box.json.bak、systemd 和防火墙状态，修复后运行 boxpanel apply；恢复完成前不要继续修改入站。"
 		}
 		if apply.DatabaseUncertain {
 			message = "数据库提交或恢复状态无法确认"

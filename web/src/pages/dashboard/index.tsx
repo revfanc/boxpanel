@@ -1,48 +1,92 @@
-import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertOverviewPanels } from '@/components/AlertOverview'
-import { Button } from '@/components/ui/button'
+import { Page, Panel } from '@/components/ResourceUI'
 import { ErrorNotice, Loading } from '@/components/Feedback'
-import { Page, Panel, Empty, Notice, Confirm } from '@/components/ResourceUI'
-import { systemQuery } from '@/lib/query'
-import { inboundsQuery, usersQuery, refreshResources, unsupported } from '@/lib/resources'
-import { api } from '@/lib/api'
-import { bytes, duration } from '@/lib/format'
-import { useOperation } from '@/hooks/use-operation'
+import { Progress } from '@/components/ui/progress'
+import { ServerBadges } from '@/pages/servers/status-badges'
+import { overviewQuery } from '@/lib/resources'
+import { serverPath } from '@/lib/navigation'
+import { bytes, expiry, metricRates, metricUsage } from '@/lib/format'
+import { billingGB } from '@/lib/alerts'
+import type { OverviewServer, PanelOverview, TrafficUser } from '@/types/api'
 import { zhCN as t } from '@/i18n/zh-CN'
 
-export function DashboardPage() {
-  const system = useQuery({ ...systemQuery, refetchInterval: 5000 })
-  const inbounds = useQuery({ ...inboundsQuery, refetchInterval: 5000 })
-  const users = useQuery({ ...usersQuery, refetchInterval: 5000 })
-  const client = useQueryClient()
-  const restart = useOperation()
-  const [confirm, setConfirm] = useState(false)
-  const current = system.data
-  return <Page title={t.pages.home} description={t.dashboard.description}>
-    {system.isPending && <Loading />}
-    {system.isError && (unsupported(system.error) ? <Notice>{t.common.devHint}</Notice> : <ErrorNotice error={system.error} retry={() => { void system.refetch() }} />)}
-    {current && !system.isError && (!current.supported ? <Notice>{t.common.devHint}</Notice> : <>
-      <div className="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <Panel title={t.dashboard.cpu}><p className="text-2xl font-semibold tabular-nums">{current.cpu.toFixed(1)}%</p></Panel>
-        <Panel title={t.dashboard.memory}><p>{bytes(current.mem.used)} / {bytes(current.mem.total)}</p></Panel>
-        <Panel title={t.dashboard.disk}><p>{bytes(current.disk.used)} / {bytes(current.disk.total)}</p></Panel>
-        <Panel title={t.dashboard.network}><p>↓ {bytes(current.net.rx_rate)}/s</p><p>↑ {bytes(current.net.tx_rate)}/s</p></Panel>
-      </div>
-      <Panel title={t.status.label}>
-        <div className="flex flex-wrap items-center gap-3"><span className="font-medium">{current.singbox.running ? t.status.running : current.singbox.installed ? t.status.stopped : t.status.missing}</span><span className="text-muted-foreground">{current.singbox.version}</span></div>
-        <p className="text-sm text-muted-foreground">{t.dashboard.uptime}: {duration(current.uptime)} · {t.dashboard.kernelUptime}: {duration(current.singbox.uptime)}</p>
-        <Confirm open={confirm} onOpenChange={(value) => { restart.reset(); setConfirm(value) }} title={t.dashboard.restart} description={t.dashboard.restartHint} pending={restart.pending} error={restart.error} trigger={<Button variant="outline" disabled={!current.singbox.installed}>{t.dashboard.restart}</Button>} onConfirm={() => { void restart.run(() => api<void>('/singbox/restart', { method: 'POST' }), async () => { setConfirm(false); await refreshResources(client) }) }} />
-        {restart.success && <Notice>{t.dashboard.restarted}</Notice>}
-      </Panel>
-    </>)}
-    <AlertOverviewPanels />
-    <div className="grid min-w-0 gap-4 sm:grid-cols-2">
-      <Panel title={t.dashboard.nodes}>{inbounds.isPending ? <Loading /> : inbounds.isError ? <ErrorNotice error={inbounds.error} retry={() => { void inbounds.refetch() }} /> : <p className="text-3xl font-semibold tabular-nums">{inbounds.data.length}</p>}</Panel>
-      <Panel title={t.dashboard.users}>{users.isPending ? <Loading /> : users.isError ? <ErrorNotice error={users.error} retry={() => { void users.refetch() }} /> : <p className="text-3xl font-semibold tabular-nums">{users.data.length}</p>}</Panel>
+function ServerRow({ server }: { server: OverviewServer }) {
+  const metrics = server.system.metrics
+  const available = metrics?.supported
+  const billing = server.billing
+  const hasSample = billing.supported && billing.sampled_at > 0
+  return <li className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-3 py-4 lg:grid-cols-3 xl:grid-cols-[1.25fr_.75fr_.9fr_1.2fr_1fr_1.15fr]">
+    <div className="col-span-2 min-w-0 space-y-2 lg:col-span-1">
+      <Link to={serverPath(server.id)} className="font-semibold underline-offset-4 hover:underline">{server.name}</Link>
+      <ServerBadges server={server} />
+      {!server.is_local && !metrics && <p className="text-xs text-muted-foreground">
+        {server.last_seen_at === null ? t.servers.noHeartbeat : t.servers.metricsUpgrade}
+      </p>}
     </div>
-    {(inbounds.data?.length === 0 || users.data?.length === 0) && <Empty>{t.dashboard.empty}</Empty>}
-    <Panel title={t.dashboard.shortcuts}><div className="flex flex-wrap gap-3"><Button asChild><Link to="/inbounds/new">{t.pages.newInbound}</Link></Button><Button asChild variant="outline"><Link to="/users">{t.pages.users}</Link></Button><Button asChild variant="outline"><Link to="/rules">{t.pages.rules}</Link></Button></div></Panel>
+    <div className="min-w-0">
+      <p className="text-xs text-muted-foreground">{t.dashboard.cpu}</p>
+      <p className="text-sm tabular-nums">{available ? `${metrics.cpu.toFixed(1)}%` : t.common.unknown}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{t.dashboard.memory}</p>
+      <p className="text-sm tabular-nums">{available ? metricUsage(metrics.mem) : t.common.unknown}</p>
+    </div>
+    <div className="min-w-0">
+      <p className="text-xs text-muted-foreground">{t.dashboard.network}</p>
+      <p className="text-sm tabular-nums">{available ? metricRates(metrics.net) : t.common.unknown}</p>
+    </div>
+    <div className="min-w-0 space-y-1">
+      <p className="text-xs text-muted-foreground">{t.dashboard.serverShare}</p>
+      <p className="text-sm tabular-nums">{bytes(server.user_traffic.up + server.user_traffic.down)} · {server.share_percent.toFixed(1)}%</p>
+      <Progress value={Math.min(100, server.share_percent)} aria-hidden="true" />
+    </div>
+    <div className="min-w-0 xl:col-span-2">
+      <p className="text-xs text-muted-foreground">{t.alerts.billing}</p>
+      <p className="text-sm tabular-nums">
+        {hasSample ? billingGB(billing.used) : billing.supported ? t.dashboard.waitingBilling : t.common.unknown}
+        {billing.quota > 0 && <span> / {billingGB(billing.quota)}{hasSample && ` · ${billing.percent.toFixed(1)}%`}</span>}
+      </p>
+      {hasSample && billing.stale && <p className="text-xs text-muted-foreground">{t.dashboard.stale}</p>}
+      {hasSample && billing.quota === 0 && <p className="text-xs text-muted-foreground">{t.alerts.noQuota}</p>}
+    </div>
+  </li>
+}
+
+function UserList({ title, users, value }: { title: string; users: TrafficUser[]; value: (user: TrafficUser) => string }) {
+  return <Panel title={title}>
+    {users.length === 0 ? <p className="text-sm text-muted-foreground">{t.dashboard.noUsers}</p> : <ul className="divide-y">
+      {users.map((user) => <li key={user.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+        <Link to={`/users/${user.id}?tab=traffic`} className="font-medium underline-offset-4 hover:underline">{user.name}</Link>
+        <span className="text-muted-foreground tabular-nums">{value(user)}</span>
+      </li>)}
+    </ul>}
+  </Panel>
+}
+
+function OverviewContent({ overview }: { overview: PanelOverview }) {
+  const usage = overview.user_traffic
+  return <>
+    <Panel title={t.dashboard.totalUsage} hint={t.dashboard.usageHint}>
+      <p className="text-3xl font-semibold tabular-nums">{bytes(usage.up + usage.down)}</p>
+      <p className="text-sm text-muted-foreground">{t.users.upload} {bytes(usage.up)} · {t.users.download} {bytes(usage.down)}</p>
+    </Panel>
+    <Panel title={t.pages.servers}>
+      <ul className="divide-y">{overview.servers.map((server) => <ServerRow key={server.id} server={server} />)}</ul>
+    </Panel>
+    <div className="grid min-w-0 gap-4 lg:grid-cols-3">
+      <UserList title={t.dashboard.highestUsage} users={overview.top_users} value={(user) => bytes(user.up + user.down)} />
+      <UserList title={t.dashboard.expiring} users={overview.expiring_users} value={(user) => expiry(user.expire_at)} />
+      <UserList title={t.dashboard.exhausted} users={overview.exhausted_users} value={(user) => `${bytes(user.up + user.down)} / ${bytes(user.traffic_limit)}`} />
+    </div>
+    <AlertOverviewPanels overview={overview} />
+  </>
+}
+
+export function DashboardPage() {
+  const query = useQuery(overviewQuery)
+  return <Page title={t.pages.home}>
+    {query.isPending && <Loading />}
+    {query.isError && <ErrorNotice error={query.error} retry={() => { void query.refetch() }} />}
+    {query.data && <OverviewContent overview={query.data} />}
   </Page>
 }

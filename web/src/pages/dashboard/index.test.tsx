@@ -1,49 +1,60 @@
-import { act, cleanup, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, screen, within } from '@testing-library/react'
 import { expect, it, vi } from 'vitest'
 import { DashboardPage } from '.'
-import { deferred, failure, inbound, mockAPI, mountPage, proxyUser, status } from '@/test/resources'
+import { billing, edge, failure, mockAPI, mountPage, overview, status } from '@/test/resources'
 import { zhCN as t } from '@/i18n/zh-CN'
 
-it('loads, shows empty resources and handles unsupported metrics without zero-value cards', async () => {
-  const response = deferred<Response>()
-  mockAPI({ '/system/status': () => response.promise })
+it('shows global user usage and separate metrics, billing and shares for both servers', async () => {
+  const sample = { ...billing, supported: true, sampled_at: 1735689600, quota: 1e9 }
+  const user = { id: 7, name: 'Usage leader', up: 1024, down: 3072, expire_at: 1735689600, traffic_limit: 4096 }
+  const fetch = mockAPI({ '/overview': () => Response.json({
+    ...overview, user_traffic: { up: 1024, down: 3072 }, top_users: [user], expiring_users: [user], exhausted_users: [user],
+    servers: [
+      { ...overview.servers[0], billing: { ...sample, used: 750e6, percent: 75 }, user_traffic: { up: 1024, down: 0 }, share_percent: 25 },
+      { ...edge, billing: { ...sample, used: 500e6, percent: 50 }, system: { ...status, server_id: 2, metrics: null },
+        user_traffic: { up: 0, down: 3072 }, share_percent: 75 },
+    ],
+  }) })
   mountPage(<DashboardPage />)
-  expect(screen.getAllByText(t.common.loading).length).toBeGreaterThan(0)
-  await screen.findByText(t.dashboard.empty)
-  await act(async () => response.resolve(Response.json({ ...status, supported: false })))
-  expect(await screen.findByText(t.common.devHint)).toBeVisible()
-  expect(screen.queryByText(t.dashboard.cpu)).not.toBeInTheDocument()
+  expect(await screen.findByText(t.dashboard.totalUsage)).toBeVisible()
+  expect(screen.getByText('4 KiB', { selector: 'p' })).toBeVisible()
+  const local = within(screen.getByRole('link', { name: '本机' }).closest('li')!)
+  expect(local.getByText('12.5%')).toBeVisible()
+  expect(local.getByText('1 KiB · 25.0%')).toBeVisible()
+  expect(local.getByText(/75\.0%$/, { selector: 'span' }).parentElement).toHaveTextContent('0.75 GB / 1 GB · 75.0%')
+  const remote = screen.getByRole('link', { name: edge.name })
+  expect(remote).toHaveAttribute('href', '/servers/2')
+  const remoteRow = within(remote.closest('li')!)
+  expect(remoteRow.getByText(t.servers.metricsUpgrade)).toBeVisible()
+  expect(remoteRow.getByText(t.servers.syncStatuses.synced)).toBeVisible()
+  expect(remoteRow.getByText('3 KiB · 75.0%')).toBeVisible()
+  expect(remoteRow.getByText(/50\.0%$/, { selector: 'span' }).parentElement).toHaveTextContent('0.5 GB / 1 GB · 50.0%')
+  expect(screen.getAllByRole('link', { name: user.name })).toHaveLength(3)
+  expect(screen.queryByRole('link', { name: t.pages.newInbound })).not.toBeInTheDocument()
+  expect(fetch.mock.calls.every(([url]) => url.endsWith('/overview'))).toBe(true)
 })
-it('shows live cards, retries errors and confirms a restart with pending and failure states', async () => {
+
+it('retries an unavailable overview', async () => {
   let fail = true
-  const restart = deferred<Response>()
-  const fetch = mockAPI({ '/inbounds': () => fail ? failure() : Response.json([inbound]), '/users': () => Response.json([proxyUser]), 'POST /singbox/restart': () => restart.promise })
+  mockAPI({ '/overview': () => fail ? failure() : Response.json(overview) })
   const { user } = mountPage(<DashboardPage />)
-  expect(await screen.findByText('12.5%')).toBeVisible()
   await screen.findByText('Try again')
   fail = false
   await user.click(screen.getByRole('button', { name: t.common.retry }))
-  await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
-  await user.click(screen.getByRole('button', { name: t.dashboard.restart }))
-  expect(fetch.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0)
-  await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: t.common.cancel }))
-  await user.click(screen.getByRole('button', { name: t.dashboard.restart }))
-  await user.click(screen.getByRole('button', { name: t.common.confirm }))
-  expect(screen.getByRole('button', { name: t.common.working })).toBeDisabled()
-  await act(async () => restart.resolve(failure(422, 'singbox_check_failed')))
-  expect(await within(screen.getByRole('alertdialog')).findByText('Try again')).toBeVisible()
+  expect(await screen.findByText(t.dashboard.totalUsage)).toBeVisible()
 })
-it('refreshes all overview resources after five seconds and stops polling on unmount', async () => {
+
+it('refreshes the aggregate every 15 seconds and stops when unmounted', async () => {
   vi.useFakeTimers()
   const fetch = mockAPI()
   const { client } = mountPage(<DashboardPage />)
   try {
-    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
-    expect(fetch.mock.calls.filter(([url]) => url.endsWith('/system/status'))).toHaveLength(1)
-    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
-    for (const path of ['/system/status', '/inbounds', '/users']) expect(fetch.mock.calls.filter(([url]) => url.endsWith(path))).toHaveLength(2)
+    await act(() => vi.advanceTimersByTimeAsync(10))
+    expect(fetch).toHaveBeenCalledTimes(1)
+    await act(() => vi.advanceTimersByTimeAsync(15_000))
+    expect(fetch).toHaveBeenCalledTimes(2)
     cleanup()
-    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
-    expect(fetch.mock.calls.filter(([url]) => url.endsWith('/system/status'))).toHaveLength(2)
+    await act(() => vi.advanceTimersByTimeAsync(15_000))
+    expect(fetch).toHaveBeenCalledTimes(2)
   } finally { cleanup(); client.clear(); vi.useRealTimers() }
 })

@@ -6,11 +6,12 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { RadioGroup } from '@/components/ui/radio-group'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { ChoiceSelect } from '@/components/ChoiceSelect'
 import { Page, Panel, Field, Toggle, Submit, Notice, BackLink, Empty, RadioCard } from '@/components/ResourceUI'
 import { ErrorNotice, Loading } from '@/components/Feedback'
 import { inboundQuery, refreshResources, serversQuery } from '@/lib/resources'
 import { api } from '@/lib/api'
+import { serverID, serverPath } from '@/lib/navigation'
 import { useOperation } from '@/hooks/use-operation'
 import { inboundSchema, inboundDefaults, inboundBody, type InboundFormValues } from '@/schemas/inbound'
 import type { Inbound, InboundSuggestion, Protocol, RealityTarget, Server } from '@/types/api'
@@ -130,18 +131,14 @@ function ServerSelect({ servers, selected, onChange }: { servers: Server[]; sele
   if (choices.length < 2 && (selected === undefined || choices.some((server) => server.id === selected))) return null
   const current = selected === undefined ? choices.find((server) => server.is_local)?.id : selected
   const available = choices.some((server) => server.id === current)
+  const options = choices.map((server) => ({ value: String(server.id), label: server.is_local ? server.name : `${server.name} · ${t.servers.statuses[server.status]}` }))
   return <div className="space-y-2">
     <Label htmlFor={id}>{t.inbounds.server}</Label>
-    <Select value={available ? String(current) : 'unknown'} onValueChange={(value) => {
+    <ChoiceSelect id={id} className="max-w-full" value={available ? String(current) : 'unknown'}
+      options={available ? options : [{ value: 'unknown', label: t.common.unknown, disabled: true }, ...options]} onChange={(value) => {
       const server = choices.find((row) => String(row.id) === value)
       if (server) onChange(server)
-    }}>
-      <SelectTrigger id={id}><SelectValue /></SelectTrigger>
-      <SelectContent>
-        {!available && <SelectItem value="unknown" disabled>{t.common.unknown}</SelectItem>}
-        {choices.map((server) => <SelectItem key={server.id} value={String(server.id)}>{server.is_local ? server.name : `${server.name} · ${t.servers.statuses[server.status]}`}</SelectItem>)}
-      </SelectContent>
-    </Select>
+    }} />
   </div>
 }
 
@@ -153,7 +150,7 @@ export function NewInboundPage() {
   const requested = params.get('server')
   const target = servers.data?.find((server) => String(server.id) === requested && server.status !== 'pending')
   const unavailable = requested !== null && !target
-  const returnTo = target ? `/inbounds?server=${target.id}` : '/inbounds'
+  const returnTo = target ? serverPath(target.id, 'inbounds') : '/inbounds'
   return <Page title={t.pages.newInbound} actions={<BackLink to={returnTo} />}>
     {servers.isError && <ErrorNotice error={servers.error} retry={() => { void servers.refetch() }} />}
     {servers.data && <ServerSelect servers={servers.data} selected={unavailable ? null : target?.id} onChange={(server) => {
@@ -164,7 +161,9 @@ export function NewInboundPage() {
     {unavailable && (servers.isPending ? <Loading /> : servers.data && <Notice>{t.inbounds.serverUnavailable}</Notice>)}
     <fieldset disabled={unavailable} className="min-w-0">
       <legend id="inbound-protocol" className="mb-3 text-sm font-medium">{t.inbounds.protocol}</legend>
-      <RadioGroup aria-labelledby="inbound-protocol" value={protocol} onValueChange={(value) => setProtocol(value as Protocol)} disabled={unavailable} className="gap-4 sm:grid-cols-2">
+      <RadioGroup aria-labelledby="inbound-protocol" value={protocol} onValueChange={(value) => {
+        if (value === 'vless_reality' || value === 'hysteria2') setProtocol(value)
+      }} disabled={unavailable} className="gap-4 sm:grid-cols-2">
         <RadioCard value="vless_reality" label={t.inbounds.reality} hint={t.inbounds.realityHint} className="p-5" />
         <RadioCard value="hysteria2" label={t.inbounds.hysteria2} hint={t.inbounds.hysteriaHint} className="p-5" />
       </RadioGroup>
@@ -174,19 +173,23 @@ export function NewInboundPage() {
 }
 export function EditInboundPage() {
   const { id = '' } = useParams()
+  const [params] = useSearchParams()
+  const owner = serverID(params.get('server'))
   const inbound = useQuery(inboundQuery(id))
-  return <Page title={t.pages.editInbound} actions={<BackLink to="/inbounds" />}>
-    {inbound.isPending ? <Loading /> : inbound.isError ? <ErrorNotice error={inbound.error} retry={() => { void inbound.refetch() }} /> : <EditableInbound key={inbound.data.id} inbound={inbound.data} />}
+  return <Page title={t.pages.editInbound} actions={<BackLink to={owner ? serverPath(owner, 'inbounds') : '/inbounds'} />}>
+    {inbound.isPending ? <Loading /> : inbound.isError ? <ErrorNotice error={inbound.error} retry={() => { void inbound.refetch() }} /> : <EditableInbound key={inbound.data.id} inbound={inbound.data} scoped={!!owner} />}
   </Page>
 }
 
 
-function EditableInbound({ inbound }: { inbound: Inbound }) {
+function EditableInbound({ inbound, scoped }: { inbound: Inbound; scoped: boolean }) {
   const servers = useQuery(serversQuery)
+  const navigate = useNavigate()
   const [target, setTarget] = useState<Server>()
   return <>
     {servers.isError && <ErrorNotice error={servers.error} retry={() => { void servers.refetch() }} />}
     {servers.data && <ServerSelect servers={servers.data} selected={target?.id ?? inbound.server_id} onChange={setTarget} />}
-    <InboundForm protocol={inbound.protocol} source={inbound} target={target} />
+    <InboundForm protocol={inbound.protocol} source={inbound} target={target}
+      onSaved={scoped ? (saved) => { void navigate(serverPath(saved.server_id, 'inbounds')) } : undefined} />
   </>
 }

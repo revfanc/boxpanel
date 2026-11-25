@@ -337,6 +337,16 @@ func TestRemoteBillingThresholdsAndRetention(t *testing.T) {
 			t.Fatal("remote billing events use the wrong server address")
 		}
 	}
+	if _, err := f.service.SaveConfig(t.Context(), ConfigUpdate{
+		ServerID: pointer(int64(2)), Events: map[string]*bool{serverQuota90: pointer(true)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.evaluate()
+	f.evaluate()
+	if f.events(serverQuota90) != 1 || f.count("SELECT count(*) FROM alert_events WHERE server_id=2 AND kind=?", serverQuota90) != 1 {
+		t.Fatal("enabling the shared 90% threshold did not produce one alert for the selected node")
+	}
 }
 
 func TestServerAvailabilitySettingAndRecoveryPair(t *testing.T) {

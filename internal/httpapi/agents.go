@@ -20,6 +20,7 @@ func (a *api) agentEndpoints() http.Handler {
 		agent.Prefix + "/join": http.MethodPost, agent.Prefix + "/heartbeat": http.MethodPost,
 		agent.Prefix + "/desired": http.MethodGet, agent.Prefix + "/inbound-keys": http.MethodPost,
 		agent.TrafficPath: http.MethodPost, agent.InterfaceSamplesPath: http.MethodPost,
+		agent.LogsPath: http.MethodPost,
 	}
 	return middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method, ok := routes[r.URL.Path]
@@ -89,11 +90,13 @@ func (a *api) agentAuthenticated(w http.ResponseWriter, r *http.Request) {
 		limit = agent.MaxTrafficBody
 	case agent.InterfaceSamplesPath:
 		limit = agent.MaxInterfaceSamplesBody
+	case agent.LogsPath:
+		limit = agent.MaxLogBody
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {
 		if _, tooLarge := err.(*http.MaxBytesError); limit > 8*1024 && tooLarge {
-			writeError(w, 413, "invalid_argument", "节点流量上报超过大小限制", fmt.Sprintf("请将每批流量上报拆分至 %d KiB 以内后重试。", limit/1024))
+			writeError(w, 413, "invalid_argument", "节点上报超过大小限制", fmt.Sprintf("请将每批上报拆分至 %d KiB 以内后重试。", limit/1024))
 			return
 		}
 		a.rejectAgent(w, false)
@@ -129,6 +132,18 @@ func (a *api) agentAuthenticated(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	switch r.URL.Path {
+	case agent.LogsPath:
+		media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		var report agent.LogReport
+		if err != nil || media != "application/json" || strictObject(body, &report) != nil {
+			a.agentOperationError(w, agent.ErrInvalidLogs)
+			return
+		}
+		if err := a.opts.Agents.RecordLogs(r.Context(), identity, report); err != nil {
+			a.agentOperationError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	case agent.InterfaceSamplesPath:
 		media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 		var report agent.InterfaceSamples
@@ -180,6 +195,7 @@ func (a *api) agentAuthenticated(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !agent.ValidMetadata(in.Version, 128) || in.Uptime < 0 || in.Protocol < 0 || !agent.ValidInterfaces(in.Interfaces) || !agent.ValidSyncError(in.SyncError) ||
+			!in.Metrics.Valid() || !in.RestartResult.Valid() ||
 			in.AppliedGeneration != nil && *in.AppliedGeneration < 0 || in.AppliedGeneration == nil && in.SyncError != "" {
 			writeError(w, 400, "invalid_argument", "节点心跳内容无效", "请检查节点 boxpanel 版本后重试。")
 			return
@@ -225,6 +241,10 @@ func (a *api) agentOperationError(w http.ResponseWriter, err error) {
 		writeError(w, 400, "invalid_argument", "节点流量上报内容无效", "请检查节点版本；每批最多上报 10000 个用户，每个用户只能出现一次。")
 	case agent.ErrInvalidInterfaceSamples:
 		writeError(w, 400, "invalid_argument", "节点网卡采样无效", "请检查节点时钟、网卡名称和流量值；每批最多上报 1000 条。")
+	case agent.ErrInvalidLogs:
+		writeError(w, 400, "invalid_argument", "节点日志批次无效", "请确认主控和节点的 boxpanel 版本后重试。")
+	case agent.ErrLogInactive:
+		writeError(w, 409, "log_request_expired", "日志请求已结束", "如需继续查看，请重新打开服务器的日志标签。")
 	case agent.ErrAgentUpgradeRequired:
 		writeError(w, http.StatusUpgradeRequired, "agent_upgrade_required", "节点版本过旧，需升级", "请在主控的服务器卡片复制升级命令并在节点执行。")
 	default:

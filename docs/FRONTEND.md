@@ -1,4 +1,4 @@
-# 前端规格（React + shadcn/ui，history 路由）
+# 前端规格（React + shadcn/ui Base UI，history 路由）
 
 ## 1. history 路由与随机 basename（必须照此实现）
 
@@ -60,16 +60,17 @@ createBrowserRouter(routes, { basename: BASE || "/" });
 | `/login` | 登录 | 未登录访问任何页都重定向到这里（带 `?next=`） |
 | `/setup` | 引导 | 重定向到当前步骤 |
 | `/setup/:step` | 引导步骤 | `welcome → check → scenario → node → user → firewall → finish` |
-| `/` | 概览 | 系统状态、sing-box 状态、节点数/用户数、快捷入口 |
-| `/servers` | 服务器 | 名称、公网地址、状态、boxpanel 版本，可改名 |
-| `/inbounds` | 节点列表 | 卡片显示所属服务器，本机节点可编辑、启停和删除 |
-| `/inbounds/new` | 新建节点 | 先选协议卡片，再填（大部分自动填好，「高级」折叠） |
-| `/inbounds/:id` | 编辑节点 | |
+| `/` | 概览 | 全网用户用量、服务器状态和各自计费、用户用量与异常、未读告警 |
+| `/servers` | 服务器 | 本机和远端列表、添加服务器、全部入站入口 |
+| `/servers/:id` | 服务器详情 | 状态 / 入站 / 流量 / 告警 / 日志 |
+| `/inbounds` | 全部入站 | 用 `?filter=<id>` 筛选，旧 `?server=<id>` 跳转到该服务器的入站标签 |
+| `/inbounds/new` | 新建入站 | 可用 `?server=<id>` 预选服务器 |
+| `/inbounds/:id` | 编辑入站 | 从服务器详情进入时，保存后回到所属服务器的入站标签 |
 | `/users` | 用户列表 | 流量进度条、到期时间、状态 |
-| `/users/:id` | 用户详情 | **订阅中心**：二维码、复制链接、一键导入、单节点 URI |
+| `/users/:id` | 用户详情 | 订阅 / 流量 / 设置 |
 | `/rules` | 分流规则 | 预设单选卡片、去广告开关、自定义域名、DNS、规则源 |
-| `/settings` | 设置 | 面板地址/端口/路径、节点地址、订阅路径、账号密码 |
-| `/logs` | 日志 | sing-box 日志，自动刷新开关 |
+| `/settings` | 设置 | 面板 / 订阅 / 通知通道 / 备份与迁移 |
+| `/logs` | 旧日志入口 | 跳转到本机服务器的日志标签 |
 | `*` | 404 | |
 
 路由守卫：
@@ -79,14 +80,15 @@ createBrowserRouter(routes, { basename: BASE || "/" });
 
 ## 3. 布局与组件
 
-- 桌面：左侧 Sidebar（shadcn `sidebar`）+ 顶栏（面板名、sing-box 运行状态点、主题切换、退出）。
-- 移动端（<768px）：Sidebar 收为抽屉；表格改卡片列表。手机上用面板是常见场景，必须可用。
+- 桌面左侧为「概览 / 服务器 / 用户 / 分流规则 / 设置」。顶栏显示面板名、主题切换和退出，内核状态在对应服务器详情。
+- 窄屏（<768px）使用导航抽屉。标签按可用宽度换行，概览服务器行分栏折叠，流量表可在窄屏内换行。
 - 主题：亮/暗/跟随系统。
-- 用到的 shadcn 组件：button, card, input, label, form, select, switch, tabs, dialog, alert-dialog, dropdown-menu, table, badge, progress, tooltip, sonner(toast), skeleton, sidebar, sheet, separator, radio-group, checkbox, textarea, accordion, alert。
-- T9.1：节点筛选与服务器选择、规则预览格式与规则源、流量告警计费口径使用 Select；引导场景、节点协议、分流预设使用整卡可选的 RadioGroup。
+- 组件由 shadcn CLI 按 `base-nova` 生成。组件清单为 alert、alert-dialog、badge、button、card、checkbox、dialog、dropdown-menu、
+  input、label、progress、radio-group、select、separator、sheet、sidebar、skeleton、switch、tabs、textarea、tooltip。
+- 入站筛选与服务器选择、规则预览格式与规则源、流量告警计费口径使用 Select。引导场景、入站协议及分流预设使用整卡可选的 RadioGroup。
   引导的 Hysteria2 选项使用 Checkbox，复制字段使用只读 Textarea。网卡建议保留 Input + datalist，可直接输入网卡名。
 - 二维码：`qrcode.react`。
-- 所有破坏性操作（删除节点/用户、重置 token）用 alert-dialog 二次确认，并说明后果。
+- 所有破坏性操作（删除入站或用户、重置订阅令牌）用 alert-dialog 二次确认，并说明后果。
 - 写操作期间按钮 loading；配置生效失败时展示 `error.message` + `hint`，`detail` 放在可展开区域。
 - T6.10：统一 ErrorNotice 对 `503 singbox_apply_timeout/singbox_applying` 显示「正在生效，请稍后刷新」，
   提示核对用户与内核状态后重试，保留表单和限额输入；不显示网络错误、不自动重发写请求。
@@ -144,8 +146,7 @@ createBrowserRouter(routes, { basename: BASE || "/" });
   [sing-box MT App Store](https://apps.apple.com/us/app/sing-box-mt/id6785326793)。
   sing-box 深链来自 [官方通用规范](https://sing-box.sagernet.org/clients/general/)。
   下载地址只用官方 Releases/商店，不固定未经验证的资产文件名；来源和深链模板随数据一起维护。
-- 无新增依赖：复用已安装的 radix-ui Tabs、qrcode.react 和 T4 表单/组件；未修改 shadcn 生成文件，
-  未改 pnpm 冷静期、package.json 或锁文件。补充强制进入、跳过、刷新续接、每步返回、DNS 拒绝、
+- 复用 shadcn Tabs、qrcode.react 和 T4 表单组件。补充强制进入、跳过、刷新续接、每步返回、DNS 拒绝、
   BBR/错误阻断、手动 Reality、双入站重试、dev 订阅降级提示、平台 Tabs 和端口检查组件测试。
 
 ## 5. 数据层
@@ -392,6 +393,8 @@ web/
 
 ## 12. T7.9 服务器流量与通知
 
+本节记录 T7.9 的入口。T9.5 的服务器计费、告警与通知位置见 §18。
+
 - 概览独立读取 `GET /alerts` 并每 15 秒刷新。计费卡片显示已用 GB、月额度、百分比、UTC 周期起止、
   计费口径、最近网卡与采样时间。等待样本或长期无数据时引导检查默认路由和网卡设置。
   卡片解释网卡计费与 T7.1c 的用户流量差异，并提示对照 VPS 服务商的计费口径。
@@ -404,6 +407,8 @@ web/
   「发送测试」使用已保存的通道配置，受理后提供概览入口查看真实投递状态，支持已保存凭证的停用通道。
 
 ## 13. T8.1–T8.4 服务器页与节点表单
+
+本节记录 T8.1–T8.4 的入口和交互。T9.5 页面将服务端协议入口统一称为「入站」，服务器布局见 §18。
 
 - 桌面和移动导航提供「服务器」，沿用 history 路由、登录和引导守卫。卡片显示名称、公网地址、状态和版本，
   未记录的版本显示为缺省值。「改名」接受去首尾空白后的 1–64 个字符，保存失败时保留输入供重试。
@@ -432,6 +437,8 @@ web/
 
 ## 15. T8.6 服务器向导、节点筛选和用户流量明细
 
+本节记录 T8.6 的页面结构。T9.5 保留加入向导，筛选链接与流量页面见 §18。
+
 - 添加向导依次填写名称、查看并复制加入命令、等待连接。命令步骤说明以 root 执行、放行端口和 NAT/多 IP 时加
   `--public-ip <公网IP>`。命令含一小时内有效的一次性令牌，明文只暂存在向导里。
 - 等待时每 3 秒查询服务器列表和当前令牌详情，按令牌详情的服务器 ID 匹配，收到首次心跳后给出服务器名、地址、版本和新建节点入口。
@@ -444,6 +451,8 @@ web/
 - 多服务器用户详情显示服务器名、周期上传、下载和占用户周期总量的比例。零用量显示 0%。本机行说明未归属流量的范围，单机省略明细。
 
 ## 16. T8.7 版本提示与远端告警
+
+本节记录 T8.7 的设置入口。T9.5 将版本和告警迁至服务器详情，见 §18。
 
 - 远端卡片使用 `/servers` 的 `upgrade_required` 显示「节点版本过旧，需升级」，联系状态独立取心跳。
   协议过旧或与主控发布版本不同，卡片提供可复制的节点升级命令。主控是发布版时命令使用同一 tag 并指定 `--version`。
@@ -463,3 +472,24 @@ web/
 - 页面每 3 秒查询 `/migration`，显示重签、冻结、等待新机确认、已退役和迁移进度。退役后给出新主控地址，节点全部切换且旧内核停止后显示关机提示。
   新主控列出尚未切换的节点，并提供可复制的 `boxpanel set-master`。离开设置页停止轮询。
 - 旧订阅分享页展示地址变更说明。二维码、复制按钮、格式地址和导入链接指向新机。中文文案与 SPA 一样来自 `web/src/i18n/zh-CN.ts`。
+
+## 18. T9.5 服务器详情与统一流量
+
+- 概览每 15 秒刷新 `/overview`。全网汇总按用户各自的当前周期计算。每台服务器显示联系及配置同步状态、CPU、内存、实时网速、
+  用量占比以及该服务器网卡计费用量和额度。用户列表显示用量排行、即将到期、已达限额。告警列表支持标记已读，并显示近期通知投递结果。
+- 服务器详情用 `?tab=status|inbounds|traffic|alerts|logs` 定位标签，缺省为状态。本机和远端共用组件。
+  状态显示系统指标、内核状态及版本、重启、boxpanel 版本和服务器管理。远端显示配置同步进度、升级命令与自动升级状态。
+  旧节点未上报指标时显示「需升级节点」，远端重启显示待回报、成功或可操作的失败提示。
+- 入站标签负责本服务器的创建、编辑、启停和删除。`/inbounds` 仍可跨服务器筛选。`/inbounds?server=<id>` 采用替换历史项的重定向，
+  目标为 `/servers/<id>?tab=inbounds`。新建和编辑带服务器上下文，保存后可直接查看对应的入站。
+- 流量标签并列显示网卡账期及用户周期用量，并可从逐用户表跳到用户流量标签。本机的用户分项标明含未归属用量。
+  告警标签统一设置计费网卡、额度、计费日、口径及 80% / 90% / 100% 阈值，保存后刷新相关流量数据。
+- 日志标签打开时登记远端租约，每 15 秒续期，每 3 秒读取主控最新日志。首批到达前显示「正在向节点请求日志」。
+  离开标签、切换服务器、关闭页面或将文档移到后台时停止续期并尝试撤销。租约 60 秒后自动过期。本机日志每 5 秒刷新。
+- 用户详情默认打开订阅，显示二维码、链接、一键导入和单入站 URI。流量标签展示总量、服务器明细和清零。设置标签管理限额、
+  到期、重置日和可用服务器。设置页的全局标签包括面板地址、证书和账号，订阅自动选择，通道及全局通知事件，以及备份和 T9.4 主控迁移。
+  拦截 BitTorrent 的开关在分流规则的服务器规则中。
+- 采用 `@base-ui/react@1.9.0` 支持 shadcn 组件，pnpm 12.18.0 继续执行锁文件供应链校验和默认冷静期。
+  用已锁定的 shadcn 4.23.0 CLI 重新生成 `components/ui/`。组合控件使用 `render`，保留链接的原生语义。
+  Select 通过选项提供显示名并处理空值，表单开关和复选框接收布尔值，对话框使用 Base UI 焦点回调。
+  [Base UI 组合用法](https://base-ui.com/react/handbook/composition) · [shadcn Base UI Select](https://ui.shadcn.com/docs/components/base/select) · [pnpm 冷静期](https://pnpm.io/settings#minimumreleaseage)

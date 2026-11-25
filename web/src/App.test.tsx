@@ -8,11 +8,11 @@ import { ThemeProvider } from '@/components/ThemeProvider'
 import { createQueryClient, queryKeys } from '@/lib/query'
 import { advanceSession } from '@/lib/api'
 import { zhCN } from '@/i18n/zh-CN'
+import { edge, inbound, overview, server } from '@/test/resources'
 
 const failure = (status: number, code: string, extra = {}) => Response.json({ error: { code, message: 'Request failed', hint: 'Try again', ...extra } }, { status })
 const completedSetup = () => Response.json({ completed: true, step: 'finish', domain: '', hysteria2: true })
 const admin = { username: 'admin' }
-const status = { supported: false, cpu: 0, mem: { used: 0, total: 0 }, disk: { used: 0, total: 0 }, uptime: 0, net: { rx_rate: 0, tx_rate: 0 }, singbox: { installed: false, running: false, version: '', uptime: 0 } }
 let signedIn = false
 let setupResponse: () => Response = completedSetup
 let loginResponse: () => Promise<Response>
@@ -36,8 +36,13 @@ beforeEach(() => {
       case '/auth/logout': return logoutResponse()
       case '/setup/status': return setupResponse()
       case '/settings': return settingsResponse()
-      case '/system/status': return Response.json(status)
-      case '/users': case '/inbounds': return Response.json([])
+      case '/overview': return Response.json(overview)
+      case '/servers': return Response.json([server, edge])
+      case '/servers/1': return Response.json(server)
+      case '/servers/2': return Response.json(edge)
+      case '/servers/1/logs': return Response.json({ ready: true, lines: ['local log line'] })
+      case '/users': return Response.json([])
+      case '/inbounds': return Response.json([inbound, { ...inbound, id: 2, server_id: 2, remark: 'Edge Reality' }])
       case '/users/3': return Response.json({ id: 3, name: 'alice', uuid: 'aaaa****bbbb', enabled: true, traffic_limit: 0, traffic_up: 0, traffic_down: 0, expire_at: 0, remark: '', created_at: 1, status: 'active' })
       case '/users/3/links': return failure(409, 'subscription_unavailable')
       default: throw new Error(`Unexpected request: ${url}`)
@@ -69,7 +74,7 @@ describe('session and history routes', () => {
     expect(new URLSearchParams(router.state.location.search).get('next')).toBe('/users/3?view=links#share')
     await enterCredentials(user)
     await user.click(screen.getByRole('button', { name: zhCN.login.submit }))
-    await screen.findByRole('heading', { name: zhCN.pages.userDetail })
+    await screen.findByRole('heading', { name: 'alice' })
     expect(router.state.location.pathname).toBe(`${base}/users/3`)
     expect(router.state.location.search).toBe('?view=links')
     expect(router.state.location.hash).toBe('#share')
@@ -100,7 +105,10 @@ describe('session and history routes', () => {
     setupResponse = () => Response.json({ completed: true, step: 'finish', domain: '', hysteria2: true })
     mount('/users')
     await screen.findByRole('heading', { name: zhCN.pages.users })
-    expect(await screen.findByText(`${zhCN.status.label} · ${zhCN.status.unsupported}`)).toBeVisible()
+    const nav = await screen.findByRole('navigation', { name: zhCN.app.navigation })
+    expect(within(nav).getAllByRole('link').map((link) => link.textContent)).toEqual([
+      zhCN.pages.home, zhCN.pages.servers, zhCN.pages.users, zhCN.pages.rules, zhCN.pages.settings,
+    ])
   })
 
   it.each([500, 403, 404])('does not bypass a real setup error (%s), and can retry', async (code) => {
@@ -117,7 +125,7 @@ describe('session and history routes', () => {
   it('clears private cached data and returns to login on a protected 401', async () => {
     signedIn = true
     const { router, client } = mount('/users/3')
-    await screen.findByRole('heading', { name: zhCN.pages.userDetail })
+    await screen.findByRole('heading', { name: 'alice' })
     client.setQueryData(['users', 3, 'links'], { secret: 'private' })
     settingsResponse = () => failure(401, 'unauthorized')
     signedIn = false
@@ -234,4 +242,22 @@ it('opens mobile navigation with a named dialog, closes with Escape and on navig
   await screen.findByRole('heading', { name: zhCN.pages.users })
   expect(router.state.location.pathname).toBe('/users')
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+})
+
+it('redirects old inbound links to the server tab under the injected basename', async () => {
+  signedIn = true
+  const base = '/k3m9x2p7q1ab'
+  const { router } = mount(`${base}/inbounds?server=2`, base)
+  expect(await screen.findByText('Edge Reality')).toBeVisible()
+  expect(screen.queryByText(inbound.remark)).not.toBeInTheDocument()
+  expect(router.state.location).toMatchObject({ pathname: `${base}/servers/2`, search: '?tab=inbounds' })
+  expect(router.state.historyAction).toBe('REPLACE')
+  expect(screen.getByRole('tab', { name: zhCN.servers.tabs.inbounds })).toHaveAttribute('aria-selected', 'true')
+})
+
+it('keeps old log bookmarks working on the local server', async () => {
+  signedIn = true
+  const { router } = mount('/logs')
+  expect(await screen.findByText('local log line')).toBeVisible()
+  expect(router.state.location).toMatchObject({ pathname: '/servers/1', search: '?tab=logs' })
 })

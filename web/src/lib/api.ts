@@ -35,6 +35,7 @@ export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE'
   body?: unknown
   signal?: AbortSignal
+  keepalive?: boolean
   responseType?: 'blob'
 }
 
@@ -72,6 +73,7 @@ export async function api<T>(path: `/${string}`, options: RequestOptions = {}): 
       headers: { Accept: 'application/json', ...(options.body === undefined || options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }) },
       body: options.body === undefined ? undefined : options.body instanceof FormData ? options.body : JSON.stringify(options.body),
       signal: options.signal,
+      keepalive: options.keepalive,
     })
   } catch (error) {
     if (options.signal?.aborted || error instanceof DOMException && error.name === 'AbortError') throw error

@@ -227,11 +227,12 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 | GET | `/reality/recommend` | `{targets: [{server, tls13, h2, latency_ms, ok}]}`，前 3 个推荐 |
 | POST | `/reality/check` | `{server, port?}` → 单个检测结果 |
 
-## 服务器（T8.1–T8.7）
+## 服务器（T8.1–T9.5）
 
 | 方法 | 路径 | 请求与成功响应 |
 |---|---|---|
 | GET | `/servers` | 200，服务器数组，本机优先，其余按 ID 升序 |
+| GET | `/servers/{id}` | 200，指定服务器的元数据及入站计数 |
 | PUT | `/servers/{id}` | `{name?, public_host?, auto_upgrade?}`，至少提供一项，200 返回更新后的服务器 |
 | DELETE | `/servers/{id}` | 移除远程服务器并撤销它的公钥，204 |
 | GET | `/servers/join-tokens` | 200，未过期且未使用令牌的元数据数组 |
@@ -249,7 +250,7 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 远端服务器还返回 `desired_generation`、`applied_generation`（0 表示尚未生效）、`sync_status`（`syncing`、`synced`、`failed`）
 及最近心跳记录的 `singbox_active`。有失败时返回固定的 `sync_error` 代码，面板根据代码展示原因和处理建议。
 `GET /servers` 的远端行还包含 `traffic_up`、`traffic_down`，单位为字节。两项汇总该服务器所有未删除用户已确认的用量，
-包含历次节点 epoch，从 0 开始并饱和到 int64 上限。用户清零不改变服务器累计值。本机继续通过 `/alerts` 查看网卡计费用量。
+包含历次节点 epoch，从 0 开始并饱和到 int64 上限。用户清零不改变服务器累计值。面板统一使用下述当前周期接口。
 `GET /servers` 每项还包含 `inbound_counts: {ready, pending}`，按密钥就绪状态统计该服务器的入站，包含已停用的入站。
 远端有已保存的心跳运行时长时返回 `uptime`，单位为秒，取最近心跳时的节点进程时长。
 T9.3：远端行返回 `auto_upgrade`（布尔，默认 false），本机不返回；对本机设置返回 400。修改不递增期望版本、不重启任何内核，
@@ -261,19 +262,21 @@ T9.3：远端行返回 `auto_upgrade`（布尔，默认 false），本机不返�
 无论主控当前使用自签或 ACME 证书，`master_pin` 都是固定回退公钥 SPKI DER 的 SHA-256（无填充 base64url）。
 签发要求 HTTPS，HTTP 面板返回 `409 agent_requires_https`。令牌管理和服务器移除沿用管理员会话与 CSRF 校验。
 
-### 节点 API（T8.2–T9.4）
+### 节点 API（T8.2–T9.5）
 
 前缀为 `/{web_path}/api/agent/v1`，只接受 HTTPS。带请求体的 POST 使用 `application/json`。节点使用签名认证。
-请求体限 8 KiB，`/traffic` 限 1 MiB，`/interface-samples` 限 256 KiB。路径不含查询参数。所有 base64url 值均不带填充。
+请求体限 8 KiB，`/traffic` 限 1 MiB，`/interface-samples` 限 256 KiB，`/logs` 限 2 MiB。
+路径不含查询参数。所有 base64url 值均不带填充。
 
 | 方法 | 路径 | 请求与成功响应 |
 |---|---|---|
 | POST | `/join` | `{token, public_key, hostname, public_ip, version, protocol?}`，201 `{server_id}` |
-| POST | `/heartbeat` | `{version, protocol?, interfaces?, singbox_active, uptime, applied_generation?, sync_error?}`。提供 `protocol` 或 `applied_generation` 时 200 `{desired_generation, protocol, version, interface}`。旧格式均省略时返回 204。uptime 为节点进程运行秒数 |
-| GET | `/desired` | 空请求体，200 `{generation, inbounds, users, route}` |
+| POST | `/heartbeat` | `{version, protocol?, interfaces?, singbox_active, uptime, applied_generation?, sync_error?, metrics?, restart_result?}`。提供 `protocol` 或 `applied_generation` 时 200 `{desired_generation, protocol, version, interface, log_request?, restart_pending?}`。旧格式均省略时返回 204。顶层 uptime 为节点进程运行秒数 |
+| GET | `/desired` | 空请求体，200 `{generation, inbounds, users, route, restart_id?}` |
 | POST | `/inbound-keys` | `{inbound_id, key_id, reality_public_key?, short_id?, hy2_cert_sha256?, hy2_cert_pem?}`，204 |
 | POST | `/traffic` | `{counters:[{user_id,epoch,up,down}]}`，204 |
 | POST | `/interface-samples` | `{samples:[{sampled_at,interface,rx,tx}]}`，204 |
+| POST | `/logs` | `{id,batch_id,snapshot,lines}`，204 确认该批日志 |
 
 当前协议为 2，主控和节点的最低要求均为 2。旧请求省略 `protocol` 时按 1 处理。旧节点仍可注册和发心跳，
 其签名认证通过的期望状态、流量、网卡样本及公开密钥请求返回 `426 agent_upgrade_required`。心跳回复的
@@ -313,6 +316,47 @@ T9.3：远端行返回 `auto_upgrade`（布尔，默认 false），本机不返�
 重传不会恢复过期数据。空批可用于确认接口存在。
 请求成功表示整批已确认。节点以新签名重试同一快照不会重复计数。较旧 epoch 忽略，同一 epoch 的每个方向独立保留最高确认值。
 收到较新 epoch 时，该 epoch 从零计量。总量和配额以主控为准。具体重置与补报口径见 [SPEC §19](SPEC.md#19-t84-远端流量汇总)。
+
+T9.5 增补字段沿用协议 2。`metrics` 包含 `cpu`（0–100，保留一位小数）、`mem` 和 `disk`（`[已用,总量]`，十进制 MB）、
+`net`（`[下行,上行]`，字节/秒）、`uptime`（系统运行秒数）、可选 `unavailable`（采样不可用）和
+`core`（可选，含 `version`、`up` 内核运行秒数，省略内部字段时表示空字符串与 0）。
+缺少整个 `metrics` 表示旧节点。新节点遇严格校验的旧主控会去掉 T9.5 字段并保留协议 2 重试。
+
+`log_request` 为 `{id,ttl_ms}`。节点仅在有请求时上报，使用同一 `id` 和每批唯一的 `batch_id`。
+首批 `snapshot=true`，可为空，之后仅传新增行。每批最多 200 行，每行不超过 1024 字节，主控只接受该签名服务器的当前请求。
+过期或不同租约返回 `409 log_request_expired`。批次确认后再推进节点本地游标，重复确认同一批不会重复追加。
+`restart_pending=true` 提示节点拉取期望状态中的 `restart_id`。节点以 `restart_result:{id,error?}` 上报，省略 `error` 表示成功。
+失败使用配置同步中的适用错误码或 `interrupted`。主控只接受匹配当前待处理指令的结果，重放旧结果不影响新指令。
+冻结或退役的只读主控和验证候选地址的探测均不下发日志请求与重启指令。
+
+### T9.5 服务器详情与概览
+
+以下路径要求管理员会话。写操作继续校验 CSRF。`id` 是服务器 ID，服务器已移除或不存在时读取返回 404。
+
+| 方法 | 路径 | 请求与成功响应 |
+|---|---|---|
+| GET | `/servers/{id}/status` | 200 `{server_id,metrics,metrics_at,singbox,singbox_active,restart}` |
+| GET | `/servers/{id}/traffic` | 200 `{server_id,billing,user_traffic,users}` |
+| GET / PUT | `/servers/{id}/alerts` | 读取 `{config,interfaces}`。写入 config 的部分字段并返回更新后的 config |
+| POST | `/servers/{id}/restart` | 空请求体。本机同步重启成功返回 204，远端返回 202 和 `{id,status:"pending"}` |
+| GET | `/servers/{id}/logs` | 200 `{ready,lines}`，最近 200 行已脱敏日志。远端未收到首批时 `ready=false` |
+| PUT / DELETE | `/servers/{id}/logs/{viewer}` | 空请求体。远端查看租约登记、续期或撤销成功返回 204 |
+| GET | `/overview` | 200 `{servers,user_traffic,top_users,expiring_users,exhausted_users,unread,unread_count,recent}` |
+
+- `status` 的 `metrics` 为 `{supported,cpu,mem,disk,net,uptime}`。`mem` 与 `disk` 均为 `{used_mb,total_mb}`，
+  `net` 为 `{rx_rate,tx_rate}`，单位为字节/秒。远端 `metrics_at` 为最新心跳 UTC Unix 秒，本机实时采样时为 null。
+  尚未报告指标的远端 `metrics=null`。采样不可用时 `supported=false`。`singbox` 为 `{installed,running,version,uptime}` 或 null，
+  内核状态不完整时仍可通过 `singbox_active` 读取已知状态。`restart` 为 null 或 `{id,status,error?}`，状态为
+  `pending`、`succeeded` 或 `failed`。同一服务器的远端重启指令待处理时再次提交会返回原 ID。
+- `traffic` 的 `billing` 沿用 T7.9 账期结构，`user_traffic` 为 `{up,down}`，`users` 为本期有用量的 `[{id,name,up,down,traffic_limit,expire_at}]`。
+  用户字节数使用各用户各自的当前周期。旧 epoch 不参与远端分项。本机分项包含升级前和移除服务器后未归属的用量。
+- 远端日志租约以服务器 ID 及 32 位十六进制 `viewer` 为键，每次 PUT 续期 60 秒。同一服务器可以有多位独立查看者。
+  GET 只读取日志。最后一位查看者撤销或过期后，主控清空该服务器的缓存。旧节点的日志读取、租约登记和重启返回
+  `409 node_monitoring_required`。
+- 概览的 `servers` 使用服务器元数据，另含 `system`、`billing`、`user_traffic` 和 `share_percent`。
+  全局 `user_traffic` 合计所有用户当前周期，服务器占比用上传和下载之和计算。三个用户列表均最多 5 项，字段同上。
+  用量榜按当期用量排序，到期榜按截止时间排序且限未来 72 小时内的启用用户，超额榜仅含启用且已达限额的用户。
+  `unread`、`unread_count` 和 `recent` 沿用 T7.9 结构。
 
 ## 入站
 
@@ -693,7 +737,7 @@ JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未�
 | POST | `/alerts/events/{key}/read` | 空请求体，204 标记已读，可重复请求。key 取自 unread，未知 key 返回 404 |
 
 - 省略 `server_id` 选中本机。显式 ID 必须为正整数，服务器已移除或不存在时返回 404。远端设置不改变节点期望版本。
-  远端事件开关可修改 `server_quota_80`、`server_quota_100`。通知通道为主控共享配置。
+  T9.5 起，远端可修改 `server_quota_80`、`server_quota_90`、`server_quota_100`。远端 90% 默认关闭。通知通道为主控共享配置。
 - `config` 包含 `interface`（空表示自动检测）、`quota_gb`（整数 0–9223372036）、`billing_day`（整数 1–28）、
   `billing_mode`（`out` / `both` / `max` / `in`）及 `events`（事件类型到布尔值的映射）。
   PUT 中省略的字段和事件保持原值。事件类型有 `user_quota_80`、`user_quota_100`、`user_expiring`、

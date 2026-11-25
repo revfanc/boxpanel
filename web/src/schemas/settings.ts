@@ -14,8 +14,6 @@ export const settingsSchema = z.object({
   public_host: hostSchema, web_port: portSchema,
   web_path: z.string().regex(/^[a-z0-9]{0,64}$/, t.settings.pathInvalid),
   sub_path: z.string().regex(/^[a-z0-9]{1,64}$/, t.settings.pathInvalid),
-  block_bittorrent: z.boolean(),
-  subscription_auto_group: z.boolean(),
 }).refine((value) => value.web_path !== value.sub_path && !['api', 'assets', 'index'].includes(value.sub_path), { path: ['sub_path'], message: t.settings.pathInvalid })
 export const usernameSchema = z.object({ username: nameSchema })
 export const passwordSchema = z.object({

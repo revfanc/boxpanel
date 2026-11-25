@@ -23,6 +23,7 @@ import (
 	"github.com/revfanc/boxpanel/internal/db"
 	"github.com/revfanc/boxpanel/internal/host"
 	"github.com/revfanc/boxpanel/internal/singbox"
+	"github.com/revfanc/boxpanel/internal/sysinfo"
 	"github.com/revfanc/boxpanel/internal/traffic"
 )
 
@@ -163,7 +164,10 @@ func serveAgent(ctx context.Context, conn *sql.DB, opts serveOptions, logger *sl
 	}
 	workerCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	node := agent.Node{Reader: reader, Writer: conn, Master: master, Key: key, Client: client, Manager: manager, Logger: logger}
+	system := sysinfo.New(sysinfo.Options{Dev: opts.dev, DiskPath: filepath.Dir(opts.paths.Database),
+		Singbox: singbox.Inspector{Dev: opts.dev, Binary: opts.core.binary}})
+	node := agent.Node{Reader: reader, Writer: conn, Master: master, Key: key, Client: client, Manager: manager, Logger: logger,
+		ReadLogs: manager.LogBatch}
 	defer node.Close()
 	var devices *alerts.Network
 	if !opts.dev && runtime.GOOS == "linux" {
@@ -187,8 +191,14 @@ func serveAgent(ctx context.Context, conn *sql.DB, opts serveOptions, logger *sl
 	started := time.Now()
 	send := func(ctx context.Context) error {
 		active := func() bool { return !opts.dev && manager.CoreActive(ctx) }
+		monitoring := system.Monitor(ctx)
 		beat := agent.Heartbeat{
-			Version: version, SingboxActive: active(), Uptime: int64(time.Since(started) / time.Second),
+			Version: version, Metrics: agent.NewMetrics(monitoring), Uptime: int64(time.Since(started) / time.Second),
+		}
+		if monitoring.Core != nil {
+			beat.SingboxActive = monitoring.Core.Running
+		} else {
+			beat.SingboxActive = active()
 		}
 		if devices != nil {
 			if names, err := devices.Interfaces(); err == nil {
@@ -197,11 +207,11 @@ func serveAgent(ctx context.Context, conn *sql.DB, opts serveOptions, logger *sl
 		}
 		return node.Sync(ctx, beat, active)
 	}
-	runHeartbeats(ctx, conn, master, send, logger)
+	runHeartbeats(ctx, conn, master, send, node.HeartbeatInterval, logger)
 	return nil
 }
 
-func runHeartbeats(ctx context.Context, conn *sql.DB, master db.AgentConnection, send func(context.Context) error, logger *slog.Logger) {
+func runHeartbeats(ctx context.Context, conn *sql.DB, master db.AgentConnection, send func(context.Context) error, interval func() time.Duration, logger *slog.Logger) {
 	last, _ := db.GetSetting(ctx, conn, db.AgentLastHeartbeat)
 	streak, backoff := 0, 5*time.Second
 	for ctx.Err() == nil {
@@ -219,7 +229,7 @@ func runHeartbeats(ctx context.Context, conn *sql.DB, master db.AgentConnection,
 			next, wait := nextHeartbeat(last, sendErr, &streak, &backoff, time.Now())
 			delay = wait
 			if sendErr == nil {
-				delay = max(0, wait-time.Since(started))
+				delay = max(0, interval()-time.Since(started))
 			}
 			saved, saveErr := recordHeartbeatResult(ctx, conn, master, next)
 			err = saveErr

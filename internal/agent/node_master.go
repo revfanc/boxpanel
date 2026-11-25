@@ -101,6 +101,7 @@ func (n *Node) useClient(client *Client) {
 		n.Client = client
 		n.published, n.reportedTraffic = nil, nil
 		n.interfaceEndpointReady, n.interfacePreference = false, nil
+		n.logs = nodeLogs{}
 	}
 }
 

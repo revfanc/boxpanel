@@ -46,17 +46,17 @@ it('shows the server assignment without a selector', async () => {
   expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
 })
 
-it('filters nodes from the URL, updates it on selection and follows browser history', async () => {
+it('filters inbounds from the URL, updates it on selection and follows browser history', async () => {
   const edge = { ...server, id: 2, name: 'Edge', is_local: false, status: 'online' }
   const pending = { ...edge, id: 3, name: 'Pending', status: 'pending' }
   mockAPI({
     '/servers': () => Response.json([server, edge, pending]),
     '/inbounds': () => Response.json([inbound, { ...inbound, id: 2, server_id: 2, remark: 'Remote node' }]),
   })
-  const { router, user } = mountPage(<InboundsPage />, '/inbounds?server=2&keep=1', '/inbounds')
+  const { router, user } = mountPage(<InboundsPage />, '/inbounds?filter=2&keep=1', '/inbounds')
   const filter = await screen.findByRole('combobox', { name: t.inbounds.server })
   expect(filter).toHaveTextContent('Edge')
-  expect(filter).toHaveClass('pr-3')
+  expect(filter).toHaveClass('pr-2')
   expect(filter.querySelector('svg.lucide-chevron-down')).toHaveAttribute('aria-hidden', 'true')
   expect(await screen.findByText('Remote node')).toBeVisible()
   expect(screen.queryByText(inbound.remark)).not.toBeInTheDocument()
@@ -64,7 +64,7 @@ it('filters nodes from the URL, updates it on selection and follows browser hist
   await user.click(filter)
   await user.click(await screen.findByRole('option', { name: 'Pending' }))
   expect(screen.getByText(t.inbounds.serverEmpty)).toBeVisible()
-  expect(router.state.location.search).toBe('?server=3&keep=1')
+  expect(router.state.location.search).toBe('?filter=3&keep=1')
   await user.click(filter)
   await user.click(await screen.findByRole('option', { name: t.inbounds.allServers }))
   expect(router.state.location.search).toBe('?keep=1')

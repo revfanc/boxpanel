@@ -59,6 +59,10 @@ func loadConfig(ctx context.Context, q db.SettingsDB) (db.AlertConfig, error) {
 }
 
 func decodeConfig(raw string) (db.AlertConfig, error) {
+	return decodeServerConfig(raw, true)
+}
+
+func decodeServerConfig(raw string, local bool) (db.AlertConfig, error) {
 	var cfg db.AlertConfig
 	if strings.TrimSpace(raw) == "null" {
 		return cfg, fmt.Errorf("decode server alert settings: expected an object")
@@ -71,7 +75,8 @@ func decodeConfig(raw string) (db.AlertConfig, error) {
 	}
 	for kind := range eventTitles {
 		if _, ok := cfg.Events[kind]; !ok {
-			cfg.Events[kind] = true
+			// Previously only local servers had a 90% threshold.
+			cfg.Events[kind] = local || kind != serverQuota90
 		}
 	}
 	return cfg, nil
@@ -91,10 +96,14 @@ func loadChannels(ctx context.Context, q db.SettingsDB) (map[string]db.AlertChan
 }
 
 type Settings struct {
-	Config     db.AlertConfig         `json:"config"`
-	Channels   map[string]ChannelView `json:"channels"`
-	Interfaces []string               `json:"interfaces"`
-	Billing    Billing                `json:"billing"`
+	ServerPreferences
+	Channels map[string]ChannelView `json:"channels"`
+	Billing  Billing                `json:"billing"`
+}
+
+type ServerPreferences struct {
+	Config     db.AlertConfig `json:"config"`
+	Interfaces []string       `json:"interfaces"`
 }
 
 func (s *Service) Settings(ctx context.Context) (Settings, error) {
@@ -119,7 +128,7 @@ func readBillingServer(ctx context.Context, q db.SettingsDB, id int64) (billingS
 }
 
 func (s *Service) ServerSettings(ctx context.Context, id int64) (Settings, error) {
-	out := Settings{Channels: make(map[string]ChannelView, len(channels)), Interfaces: []string{}}
+	out := Settings{Channels: make(map[string]ChannelView, len(channels))}
 	tx, err := s.reader.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return out, fmt.Errorf("read alert settings: %w", err)
@@ -129,10 +138,11 @@ func (s *Service) ServerSettings(ctx context.Context, id int64) (Settings, error
 	if err != nil {
 		return out, err
 	}
-	if out.Config, err = decodeConfig(server.preferences); err != nil {
+	cfg, err := decodeServerConfig(server.preferences, server.local)
+	if err != nil {
 		return out, err
 	}
-	if out.Billing, err = billing(ctx, tx, server.id, out.Config, s.opts.Now(), !server.local || s.opts.Network != nil); err != nil {
+	if out.Billing, err = billing(ctx, tx, server.id, cfg, s.opts.Now(), !server.local || s.opts.Network != nil); err != nil {
 		return out, err
 	}
 	saved, err := loadChannels(ctx, tx)
@@ -143,6 +153,24 @@ func (s *Service) ServerSettings(ctx context.Context, id int64) (Settings, error
 		out.Channels[channel] = channelView(saved[channel])
 	}
 	tx.Rollback()
+	out.ServerPreferences, err = s.serverPreferences(server, cfg)
+	return out, err
+}
+
+func (s *Service) ReadServerPreferences(ctx context.Context, id int64) (ServerPreferences, error) {
+	server, err := readBillingServer(ctx, s.reader, id)
+	if err != nil {
+		return ServerPreferences{}, err
+	}
+	cfg, err := decodeServerConfig(server.preferences, server.local)
+	if err != nil {
+		return ServerPreferences{}, err
+	}
+	return s.serverPreferences(server, cfg)
+}
+
+func (s *Service) serverPreferences(server billingServer, cfg db.AlertConfig) (ServerPreferences, error) {
+	out := ServerPreferences{Config: cfg, Interfaces: []string{}}
 	if !server.local {
 		if err := json.Unmarshal([]byte(server.interfaces), &out.Interfaces); err != nil {
 			return out, fmt.Errorf("read node interface names: %w", err)
@@ -153,6 +181,20 @@ func (s *Service) ServerSettings(ctx context.Context, id int64) (Settings, error
 		}
 	}
 	return out, nil
+}
+
+// ReadBilling uses the caller's snapshot so the panel can show billing and
+// user traffic read at the same database revision.
+func (s *Service) ReadBilling(ctx context.Context, tx *sql.Tx, id int64) (Billing, error) {
+	server, err := readBillingServer(ctx, tx, id)
+	if err != nil {
+		return Billing{}, err
+	}
+	cfg, err := decodeServerConfig(server.preferences, server.local)
+	if err != nil {
+		return Billing{}, err
+	}
+	return billing(ctx, tx, server.id, cfg, s.opts.Now(), !server.local || s.opts.Network != nil)
 }
 
 type ConfigUpdate struct {
@@ -181,7 +223,7 @@ func (s *Service) SaveConfig(ctx context.Context, in ConfigUpdate) (db.AlertConf
 	if err != nil {
 		return db.AlertConfig{}, err
 	}
-	cfg, err := decodeConfig(server.preferences)
+	cfg, err := decodeServerConfig(server.preferences, server.local)
 	if err != nil {
 		return cfg, err
 	}
@@ -212,7 +254,8 @@ func (s *Service) SaveConfig(ctx context.Context, in ConfigUpdate) (db.AlertConf
 		return cfg, invalid("billing_mode")
 	}
 	for kind, value := range in.Events {
-		if _, ok := eventTitles[kind]; !ok || value == nil || !server.local && kind != serverQuota80 && kind != serverQuota100 {
+		if _, ok := eventTitles[kind]; !ok || value == nil ||
+			!server.local && kind != serverQuota80 && kind != serverQuota90 && kind != serverQuota100 {
 			return cfg, invalid("events")
 		}
 		cfg.Events[kind] = *value

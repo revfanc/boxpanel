@@ -1,6 +1,7 @@
 package singbox
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -53,6 +54,14 @@ var credentialLine = regexp.MustCompile(`(?i)(password|private[_ -]?key|secret|t
 // Do not pass raw output to errors/loggers. Known current, candidate and backup
 // credentials are replaced before truncation; escaped/URL forms are included.
 func redactText(value string, secrets []string) string {
+	value = redactContent(value, secrets)
+	if len(value) > 64*1024 {
+		value = value[:64*1024] + "\n[truncated]"
+	}
+	return value
+}
+
+func redactContent(value string, secrets []string) string {
 	secrets = slices.Clone(secrets)
 	slices.SortFunc(secrets, func(a, b string) int { return len(b) - len(a) })
 	for _, secret := range secrets {
@@ -79,11 +88,7 @@ func redactText(value string, secrets []string) string {
 			pem = false
 		}
 	}
-	value = strings.Join(lines, "\n")
-	if len(value) > 64*1024 {
-		value = value[:64*1024] + "\n[truncated]"
-	}
-	return value
+	return strings.Join(lines, "\n")
 }
 
 func (m *Manager) journal(ctx context.Context, lines int) (string, error) {
@@ -95,14 +100,25 @@ func (m *Manager) journal(ctx context.Context, lines int) (string, error) {
 }
 
 func (m *Manager) Logs(ctx context.Context, lines int) ([]string, error) {
+	result, _, err := m.readLogs(ctx, lines, "", false)
+	return result, err
+}
+
+// LogBatch reads a tail on first contact and continues after the last
+// acknowledged journal cursor. Cursors stay on the server that read them.
+func (m *Manager) LogBatch(ctx context.Context, after string, lines int) ([]string, string, error) {
+	return m.readLogs(ctx, lines, after, true)
+}
+
+func (m *Manager) readLogs(ctx context.Context, lines int, after string, incremental bool) ([]string, string, error) {
 	if m.unsupported {
-		return nil, ErrUnsupported
+		return nil, after, ErrUnsupported
 	}
 	if lines < 1 || lines > 1000 {
-		return nil, fmt.Errorf("log lines must be between 1 and 1000")
+		return nil, after, fmt.Errorf("log lines must be between 1 and 1000")
 	}
 	if !m.mu.TryLock() {
-		return nil, ErrApplying
+		return nil, after, ErrApplying
 	}
 	defer m.mu.Unlock()
 	lockCtx, stopLock := context.WithTimeout(ctx, 100*time.Millisecond)
@@ -110,39 +126,83 @@ func (m *Manager) Logs(ctx context.Context, lines int) ([]string, error) {
 	unlock, err := lockApply(lockCtx, m.config+".lock")
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, ErrApplying
+			return nil, after, ErrApplying
 		}
-		return nil, err
+		return nil, after, err
 	}
 	defer unlock()
+	var output string
+	cursor := after
+	if incremental {
+		output, cursor, err = m.journalAfter(ctx, lines, after)
+	} else {
+		output, err = m.journal(ctx, lines)
+	}
+	if err != nil {
+		return nil, after, err
+	}
+	if output == "" {
+		return []string{}, cursor, nil
+	}
 	tx, err := m.readDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, fmt.Errorf("read diagnostic credentials: %w", err)
+		return nil, after, fmt.Errorf("read diagnostic credentials: %w", err)
 	}
 	defer tx.Rollback()
 	_, secrets, err := snapshot(ctx, tx)
 	if err != nil {
-		return nil, err
+		return nil, after, err
 	}
 	for _, suffix := range []string{"", ".bak"} {
 		data, e := m.files.ReadFile(m.config + suffix)
 		if e != nil && !errors.Is(e, fs.ErrNotExist) {
-			return nil, fmt.Errorf("read diagnostic configuration: %w", e)
+			return nil, after, fmt.Errorf("read diagnostic configuration: %w", e)
 		}
 		secrets = append(secrets, jsonStrings(data)...)
 	}
-	output, err := m.journal(ctx, lines)
-	if err != nil {
-		return nil, err
+	var redacted string
+	if incremental {
+		redacted = redactContent(output, secrets)
+	} else {
+		redacted = redactText(output, secrets)
 	}
-	if output == "" {
-		return []string{}, nil
-	}
-	result := strings.Split(redactText(output, secrets), "\n")
+	result := strings.Split(redacted, "\n")
 	if len(result) > lines {
 		result = result[len(result)-lines:]
 	}
-	return result, nil
+	return result, cursor, nil
+}
+
+func (m *Manager) journalAfter(ctx context.Context, lines int, after string) (string, string, error) {
+	args := []string{"--unit=" + SingboxUnit, "--lines=" + strconv.Itoa(lines), "--no-pager", "--output=json", "--output-fields=MESSAGE", "--quiet"}
+	if after != "" {
+		args = append(args, "--after-cursor="+after)
+	}
+	output, err := m.runner.Run(ctx, "journalctl", args...)
+	if err != nil {
+		return "", after, fmt.Errorf("read core journal; check journal permissions")
+	}
+	var messages []string
+	cursor := after
+	for line := range bytes.SplitSeq(bytes.TrimSpace(output), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var entry struct {
+			Cursor  string          `json:"__CURSOR"`
+			Message json.RawMessage `json:"MESSAGE"`
+		}
+		if err := json.Unmarshal(line, &entry); err != nil || entry.Cursor == "" {
+			return "", after, fmt.Errorf("read core journal: invalid journal record")
+		}
+		cursor = entry.Cursor
+		var message string
+		if len(entry.Message) == 0 || bytes.Equal(entry.Message, []byte("null")) || json.Unmarshal(entry.Message, &message) != nil {
+			message = "[truncated]"
+		}
+		messages = append(messages, message)
+	}
+	return strings.Join(messages, "\n"), cursor, nil
 }
 
 func (m *Manager) Config(ctx context.Context) (json.RawMessage, error) {
