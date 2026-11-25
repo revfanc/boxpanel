@@ -52,6 +52,7 @@ export function ScenarioStep({ status, save }: { status: SetupStatus; save: (pat
       </RadioGroup>
     )} />
     {hasDomain && <Field label={t.setup.domain} {...form.register('domain')} error={form.formState.errors.domain?.message} />}
+    {!hasDomain && <Notice>{t.migration.ipHint}</Notice>}
     <Label htmlFor={checkboxID} className="cursor-pointer items-start gap-3 rounded-lg border p-4 leading-6 font-normal">
       <Controller name="hysteria2" control={form.control} render={({ field, fieldState }) => (
         <Checkbox id={checkboxID} name={field.name} checked={field.value} onCheckedChange={(checked) => field.onChange(checked === true)} onBlur={field.onBlur} ref={field.ref} aria-invalid={fieldState.invalid} className="mt-1" />

@@ -61,121 +61,165 @@ func Create(ctx context.Context, conn *sql.DB, certDir, version, passphrase stri
 	if passphrase != "" && !ValidPassphrase(passphrase) {
 		return nil, ErrInvalid
 	}
+	var out bytes.Buffer
+	if err := WriteSnapshot(ctx, &out, conn, certDir, version, now); err != nil {
+		return nil, err
+	}
+	if passphrase != "" {
+		return Encrypt(out.Bytes(), passphrase)
+	}
+	return out.Bytes(), nil
+}
+
+// WriteSnapshot writes the same bounded gzip archive used for automatic backups
+// to a private file or stream. No HTTP response buffering is needed for migration.
+func WriteSnapshot(ctx context.Context, out io.Writer, conn *sql.DB, certDir, version string, now time.Time) error {
+	a, err := capture(ctx, conn, certDir, version, now)
+	if err != nil {
+		return err
+	}
+	return packTo(out, a)
+}
+
+func capture(ctx context.Context, conn *sql.DB, certDir, version string, now time.Time) (Archive, error) {
+	var a Archive
 	unlock, err := filelock.Acquire(ctx, certDir+".lock")
 	if err != nil {
-		return nil, err
+		return a, err
 	}
 	defer unlock()
 	if info, e := os.Lstat(certDir); e == nil && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
-		return nil, ErrInvalid
+		return a, ErrInvalid
 	}
 	dir, err := os.MkdirTemp("", "boxpanel-snapshot-")
 	if err != nil {
-		return nil, fmt.Errorf("create snapshot directory: %w", err)
+		return a, fmt.Errorf("create snapshot directory: %w", err)
 	}
 	defer os.RemoveAll(dir)
 	name := filepath.Join(dir, "boxpanel.db")
 	if _, err = conn.ExecContext(ctx, "VACUUM INTO ?", name); err != nil {
-		return nil, fmt.Errorf("snapshot database: %w", err)
+		return a, fmt.Errorf("snapshot database: %w", err)
 	}
 	if err = os.Chmod(name, 0600); err != nil {
-		return nil, err
+		return a, err
 	}
 	snapshot, err := db.Open(ctx, name)
 	if err != nil {
-		return nil, fmt.Errorf("read snapshot: %w", err)
+		return a, fmt.Errorf("read snapshot: %w", err)
 	}
 	m := Manifest{Format: 1, Version: version, CreatedAt: now.Unix(), Files: map[string]string{}}
 	err = snapshot.QueryRowContext(ctx, "SELECT max(version) FROM schema_migrations").Scan(&m.Schema)
 	if err == nil {
 		m.PublicHost, err = db.GetSetting(ctx, snapshot, db.PublicHost)
 	}
-	// Close before reading the snapshot; VACUUM produced all pages in the file.
+	if err == nil {
+		_, err = snapshot.ExecContext(ctx, "PRAGMA secure_delete=ON")
+	}
+	if err == nil {
+		err = db.ClearMasterMigration(ctx, snapshot)
+	}
+	if err == nil {
+		_, err = snapshot.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
+	}
+	// Close before reading the standalone snapshot file.
 	closeErr := snapshot.Close()
 	if err != nil {
-		return nil, err
+		return a, err
 	}
 	if closeErr != nil {
-		return nil, closeErr
+		return a, closeErr
 	}
 	info, err := os.Stat(name)
 	if err != nil || info.Size() > MaxSize {
-		return nil, ErrInvalid
+		return a, ErrInvalid
 	}
 	data, err := os.ReadFile(name)
 	if err != nil {
-		return nil, err
+		return a, err
 	}
 	files := map[string][]byte{"boxpanel.db": data}
 	root, err := os.OpenRoot(certDir)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("open certificates: %w", err)
+		return a, fmt.Errorf("open certificates: %w", err)
 	}
 	if err == nil {
 		defer root.Close()
 		entries, e := os.ReadDir(certDir)
 		if e != nil {
-			return nil, e
+			return a, e
 		}
 		total := len(data)
 		for _, entry := range entries {
 			if !entry.Type().IsRegular() {
-				return nil, fmt.Errorf("backup certificates: only ordinary files allowed; remove links or subdirectories")
+				return a, fmt.Errorf("backup certificates: only ordinary files allowed; remove links or subdirectories")
 			}
 			info, e := root.Lstat(entry.Name())
 			if e != nil || !info.Mode().IsRegular() {
-				return nil, ErrInvalid
+				return a, ErrInvalid
 			}
 			if info.Size() > MaxSize || len(files) >= maxFiles {
-				return nil, ErrInvalid
+				return a, ErrInvalid
 			}
 			f, e := root.Open(entry.Name())
 			if e != nil {
-				return nil, e
+				return a, e
 			}
 			b, e := io.ReadAll(io.LimitReader(f, MaxSize+1))
 			f.Close()
 			if e != nil {
-				return nil, e
+				return a, e
 			}
 			total += len(b)
 			if total > maxExpanded || len(b) > MaxSize {
-				return nil, ErrInvalid
+				return a, ErrInvalid
 			}
 			files["certs/"+entry.Name()] = b
 		}
 	}
 	validation, err := db.Open(ctx, name)
 	if err != nil {
-		return nil, err
+		return a, err
 	}
 	err = validateMaterials(ctx, validation, files)
 	validation.Close()
 	if err != nil {
-		return nil, err
+		return a, err
 	}
 	for n, b := range files {
 		sum := sha256.Sum256(b)
 		m.Files[n] = hex.EncodeToString(sum[:])
 	}
-	a := Archive{m, files}
-	data, err = pack(a)
-	if err != nil {
-		return nil, err
-	}
-	if passphrase != "" {
-		return Encrypt(data, passphrase)
-	}
-	return data, nil
+	return Archive{m, files}, nil
 }
 
 func pack(a Archive) ([]byte, error) {
 	var out bytes.Buffer
-	gz := gzip.NewWriter(&out)
+	if err := packTo(&out, a); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+type snapshotWriter struct {
+	out       io.Writer
+	remaining int
+}
+
+func (w *snapshotWriter) Write(data []byte) (int, error) {
+	if len(data) > w.remaining {
+		return 0, ErrInvalid
+	}
+	n, err := w.out.Write(data)
+	w.remaining -= n
+	return n, err
+}
+
+func packTo(out io.Writer, a Archive) error {
+	gz := gzip.NewWriter(&snapshotWriter{out, MaxSize - 128})
 	tw := tar.NewWriter(gz)
 	manifest, err := json.Marshal(a.Manifest)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	write := func(name string, b []byte) error {
 		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0600, Size: int64(len(b)), Typeflag: tar.TypeReg}); err != nil {
@@ -185,7 +229,7 @@ func pack(a Archive) ([]byte, error) {
 		return err
 	}
 	if err = write("manifest.json", manifest); err != nil {
-		return nil, err
+		return err
 	}
 	// Stable ordering helps inspection; ciphertext is deliberately randomized.
 	names := make([]string, 0, len(a.Files))
@@ -195,19 +239,13 @@ func pack(a Archive) ([]byte, error) {
 	sort.Strings(names)
 	for _, n := range names {
 		if err = write(n, a.Files[n]); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if err = tw.Close(); err != nil {
-		return nil, err
+		return err
 	}
-	if err = gz.Close(); err != nil {
-		return nil, err
-	}
-	if out.Len() > MaxSize-128 {
-		return nil, ErrInvalid
-	}
-	return out.Bytes(), nil
+	return gz.Close()
 }
 
 // Encrypt authenticates the entire fixed version header, salt, nonce and payload.

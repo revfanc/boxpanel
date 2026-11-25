@@ -17,6 +17,7 @@ type Applier interface {
 	Apply(context.Context, singbox.Mutation) error
 }
 type Scheduler struct {
+	Maintenance func(context.Context) (func(), bool)
 	// OnStopped runs within Apply and must only write through its transaction.
 	OnStopped   func(context.Context, *sql.Tx, int64, string, time.Time) error
 	collector   *Collector
@@ -203,29 +204,37 @@ func (s *Scheduler) run(ctx context.Context, enforcePolicy bool) {
 			s.logger.Warn("流量任务未完成；将自动重试，请检查nftables 权限、内核运行状态和数据库权限。")
 		}
 	}
-	report(s.collector.Poll(ctx))
+	run := func(ctx context.Context, work func(context.Context) error) {
+		if s.Maintenance != nil {
+			release, ok := s.Maintenance(ctx)
+			if !ok {
+				return
+			}
+			defer release()
+		}
+		report(work(ctx))
+	}
+	run(ctx, s.collector.Poll)
 	if enforcePolicy {
-		report(s.Check(ctx))
+		run(ctx, s.Check)
 	}
 	for {
 		select {
 		case <-ctx.Done():
 			final, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			// A final sample is best effort; previously collected increments must still flush.
-			_ = s.collector.Poll(final)
+			run(final, s.collector.Poll)
 			cancel()
 			final, cancel = context.WithTimeout(context.Background(), 5*time.Second)
-			if err := s.collector.Flush(final); err != nil {
-				s.logger.Warn("退出时流量落库失败；尚未保存的用量会丢失，请检查数据库权限和磁盘空间。")
-			}
+			run(final, s.collector.Flush)
 			cancel()
 			return
 		case <-poll.C:
-			report(s.collector.Poll(ctx))
+			run(ctx, s.collector.Poll)
 		case <-flush.C:
-			report(s.collector.Flush(ctx))
+			run(ctx, s.collector.Flush)
 		case <-checks:
-			report(s.Check(ctx))
+			run(ctx, s.Check)
 		}
 	}
 }

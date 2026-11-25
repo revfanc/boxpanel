@@ -506,7 +506,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/main/script
 
 - 主控总是附带固定回退密钥的 `--master-pin`。节点用该指纹校验有效的自签回退证书，并通过系统 CA 与主机名校验
   接受可信证书和续期。旧节点若没有 pin 或原 pin 对应的私钥已丢失，只能连接系统信任的证书。需要支持回退时，
-  请用带当前 pin 的命令重新加入。主控地址、端口或面板路径变更后，需要重新加入仍使用旧 URL 的节点。
+  请用带当前 pin 的命令重新加入。T9.4 起，可用 `boxpanel set-master` 为仍使用旧地址的节点更新主控 URL，保留原身份。
 - `--join` 仅支持 install，要求 `--token`，可带 `--master-pin`、`--public-ip`、`--version` 或 `--dry-run`。
   `--join` 自动采用非交互模式，不能和 `--port`、`--restore` 一起使用。dry-run 检查参数和平台并打印计划，
   不显示令牌或指纹。
@@ -548,3 +548,39 @@ bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/main/script
   该功能需要节点已运行包含 T9.3 的版本，首次仍需手动升级一次。
 - 主控的网卡账期用量可从远端卡片「流量告警」查看。网卡选择经心跳下发，无需重启节点内核。
   主控备份复制到节点留待后续。
+
+## 10. T9.4 主控迁移
+
+在旧主控的「设置 → 备份与迁移 → 迁移主控」确认并复制命令。在全新 Linux/systemd VPS 上以 root 执行。
+新旧 VPS 都需要开放面板 TCP 端口，新机还需开放入站协议端口。若使用 ACME，确认云安全组允许 TCP 80。
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/vX.Y.Z/scripts/install.sh) \
+  --migrate-from 'https://old.example.com:2053/panel/' --token '<一次性令牌>' \
+  --master-pin '<固定回退密钥的 SPKI 指纹>' --version vX.Y.Z
+```
+
+- 发布版命令使用旧主控同一 tag 的脚本及 `--version`。安装器按原版本校验发布文件，恢复备份的受管内核版本。
+  开发构建需要在两台机器部署同版本的本地构建，可在全新目标使用 `boxpanel migrate --help` 查看安装器调用方式。
+- `--migrate-from` 仅用于 install，必填 `--token` 和 `--master-pin`。支持 `--version`、`--public-ip` 和 `--dry-run`，与 `--join`、`--restore`、`--port`、`update` 和 `uninstall` 互斥。
+  令牌 30 分钟有效且只能认领一次。安装器将令牌从标准输入交给 CLI。请妥善保管生成的命令。
+- 旧主控用 TCP 对端确定新机公网 IP。经过 NAT 或需要选择另一个可达公网 IP 时，在命令末尾添加 `--public-ip <IP>`。
+  旧主控须能直接访问新机 HTTPS 端口以核对就绪。新机保持原端口、面板与订阅路径。
+- 冻结从新机认领开始，本机入站持续到交接，远端线路继续服务并补报流量。普通迁移失败自动解冻并清理安装器本次创建的服务、二进制及数据。
+  已安装的系统依赖保留。失联时旧主控在期限到达后恢复写入。若就绪请求无法确认，先保留新机，在两侧「备份与迁移」核对退役结果。
+- 完成后使用原管理员账号登录新主控。域名模式保留原域名，修改 A/AAAA 后客户端可继续使用现有订阅；提前验证新机证书覆盖该域名。
+  IP 模式请将客户端订阅地址更新为分享页显示的新地址。已更新的节点和客户端确认使用新机后，可关闭旧主控。
+
+### 离线节点与故障恢复
+
+节点上线后会先按照旧主控签名的地址列表尝试切换。也可在新主控查看未切换节点，并在这些节点上运行下方命令。
+
+```bash
+boxpanel set-master 'https://<新主控地址>:2053/<原面板路径>/'
+```
+
+命令验证 HTTPS 和节点签名心跳后写入首选地址，保留原地址作为备用。节点在下一次心跳采用新配置，可用 `boxpanel info` 核对。
+这条路径保留服务器 ID、节点密钥、入站及授权。早期未保存当前回退 pin 的节点应使用带系统信任证书的主控 URL。
+不支持迁移的旧节点可先升级至包含 T9.4 的版本，再执行 `set-master`。
+若旧主控已经失效，在新机使用最近的异机备份 `install.sh --restore`，IP 地址改变时运行 `boxpanel set-host <新IP>`，再对节点执行 `set-master`。
+恢复的数据截至备份时刻，已保存的各节点计数按现有协议补报。

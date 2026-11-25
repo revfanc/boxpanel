@@ -137,7 +137,11 @@ type HeartbeatReply struct {
 	Interface         string `json:"interface"`
 	// AutoUpgrade asks the node to follow Version when it is a newer release.
 	// Older nodes ignore the field, so the protocol version is unchanged.
-	AutoUpgrade bool `json:"auto_upgrade,omitempty"`
+	AutoUpgrade         bool     `json:"auto_upgrade,omitempty"`
+	ReadOnly            bool     `json:"read_only,omitempty"`
+	MasterURLs          []string `json:"master_urls,omitempty"`
+	MasterURLsKey       string   `json:"master_urls_key,omitempty"`
+	MasterURLsSignature string   `json:"master_urls_signature,omitempty"`
 }
 
 var releaseTag = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)(?:-rc\.([0-9]+))?$`)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"database/sql"
 	"errors"
 	"flag"
@@ -11,11 +12,15 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -29,6 +34,7 @@ import (
 	"github.com/revfanc/boxpanel/internal/firewall"
 	"github.com/revfanc/boxpanel/internal/host"
 	"github.com/revfanc/boxpanel/internal/httpapi"
+	"github.com/revfanc/boxpanel/internal/migration"
 	"github.com/revfanc/boxpanel/internal/singbox"
 	"github.com/revfanc/boxpanel/internal/spa"
 	"github.com/revfanc/boxpanel/internal/subscription"
@@ -181,8 +187,25 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	if err != nil {
 		return err
 	}
-	if err := manager.Startup(ctx); err != nil {
-		return fmt.Errorf("startup configuration apply failed; check core installation, certificates, service and firewall permissions, then run boxpanel apply")
+	outgoing, err := db.LoadMasterMigration(ctx, reader, db.MigrationOutgoing)
+	if err != nil {
+		return err
+	}
+	switch {
+	case outgoing.Phase == db.MigrationRetired:
+		if err := stopMigratedCore(ctx); err != nil {
+			logger.Warn("旧主控内核尚未停用，请检查 systemd；迁移服务会重试。")
+			outgoing.CoreStopped = false
+			if err := db.SetSetting(ctx, conn, db.MigrationOutgoing, outgoing); err != nil {
+				return err
+			}
+		}
+	case outgoing.Phase == db.MigrationFrozen && !outgoing.Expired(time.Now()):
+		// The running core keeps serving its last checked configuration.
+	default:
+		if err := manager.Startup(ctx); err != nil {
+			return fmt.Errorf("startup configuration apply failed; check core installation, certificates, service and firewall permissions, then run boxpanel apply")
+		}
 	}
 	inspector := singbox.Inspector{Dev: opts.dev, Binary: opts.core.binary}
 	system := sysinfo.New(sysinfo.Options{Dev: opts.dev, DiskPath: filepath.Dir(opts.paths.Database), Singbox: inspector})
@@ -211,7 +234,6 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 		alertOptions.Network = &alerts.Network{Files: native, Runner: native}
 		alertOptions.CoreRunning = manager.CoreActive
 	}
-	alertService := alerts.New(conn, reader, alertOptions)
 	var backups *panelBackups
 	if backupLayout(opts.paths, opts.core) == nil {
 		backupOpts := opts
@@ -219,14 +241,35 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 		backups = &panelBackups{service: &backup.Service{DB: conn, DataDir: opts.paths.DataDir, Version: version}, opts: backupOpts}
 	}
 	var backupAPI httpapi.Backups
+	var migrations *migration.Service
 	if backups != nil {
 		backupAPI = backups
+		if monitorHost {
+			pin, err := certificates.FallbackPin()
+			if err != nil {
+				return err
+			}
+			migrations = &migration.Service{DB: conn, ReadDB: reader, DataDir: backups.opts.paths.DataDir, Version: version, Pin: pin,
+				Signer: certificates.FallbackSigner(), StopCore: stopMigratedCore, BeforeClaim: func(context.Context) error {
+					panel.mu.Lock()
+					defer panel.mu.Unlock()
+					if backups.queued.Load() || panel.pending || panel.closed {
+						return migration.ErrBusy
+					}
+					return nil
+				}}
+			alertOptions.Maintenance = migrations.Maintenance
+		}
 	}
+	alertService := alerts.New(conn, reader, alertOptions)
 	nodes := agent.NewMaster(conn, reader, nil)
+	if migrations != nil {
+		nodes.Maintenance = migrations.Maintenance
+	}
 	nodes.OnStopped, nodes.Logger = alertService.UserStopped, logger
 	nodes.OnAvailability = alertService.ServerAvailability
 	panel.build = func(settings httpapi.PanelSettings) (http.Handler, error) {
-		api := httpapi.New(service, httpapi.Options{WebPath: settings.WebPath, Dev: opts.dev, Logger: logger, System: system, Singbox: manager, DB: conn, ReadDB: reader, Applier: manager, PanelPort: settings.WebPort, Subscriptions: store, PreparePanel: panel.prepare, Certificates: certificates, Backups: backupAPI, Alerts: alertService, Agents: nodes, AgentPin: certificates.FallbackPin})
+		api := httpapi.New(service, httpapi.Options{WebPath: settings.WebPath, Dev: opts.dev, Logger: logger, System: system, Singbox: manager, DB: conn, ReadDB: reader, Applier: manager, PanelPort: settings.WebPort, Subscriptions: store, PreparePanel: panel.prepare, Certificates: certificates, Backups: backupAPI, Migration: migrations, Alerts: alertService, Agents: nodes, AgentPin: certificates.FallbackPin})
 		spaHandler, err := spa.New(web.Assets, spa.Options{WebPath: settings.WebPath, Version: version, API: api})
 		if err != nil {
 			return nil, fmt.Errorf("prepare HTTP server: %w", err)
@@ -238,7 +281,10 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 		return err
 	}
 	if !opts.dev {
-		panel.getCertificate = certificates.GetCertificate
+		panel.getCertificate, err = migrationCertificates(ctx, reader, certificates, cfg)
+		if err != nil {
+			return err
+		}
 	}
 	address := net.JoinHostPort(opts.listenHost, strconv.Itoa(cfg.WebPort))
 	listener, err := net.Listen("tcp", address)
@@ -273,12 +319,21 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	}
 	nodesDone := make(chan struct{})
 	go func() { defer close(nodesDone); nodes.Run(workerCtx, logger) }()
+	migrationDone := make(chan struct{})
+	if migrations != nil {
+		go func() { defer close(migrationDone); migrations.Run(workerCtx) }()
+	} else {
+		close(migrationDone)
+	}
 	alertsDone := make(chan struct{})
 	go func() { defer close(alertsDone); alertService.Run(workerCtx) }()
 	trafficDone := make(chan struct{})
 	if monitorHost {
 		scheduler := traffic.NewScheduler(traffic.NewCollector(conn, reader, nil), manager, nil, logger)
 		scheduler.OnStopped = alertService.UserStopped
+		if migrations != nil {
+			scheduler.Maintenance = migrations.Maintenance
+		}
 		go func() { defer close(trafficDone); scheduler.Run(workerCtx) }()
 	} else {
 		close(trafficDone)
@@ -290,6 +345,48 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 		<-backupDone
 		<-alertsDone
 		<-nodesDone
+		<-migrationDone
 	}()
 	return panel.run(listener, handler)
+}
+
+func stopMigratedCore(ctx context.Context) error {
+	native := host.Native{}
+	state, err := native.Run(ctx, "systemctl", "show", "--property=LoadState", "--value", singbox.SingboxUnit)
+	if err == nil && strings.TrimSpace(string(state)) == "not-found" {
+		return nil
+	}
+	_, err = native.Run(ctx, "systemctl", "disable", "--now", singbox.SingboxUnit)
+	return err
+}
+
+func migrationCertificates(ctx context.Context, conn *sql.DB, certificates *acme.Manager, cfg app.Config) (func(*tls.ClientHelloInfo) (*tls.Certificate, error), error) {
+	in, err := db.LoadMasterMigration(ctx, conn, db.MigrationReceived)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := netip.ParseAddr(cfg.PublicHost); err == nil || in.TargetURL == "" {
+		return certificates.GetCertificate, nil
+	}
+	target, err := url.Parse(in.TargetURL)
+	if err != nil {
+		return nil, fmt.Errorf("load migrated panel address: %w", err)
+	}
+	var mu sync.Mutex
+	var pair *tls.Certificate
+	return func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		if hello.ServerName != "" {
+			return certificates.GetCertificate(hello)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if pair == nil || time.Until(pair.Leaf.NotAfter) < 24*time.Hour {
+			var err error
+			pair, err = certificates.FallbackCertificate(target.Hostname())
+			if err != nil {
+				return nil, err
+			}
+		}
+		return pair, nil
+	}, nil
 }

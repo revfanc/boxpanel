@@ -97,6 +97,6 @@ function AccountForms() {
 export function SettingsPage() {
   const settings = useQuery(settingsQuery)
   return <Page title={t.pages.settings} description={t.settings.description}>
-    {settings.isPending ? <Loading /> : settings.isError ? <ErrorNotice error={settings.error} retry={() => { void settings.refetch() }} /> : <><PanelForm settings={settings.data} /><CertificatePanel /><AlertSettingsPanel /><BackupPanel /><AccountForms /></>}
+    {settings.isPending ? <Loading /> : settings.isError ? <ErrorNotice error={settings.error} retry={() => { void settings.refetch() }} /> : <><PanelForm settings={settings.data} /><CertificatePanel /><AlertSettingsPanel /><BackupPanel publicHost={settings.data.public_host} /><AccountForms /></>}
   </Page>
 }

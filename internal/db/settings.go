@@ -72,10 +72,15 @@ type TrafficSample struct {
 }
 
 type AgentConnection struct {
-	MasterURL string `json:"master_url"`
-	Pin       string `json:"pin,omitempty"`
-	ServerID  int64  `json:"server_id"`
-	PublicKey string `json:"public_key"`
+	MasterURL     string   `json:"master_url"`
+	AlternateURLs []string `json:"alternate_urls,omitempty"`
+	Pin           string   `json:"pin,omitempty"`
+	ServerID      int64    `json:"server_id"`
+	PublicKey     string   `json:"public_key"`
+}
+
+func (c AgentConnection) SameIdentity(other AgentConnection) bool {
+	return c.ServerID == other.ServerID && c.PublicKey == other.PublicKey && c.Pin == other.Pin
 }
 
 type AgentHeartbeatResult struct {

@@ -221,26 +221,34 @@ func (s *Service) deliverLoop(ctx context.Context, channel string) {
 	tick := time.NewTicker(5 * time.Second)
 	defer tick.Stop()
 	for ctx.Err() == nil {
-		job, err := s.claim(ctx, channel, s.opts.Now())
-		if err != nil {
-			s.log(err)
-		} else if job.id != 0 {
-			var sendErr error
-			if channelReady(channel, job.cfg) {
-				sendErr = s.sender.send(ctx, channel, job.cfg, job.message)
-			} else {
-				sendErr = errChannelDisabled
+		if release, allowed := s.maintenance(ctx); allowed {
+			more := s.deliverNext(ctx, channel)
+			release()
+			if more {
+				continue
 			}
-			if ctx.Err() == nil {
-				s.log(s.finish(ctx, job, s.opts.Now(), sendErr))
-			}
-			continue
 		}
 		select {
 		case <-ctx.Done():
 		case <-tick.C:
 		}
 	}
+}
+
+func (s *Service) deliverNext(ctx context.Context, channel string) bool {
+	job, err := s.claim(ctx, channel, s.opts.Now())
+	if err != nil || job.id == 0 {
+		s.log(err)
+		return false
+	}
+	var sendErr error = errChannelDisabled
+	if channelReady(channel, job.cfg) {
+		sendErr = s.sender.send(ctx, channel, job.cfg, job.message)
+	}
+	if ctx.Err() == nil {
+		s.log(s.finish(ctx, job, s.opts.Now(), sendErr))
+	}
+	return true
 }
 
 type Overview struct {

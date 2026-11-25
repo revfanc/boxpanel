@@ -68,8 +68,15 @@ func setHostCommand(ctx context.Context, args []string, deps setHostDependencies
 		fmt.Fprintln(stderr, "无法打开面板数据库；请确认已初始化，并使用相同的 --data-dir/--db-path 和正确的文件权限重试。")
 		return 1
 	}
+	release, err := beginMasterWrite(ctx, conn, resolved)
+	if err != nil {
+		conn.Close()
+		fmt.Fprintln(stderr, "无法更新地址。请在设置页检查主控迁移状态，或检查数据目录权限后重试。")
+		return 1
+	}
 	cfg, err := app.SetPublicHost(ctx, conn, names[0])
 	_ = conn.Close()
+	release()
 	if err != nil {
 		fmt.Fprintln(stderr, "节点地址未能保存；请检查数据库是否已初始化、是否可写，稍后使用相同路径参数重试。")
 		return 1

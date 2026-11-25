@@ -95,6 +95,9 @@ func Stage(ctx context.Context, a Archive, parent string) (string, error) {
 	if _, err = conn.ExecContext(ctx, "DELETE FROM agent_join_tokens"); err != nil {
 		return "", fmt.Errorf("revoke restored agent join tokens: %w", err)
 	}
+	if err = db.ClearMasterMigration(ctx, conn); err != nil {
+		return "", fmt.Errorf("clear restored migration state: %w", err)
+	}
 	// Flush staged WAL before publishing. No open connection crosses the rename.
 	if _, err = conn.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 		return "", err

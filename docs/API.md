@@ -261,7 +261,7 @@ T9.3：远端行返回 `auto_upgrade`（布尔，默认 false），本机不返�
 无论主控当前使用自签或 ACME 证书，`master_pin` 都是固定回退公钥 SPKI DER 的 SHA-256（无填充 base64url）。
 签发要求 HTTPS，HTTP 面板返回 `409 agent_requires_https`。令牌管理和服务器移除沿用管理员会话与 CSRF 校验。
 
-### 节点 API（T8.2–T8.7）
+### 节点 API（T8.2–T9.4）
 
 前缀为 `/{web_path}/api/agent/v1`，只接受 HTTPS。带请求体的 POST 使用 `application/json`。节点使用签名认证。
 请求体限 8 KiB，`/traffic` 限 1 MiB，`/interface-samples` 限 256 KiB。路径不含查询参数。所有 base64url 值均不带填充。
@@ -580,6 +580,43 @@ JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未�
   浏览器提示约 30 秒后重新登录，慢启动可能更久，地址改变时使用备份中的 URL。
 - 自定义外置 DB/证书/配置不在本版恢复布局内，返回 `409 backup_unavailable`；请先迁移到标准数据目录。
   dev 不运行每日自动备份、也不执行面板恢复；CLI restore 仅支持 Linux/systemd。
+
+## T9.4 主控迁移
+
+管理端使用 `/{web_path}/api/v1`，需要管理员会话及原有 CSRF 校验。
+
+| 方法 | 路径 | 请求与响应 |
+|---|---|---|
+| GET | `/migration` | `{phase, target_url?, expires_at?, migrated, total, core_stopped, waiting?}`。`waiting` 为新主控上未切换的 `[{id,name}]` |
+| POST | `/migration/token` | `{"confirm":true}`，201 返回 `{token, expires_at, source_url, master_pin, version}`。仅此次响应包含令牌全文 |
+
+`phase` 可为 `unavailable`、`idle`、`issued`、`frozen`、`incoming`、`active` 或 `retired`。时间使用 Unix 秒。
+重签替换未认领令牌。冻结、待确认和退役期间，业务写接口返回 `409 migration_read_only`。会话登录、退出及加密备份下载仍可用。
+
+主控间 HTTPS 接口挂在 `/{web_path}/api/migration/v1`，使用下表的 JSON 凭据校验。接口要求 TLS，遵循固定指纹或系统 CA 与主机名校验，客户端不跟随重定向。
+
+| 方法 | 路径 | 请求与响应 |
+|---|---|---|
+| POST | `/claim` | `{token, secret, version, public_ip?}`。200 直接传输 `application/gzip` 的 §T7.5 归档，带 `Content-Length`、`X-Boxpanel-Migration-Target` 和 `X-Boxpanel-Migration-Expires` |
+| POST | `/ready` | `{secret,target_url}`。目标必须等于认领时确定的 HTTPS 地址，并通过旧主控的远端检查。204 表示旧主控已经持久化退役，可安全重试同一请求 |
+| POST | `/abort` | `{secret}`。204 表示对应认领已取消或失效。已提交退役返回 `409 migration_committed` |
+| POST | `/status` | `{id}`。返回与该次迁移绑定的状态与匿名进度，用于验证新机就绪、查找退役决策和同步进度 |
+
+`secret` 由新机使用 32 随机字节生成并按无填充 base64url 编码，`id` 为其字符串的 SHA-256 摘要，使用相同编码。
+认领成功同时消费令牌并冻结旧主控。令牌过期、已用或认证失败返回 401。版本不符返回 426，无法确定新机公网地址返回 422。
+就绪检查失败返回 422。冻结期间及退役后，旧主控的用户累计流量和网卡样本返回 `503 migration_read_only` 与 `Retry-After`，保留节点重试所需的确认水位。
+
+心跳回复仍使用协议 2。本次增加以下可选字段。
+
+- `read_only` 表示当前主控只接受心跳。节点可继续服务，并等待新地址或后续重试。
+- `master_urls` 是优先级从高到低的 HTTPS 地址，`master_urls_key` 是固定回退公钥的 SPKI DER，`master_urls_signature` 是签名。
+  公钥和签名均使用无填充 base64url。签名输入为 UTF-8 `boxpanel/master-urls/v1\n<本次请求 nonce>\n<Go JSON 编码的有序 URL 数组>`。
+  ECDSA 使用 ASN.1 格式及 SHA-256，RSA 使用 PKCS#1 v1.5 及 SHA-256，Ed25519 直接签名消息。节点校验 SPKI 摘要等于已存 pin 并验签。
+- 验证候选地址时，节点仍发送原格式的签名心跳，带可选 `X-Boxpanel-Master-Probe: 1`。探测读取已提交的期望版本，正常心跳才记录节点迁移进度。
+
+退役主控对有效的机器订阅 GET/HEAD 返回 301，Location 保留原订阅路径及格式参数并加入 `bp_migrated=1`。
+301 响应体和新主控对该标记的响应包含警告节点。新主控的常规订阅和旧节点的通信协议格式保持兼容。
+浏览器分享页返回 200，显示新链接。无效令牌沿用 404。
 
 ## T6.3 面板证书
 

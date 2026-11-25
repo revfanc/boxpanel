@@ -264,6 +264,18 @@ func restage(ctx context.Context, incoming, parent string) (string, string, erro
 }
 
 func restoreCommand(ctx context.Context, p app.Paths, c singboxPaths, stage string, install bool, directory string, out io.Writer) error {
+	if _, err := os.Stat(p.Database); err == nil {
+		conn, err := app.OpenExisting(ctx, p.Database)
+		if err != nil {
+			return err
+		}
+		release, err := beginMasterWrite(ctx, conn, p)
+		conn.Close()
+		if err != nil {
+			return err
+		}
+		defer release()
+	}
 	return restoreWith(ctx, p, c, stage, install, directory, out, restoreDependencies{})
 }
 
@@ -304,7 +316,7 @@ func restoreWith(ctx context.Context, p app.Paths, c singboxPaths, stage string,
 	captured := false
 	stop := func(ctx context.Context) error {
 		for _, unit := range []string{singbox.PanelUnit, singbox.SingboxUnit} {
-			if install {
+			if install && deps.install == nil {
 				if _, e := os.Stat(filepath.Join(singbox.DefaultUnitDir, unit)); errors.Is(e, os.ErrNotExist) {
 					continue
 				}
@@ -361,6 +373,9 @@ func restoreWith(ctx context.Context, p app.Paths, c singboxPaths, stage string,
 		if e = writePlan(ctx, conn, firewall.Plan{}); e != nil {
 			return e
 		}
+		if e = db.SetSetting(ctx, conn, db.PanelFirewallPorts, []int{}); e != nil {
+			return e
+		}
 		manager, e := newApplyManager(conn, p, c, deps.apply)
 		if e == nil {
 			e = manager.Restart(ctx)
@@ -374,7 +389,7 @@ func restoreWith(ctx context.Context, p app.Paths, c singboxPaths, stage string,
 			return e
 		}
 		// Record even partial port opening for rollback cleanup.
-		after.Ports = append(after.Ports, firewall.Port{Port: cfg.WebPort, Proto: "tcp"})
+		after.Ports = append(after.Ports, firewall.Port{Port: cfg.WebPort, Proto: "tcp"}, firewall.Port{Port: 80, Proto: "tcp"})
 		return app.OpenPanelFirewall(ctx, conn, cfg.WebPort, true, deps.fw)
 	}
 	start := func(ctx context.Context) error {

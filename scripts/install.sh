@@ -14,6 +14,7 @@ TAG=
 PORT=
 RESTORE_FILE=
 JOIN_MASTER=
+MIGRATE_FROM=
 JOIN_TOKEN=
 MASTER_PIN=
 JOIN_PUBLIC_IP=
@@ -25,6 +26,7 @@ PURGE=false
 TEMP_DIR=
 STAGED_BINARY=
 LOCKED=false
+MIGRATION_INSTALLING=false
 
 say() { printf '%s\n' "$*"; }
 die() { say "错误：$*" >&2; exit 1; }
@@ -38,9 +40,10 @@ usage() {
   --restore <文件>           仅全新安装：直接恢复，不生成新账号或密钥
   --passphrase-file <文件>   恢复口令文件（口令不出现在参数中）
   --join <主控 HTTPS URL>    将空实例作为节点安装，自动采用非交互模式
-  --token <令牌>             主控生成的一次性加入令牌
+  --migrate-from <旧主控 URL> 在全新 VPS 接收主控迁移，自动采用非交互模式
+  --token <令牌>             主控生成的一次性加入或迁移令牌
   --master-pin <指纹>        主控固定回退密钥的 SPKI SHA-256 指纹
-  --public-ip <公网 IP>      仅用于 --join，手动指定节点对外公布的 IPv4 或 IPv6
+  --public-ip <公网 IP>      用于 --join 或 --migrate-from，指定公网 IPv4 或 IPv6
   --non-interactive         不读取输入；安装时默认尝试开启 BBR
   --yes                     确认卸载（非交互卸载必需）
   --purge                   卸载时删除 /etc/boxpanel（默认保留）
@@ -63,12 +66,13 @@ parse_args() {
             --yes) YES=true; shift ;;
             --purge) PURGE=true; shift ;;
             --dry-run) DRY_RUN=true; shift ;;
-            --version|--port|--restore|--passphrase-file|--join|--token|--master-pin|--public-ip)
+            --version|--port|--restore|--passphrase-file|--join|--migrate-from|--token|--master-pin|--public-ip)
                 [[ $# -ge 2 && -n $2 ]] || die '选项缺少值；运行 --help 查看用法。'
                 case "$1" in
                   --version) TAG=$2 ;; --port) PORT=$2 ;;
                   --restore) RESTORE_FILE=$2 ;; --passphrase-file) PASSPHRASE_FILE=$2 ;;
                   --join) JOIN_MASTER=$2 ;; --token) JOIN_TOKEN=$2 ;; --master-pin) MASTER_PIN=$2 ;;
+                  --migrate-from) MIGRATE_FROM=$2 ;;
                   --public-ip) JOIN_PUBLIC_IP=$2 ;;
                 esac
                 shift 2 ;;
@@ -86,26 +90,30 @@ parse_args() {
     fi
     [[ $COMMAND != uninstall || -z $TAG ]] || die '卸载不接受 --version；请移除此选项。'
     [[ $COMMAND == uninstall || ( $YES == false && $PURGE == false ) ]] || die '--yes/--purge 仅用于 uninstall；请检查参数。'
+    if [[ -n $MIGRATE_FROM ]]; then
+        [[ $COMMAND == install && -z $JOIN_MASTER && -z $RESTORE_FILE && -z $PORT ]] || die '--migrate-from 仅用于 install，不能与 --join、--restore、--port 同用。'
+        [[ $MASTER_PIN =~ ^[A-Za-z0-9_-]{43}$ ]] || die '迁移需要有效的 --master-pin；请从旧主控复制完整迁移命令。'
+    fi
     if [[ -n $RESTORE_FILE ]]; then
         [[ $COMMAND == install && -z $PORT ]] || die '--restore 仅用于全新 install，且不能与 --port 同用。'
         [[ -r $RESTORE_FILE && -f $RESTORE_FILE ]] || die '请提供可读的备份文件。'
     fi
     [[ -z $PASSPHRASE_FILE || ( -n $RESTORE_FILE && -f $PASSPHRASE_FILE && -r $PASSPHRASE_FILE ) ]] || die '--passphrase-file 需要 --restore 及可读的口令文件。'
-    if [[ -n $JOIN_MASTER ]]; then
+    if [[ -n $JOIN_MASTER || -n $MIGRATE_FROM ]]; then
         [[ $COMMAND == install && -z $PORT && -z $RESTORE_FILE ]] || die '--join 仅用于 install，且不能与 --port 或 --restore 同用。'
         local master_pattern='^https://([A-Za-z0-9.-]+|\[[A-Fa-f0-9:.]+\])(:[0-9]{1,5})?(/[a-z0-9]+)?/?$'
-        [[ $JOIN_MASTER =~ $master_pattern ]] || die '请复制包含随机面板路径的主控 HTTPS 地址。'
+        [[ ${JOIN_MASTER:-$MIGRATE_FROM} =~ $master_pattern ]] || die '请复制包含面板路径的主控 HTTPS 地址。'
         local master_port=${BASH_REMATCH[2]:-}
         if [[ -n $master_port ]]; then
             master_port=$((10#${master_port#:}))
-            ((master_port >= 1 && master_port <= 65535)) || die '主控端口无效；请从主控复制加入命令。'
+            ((master_port >= 1 && master_port <= 65535)) || die '主控端口无效；请从主控复制完整命令。'
         fi
-        [[ $JOIN_TOKEN =~ ^[A-Za-z0-9_-]{43}$ ]] || die '缺少有效 --token；请从主控复制新的加入命令。'
+        [[ $JOIN_TOKEN =~ ^[A-Za-z0-9_-]{43}$ ]] || die '缺少有效 --token；请从主控复制新命令。'
         [[ -z $MASTER_PIN || $MASTER_PIN =~ ^[A-Za-z0-9_-]{43}$ ]] || die '--master-pin 格式错误；请从主控复制加入命令。'
         [[ -z $JOIN_PUBLIC_IP || $JOIN_PUBLIC_IP =~ ^([0-9.]+|[A-Fa-f0-9.]*:[A-Fa-f0-9:.]*)$ ]] || die '--public-ip 格式错误；请填写裸 IPv4 或 IPv6 地址。'
         NON_INTERACTIVE=true
     elif [[ -n $JOIN_TOKEN || -n $MASTER_PIN || -n $JOIN_PUBLIC_IP ]]; then
-        die '--token、--master-pin 和 --public-ip 需要 --join；请从主控复制加入命令。'
+        die '--token、--master-pin 和 --public-ip 需要 --join 或 --migrate-from；请从主控复制完整命令。'
     fi
     # Piped input is never treated as a confirmation.
     if [[ ! -t 0 ]]; then NON_INTERACTIVE=true; fi
@@ -161,13 +169,37 @@ cleanup() {
     [[ -z $TEMP_DIR ]] || rm -rf -- "$TEMP_DIR"
     if [[ $LOCKED == true ]]; then rmdir -- "$LOCK_DIR"; fi
     if ((status != 0)); then
-        if [[ -n $JOIN_MASTER ]]; then
+        if [[ -n $MIGRATE_FROM ]]; then
+            if [[ $MIGRATION_INSTALLING == true ]]; then cleanup_migration; fi
+            say '主控迁移未完成。请在旧主控查看冻结状态，解冻后生成新的迁移命令。' >&2
+        elif [[ -n $JOIN_MASTER ]]; then
             say '节点安装未完成。请按上方提示检查主控服务器记录及本机服务状态，令牌已失效时请生成新命令。' >&2
         else
             say '操作未完成。请按上方提示修复后重试相同命令；安装可续接，忘记初始密码可运行 boxpanel reset-admin。' >&2
         fi
     fi
     exit "$status"
+}
+
+cleanup_migration() {
+    if [[ -f $DATA_DIR/.migration-handoff ]]; then
+        say '新机已进入交接确认阶段，已保留新机服务。请在两台主控核对迁移状态。' >&2
+        return
+    fi
+    local unit
+    for unit in boxpanel.service boxpanel-singbox.service; do
+        if [[ -f $UNIT_DIR/$unit ]] && ! systemctl disable --now "$unit"; then
+            say '迁移服务未能停止，已保留新机文件；请检查 systemd 后清理。' >&2
+            return
+        fi
+    done
+    if [[ -f $DATA_DIR/boxpanel.db ]] && ! "$BINARY" system firewall-cleanup; then
+        say '迁移防火墙规则未能清理，已保留新机文件；请检查防火墙权限后重试清理。' >&2
+        return
+    fi
+    rm -f -- "$UNIT_DIR/boxpanel.service" "$UNIT_DIR/boxpanel-singbox.service" "$CORE_BINARY" "$BINARY"
+    rm -rf -- "$DATA_DIR"
+    systemctl daemon-reload || say '请运行 systemctl daemon-reload 刷新单元。' >&2
 }
 
 # Retry only lock contention, including apt's lists/archive locks which are not
@@ -370,6 +402,28 @@ install_agent() {
     "$BINARY" info
 }
 
+install_migration() {
+    local path
+    for path in "$BINARY" "$CORE_BINARY" "$UNIT_DIR/boxpanel.service" "$UNIT_DIR/boxpanel-singbox.service"; do
+        [[ ! -e $path && ! -L $path ]] || die '新机已有 boxpanel 安装文件；请使用全新 VPS，避免覆盖已有实例。'
+    done
+    [[ ! -L $DATA_DIR && ( ! -e $DATA_DIR || ( -d $DATA_DIR && -z $(ls -A -- "$DATA_DIR") ) ) ]] || die '新机数据目录需要为空，请使用全新 VPS。'
+    progress 3 '安装主控依赖'
+    install_dependencies
+    progress 4 '下载并校验旧主控同版本的 boxpanel'
+    stage_release
+    MIGRATION_INSTALLING=true
+    replace_binary
+    progress 5 '认领令牌并接收旧主控快照'
+    progress 6 '校验快照、恢复身份与证书'
+    progress 7 '启动服务并验证新主控就绪'
+    local migrate_args=(migrate --from "$MIGRATE_FROM" --master-pin "$MASTER_PIN" --token-stdin)
+    [[ -z $JOIN_PUBLIC_IP ]] || migrate_args+=(--public-ip "$JOIN_PUBLIC_IP")
+    printf '%s\n' "$JOIN_TOKEN" | "$BINARY" "${migrate_args[@]}"
+    MIGRATION_INSTALLING=false
+    progress 8 '迁移命令执行结束，请查看上方结果'
+}
+
 update_panel() {
     [[ -x $BINARY && -f $UNIT_DIR/boxpanel.service && ! -e $DATA_DIR/.installing ]] || die '安装尚未完成；请先运行 install。'
     local info
@@ -450,6 +504,10 @@ main() {
             say 'join: dependencies → download + SHA-256 → singbox install → join → enable/restart → node readiness → info (non-interactive)'
             return
         fi
+        if [[ -n $MIGRATE_FROM ]]; then
+            say 'migration: dependencies → download + SHA-256 → claim → verify snapshot → restore → HTTPS readiness (non-interactive)'
+            return
+        fi
         if [[ -n $RESTORE_FILE ]]; then say 'restore: install verified binary → restore --install → original credentials/certificates → validate/apply → start panel'; fi
         say 'install: dependencies → download + SHA-256 → init → singbox install → apply → firewall-open → enable/restart → bbr → info'
         say 'update: download + SHA-256 → atomic replace → restart → health check (restore binary on failure)'
@@ -465,7 +523,10 @@ main() {
     trap 'exit 143' TERM
     configure_cli
     case "$COMMAND" in
-        install) if [[ -n $JOIN_MASTER ]]; then install_agent; else install_panel; fi ;;
+        install)
+            if [[ -n $JOIN_MASTER ]]; then install_agent
+            elif [[ -n $MIGRATE_FROM ]]; then install_migration
+            else install_panel; fi ;;
         update) update_panel ;;
         uninstall) uninstall_panel ;;
     esac

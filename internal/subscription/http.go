@@ -122,6 +122,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var body []byte
 	var nonce string
+	status := http.StatusOK
+	var location string
 	if f == HTML {
 		var random [32]byte
 		if _, err = rand.Read(random[:]); err == nil {
@@ -129,6 +131,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			body, err = Page(d, nonce, h.Store.now())
 		}
 	} else {
+		if d.MigrationURL != "" {
+			target, e := url.Parse(d.MigrationURL)
+			if e != nil || target.Scheme != "https" || target.Host == "" {
+				publicError(w, r, 503, "订阅地址暂时不可用，请联系管理员获取新地址。")
+				return
+			}
+			target.Path = r.URL.Path
+			query := r.URL.Query()
+			query.Set("bp_migrated", "1")
+			target.RawQuery = query.Encode()
+			location, status = target.String(), http.StatusMovedPermanently
+			d.Snapshot.MigrationNotice = true
+		} else if d.ReceivedMigration && r.URL.Query().Get("bp_migrated") == "1" {
+			d.Snapshot.MigrationNotice = true
+		}
 		body, err = Render(d.Snapshot, f)
 	}
 	if err != nil {
@@ -159,7 +176,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'nonce-"+nonce+"'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 	}
 	w.Header().Set("Content-Type", contentType)
-	w.WriteHeader(200)
+	if location != "" {
+		w.Header().Set("Location", location)
+	}
+	w.WriteHeader(status)
 	if r.Method != "HEAD" {
 		if _, err := w.Write(body); err != nil {
 			return

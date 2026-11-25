@@ -38,6 +38,8 @@ type Data struct {
 	User                                             User
 	PublicHost, PanelName, SubPath, WebPath, TLSMode string
 	WebPort                                          int
+	MigrationURL                                     string
+	ReceivedMigration                                bool
 	nodeGroups                                       []nodeGroup
 }
 
@@ -76,6 +78,19 @@ func (s *Store) Load(ctx context.Context, id int64, token *string) (Data, error)
 	}
 	defer tx.Rollback()
 	if token != nil {
+		out, err := db.LoadMasterMigration(ctx, tx, db.MigrationOutgoing)
+		if err != nil {
+			return d, err
+		}
+		if out.Phase == db.MigrationRetired {
+			d.MigrationURL = out.TargetURL
+		} else {
+			in, err := db.LoadMasterMigration(ctx, tx, db.MigrationReceived)
+			if err != nil {
+				return d, err
+			}
+			d.ReceivedMigration = in.Phase == db.MigrationActive
+		}
 		rows, err := tx.QueryContext(ctx, "SELECT id,sub_token FROM users ORDER BY id")
 		if err != nil {
 			return d, fmt.Errorf("read subscription tokens: %w", err)
@@ -258,7 +273,7 @@ func uniqueNames(nodes []share.Node, groups []nodeGroup) []share.Node {
 	result := append([]share.Node{}, nodes...)
 	text := web.SubscriptionText()
 	used := map[string]bool{"proxy": true, "auto": true, "manual": true, "direct": true, "DIRECT": true, "REJECT": true,
-		text["select"]: true, text["autoSelect"]: true}
+		text["select"]: true, text["autoSelect"]: true, text["migrationNode"]: true}
 	var serverName string
 	for i := range result {
 		if len(groups) > 0 && groups[0].first == i {

@@ -96,7 +96,8 @@ footer p + p { margin-top: 8px; }
     <div class="expiry"><div><p class="muted">{{.Text.expiry}}</p><p>{{.Expire}}</p></div>{{if .Remaining}}<p class="muted">{{.Remaining}}</p>{{end}}</div>
   </section>
   <section class="card" aria-labelledby="subscription-title">
-    <h2 id="subscription-title">{{.Text.subscription}}</h2><p class="muted hint">{{.Text.scan}}</p>
+    <h2 id="subscription-title">{{.Text.subscription}}</h2><p class="muted hint">{{.Text.scan}}</p>{{if .Migrated}}
+    <p role="status">{{.Text.migrationLink}}</p>{{end}}
     <div class="qr"><img width="256" height="256" alt="{{.Text.qr}}" src="{{.QR}}"></div>
     <label for="auto">{{.Auto.Label}}</label>
     <div class="copy-row"><input id="auto" type="text" readonly value="{{.Auto.URL}}" spellcheck="false" autocomplete="off"><button type="button" data-copy="auto" aria-label="{{.Text.copy}} {{.Auto.Label}}">{{.Text.copy}}</button></div>

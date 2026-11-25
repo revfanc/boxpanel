@@ -17,9 +17,10 @@ import (
 )
 
 type Snapshot struct {
-	Nodes     []share.Node
-	Rules     db.RulesSettings
-	AutoGroup bool
+	Nodes           []share.Node
+	Rules           db.RulesSettings
+	AutoGroup       bool
+	MigrationNotice bool
 }
 type object = map[string]any
 
@@ -51,7 +52,7 @@ func Render(s Snapshot, format Format) ([]byte, error) {
 		return b.Bytes(), nil
 	case Base64:
 		lines := []string{}
-		for _, n := range s.Nodes {
+		for _, n := range subscriptionNodes(s) {
 			u, err := share.URI(n)
 			if err != nil {
 				return nil, err
@@ -66,6 +67,19 @@ func Render(s Snapshot, format Format) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("render subscription: unsupported format")
 	}
+}
+
+func subscriptionNodes(s Snapshot) []share.Node {
+	if !s.MigrationNotice {
+		return s.Nodes
+	}
+	// Use a documentation-only address and fixed placeholder values. The
+	// warning is a display entry and is excluded from automatic selection.
+	notice := share.Node{Name: web.SubscriptionText()["migrationNode"], Host: "192.0.2.1", Port: 443,
+		UUID: "00000000-0000-4000-8000-000000000000", Reality: &share.Reality{
+			ServerName: "migration.invalid", Fingerprint: "chrome", ShortID: "09", PublicKey: "CQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		}}
+	return append(append([]share.Node{}, s.Nodes...), notice)
 }
 
 func dnsServer(raw, tag string, remote bool) object {
@@ -111,8 +125,11 @@ func singboxConfig(s Snapshot, p rules.Plan) (object, error) {
 		auto = object{"type": "urltest", "tag": name, "outbounds": names,
 			"url": autoGroupURL, "interval": "5m", "tolerance": autoGroupTolerance}
 	}
+	if s.MigrationNotice {
+		choices = append(choices, web.SubscriptionText()["migrationNode"])
+	}
 	out := []object{{"type": "selector", "tag": "proxy", "outbounds": choices, "default": choices[0]}}
-	for _, n := range s.Nodes {
+	for _, n := range subscriptionNodes(s) {
 		o := object{"tag": n.Name, "server": n.Host, "server_port": n.Port}
 		if v := n.Reality; v != nil {
 			o["type"] = "vless"
@@ -236,8 +253,10 @@ func clashConfig(s Snapshot, p rules.Plan) object {
 	selectName := text["select"]
 	names := []string{}
 	proxies := []object{}
-	for _, n := range s.Nodes {
-		names = append(names, n.Name)
+	for i, n := range subscriptionNodes(s) {
+		if i < len(s.Nodes) {
+			names = append(names, n.Name)
+		}
 		o := object{"name": n.Name, "server": n.Host, "port": n.Port}
 		if v := n.Reality; v != nil {
 			o["type"] = "vless"
@@ -386,6 +405,9 @@ func clashConfig(s Snapshot, p rules.Plan) object {
 	autoEnabled := s.AutoGroup && len(names) >= 3
 	if autoEnabled {
 		choices = append(choices, text["autoSelect"])
+	}
+	if s.MigrationNotice {
+		choices = append(choices, text["migrationNode"])
 	}
 	groups := []object{{"name": selectName, "type": "select", "proxies": choices}}
 	if autoEnabled {

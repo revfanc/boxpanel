@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -40,7 +41,7 @@ func (a *api) agentEndpoints() http.Handler {
 			return
 		}
 		if r.URL.Path == agent.Prefix+"/join" {
-			a.agentJoin(w, r)
+			a.migrationWrite(http.HandlerFunc(a.agentJoin)).ServeHTTP(w, r)
 		} else {
 			a.agentAuthenticated(w, r)
 		}
@@ -108,6 +109,24 @@ func (a *api) agentAuthenticated(w http.ResponseWriter, r *http.Request) {
 		a.resourceError(w, err)
 		return
 	}
+	readOnly := false
+	heartbeat := r.URL.Path == agent.Prefix+"/heartbeat"
+	if a.opts.Migration != nil {
+		release, err := a.opts.Migration.BeginWrite(r.Context())
+		if errors.Is(err, db.ErrMigrationReadOnly) {
+			readOnly = true
+			if !heartbeat {
+				w.Header().Set("Retry-After", "30")
+				writeError(w, 503, "migration_read_only", db.ErrMigrationReadOnly.Error(), "节点会保留本地计数和配置，稍后自动补报。")
+				return
+			}
+		} else if err != nil {
+			a.migrationError(w, err)
+			return
+		} else {
+			defer release()
+		}
+	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	switch r.URL.Path {
 	case agent.InterfaceSamplesPath:
@@ -165,7 +184,12 @@ func (a *api) agentAuthenticated(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "invalid_argument", "节点心跳内容无效", "请检查节点 boxpanel 版本后重试。")
 			return
 		}
-		reply, err := a.opts.Agents.RecordHeartbeat(r.Context(), identity, in)
+		var reply agent.HeartbeatReply
+		if readOnly || r.Header.Get(agent.HeaderMasterProbe) == "1" {
+			reply, err = a.opts.Agents.ReadHeartbeat(r.Context(), identity)
+		} else {
+			reply, err = a.opts.Agents.RecordHeartbeat(r.Context(), identity, in)
+		}
 		if err != nil {
 			a.agentOperationError(w, err)
 			return
@@ -173,6 +197,17 @@ func (a *api) agentAuthenticated(w http.ResponseWriter, r *http.Request) {
 		if in.AppliedGeneration == nil && in.Protocol == 0 {
 			w.WriteHeader(http.StatusNoContent)
 			return
+		}
+		if readOnly {
+			reply.ReadOnly = true
+			out, err := db.LoadMasterMigration(r.Context(), a.opts.Migration.ReadDB, db.MigrationOutgoing)
+			if err == nil && out.Phase == db.MigrationRetired {
+				err = agent.SignMasterURLs(&reply, []string{out.TargetURL, out.SourceURL}, r.Header.Get(agent.HeaderNonce), a.opts.Migration.Signer)
+			}
+			if err != nil {
+				a.migrationError(w, err)
+				return
+			}
 		}
 		writeJSON(w, http.StatusOK, reply)
 	}

@@ -26,6 +26,13 @@ func MakeLinks(d Data) (Links, error) {
 		scheme = "http"
 	}
 	u := url.URL{Scheme: scheme, Host: net.JoinHostPort(d.PublicHost, strconv.Itoa(d.WebPort)), Path: "/" + d.SubPath + "/" + d.User.Token}
+	if d.MigrationURL != "" {
+		target, err := url.Parse(d.MigrationURL)
+		if err != nil || target.Scheme != "https" || target.Host == "" {
+			return Links{}, fmt.Errorf("invalid migrated subscription host")
+		}
+		u.Scheme, u.Host = target.Scheme, target.Host
+	}
 	l := Links{Subscription: map[string]string{"auto": u.String()}, Import: map[string]string{}, Nodes: []NodeLink{}}
 	for _, format := range []string{"singbox", "clash", "base64"} {
 		u.RawQuery = url.Values{"format": {format}}.Encode()
