@@ -137,6 +137,20 @@ func runSingbox(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if opts.command == "install" && !opts.forJoin && !opts.dev && runtime.GOOS == "linux" {
+		conn, err := app.OpenExisting(ctx, opts.paths.Database)
+		if err != nil {
+			fmt.Fprintln(stderr, "无法打开 boxpanel 数据库，请检查数据目录或先运行 boxpanel init。")
+			return 1
+		}
+		release, err := beginMasterWrite(ctx, conn, opts.paths)
+		conn.Close()
+		if err != nil {
+			fmt.Fprintln(stderr, "无法安装内核。请检查主控迁移状态和数据目录权限后重试。")
+			return 1
+		}
+		defer release()
+	}
 	if err := singboxCommand(ctx, opts, singboxDependencies{}, stdout); err != nil {
 		fmt.Fprintf(stderr, "boxpanel: %v; 请检查 GitHub 连接、路径权限与 systemd 状态，并按 'boxpanel singbox %s --help' 重试。\n", err, opts.command)
 		return 1

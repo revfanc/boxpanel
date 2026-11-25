@@ -85,6 +85,12 @@ func runServer(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "只有主控可以添加服务器；当前机器不是主控。")
 		return 1
 	}
+	release, err := beginMasterWrite(ctx, conn, resolved)
+	if err != nil {
+		fmt.Fprintln(stderr, "无法生成加入令牌。请检查主控迁移状态和数据目录权限后重试。")
+		return 1
+	}
+	defer release()
 	cfg, err := app.LoadConfig(ctx, conn)
 	if err != nil || cfg.TLSMode == "http" {
 		fmt.Fprintln(stderr, "加入节点需要主控启用 HTTPS；请先完成安装并检查面板证书。")
@@ -171,6 +177,12 @@ func runServerManage(command string, args []string, stdout, stderr io.Writer) in
 			fmt.Fprintln(stderr, "请填写 boxpanel server list 中显示的服务器编号。")
 			return 2
 		}
+		release, err := beginMasterWrite(ctx, conn, resolved)
+		if err != nil {
+			fmt.Fprintln(stderr, "无法移除节点。请检查主控迁移状态和数据目录权限后重试。")
+			return 1
+		}
+		defer release()
 		if err := agent.NewMaster(conn, conn, nil).Remove(ctx, id); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				fmt.Fprintln(stderr, "没有可移除的该编号节点（本机不能移除，已移除的节点无需重复操作）。")

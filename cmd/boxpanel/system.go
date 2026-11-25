@@ -98,7 +98,12 @@ func systemCommand(ctx context.Context, args []string, deps systemDependencies, 
 					cfg, err = app.LoadConfig(ctx, conn)
 				}
 			} else if command == "firewall-open" {
-				cfg, err = app.LoadConfig(ctx, conn)
+				var release func()
+				release, err = beginMasterWrite(ctx, conn, resolved)
+				if err == nil {
+					defer release()
+					cfg, err = app.LoadConfig(ctx, conn)
+				}
 			}
 			if err == nil && command == "firewall-open" {
 				if deps.opener == nil {

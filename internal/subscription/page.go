@@ -38,6 +38,7 @@ type pageData struct {
 	NodeGroups                             []pageNodeGroup
 	Used, Total, Expire, Remaining, Status string
 	Progress                               float64
+	Migrated                               bool
 }
 
 // Page takes the response nonce and clock explicitly so golden output is stable.
@@ -62,6 +63,7 @@ func Page(d Data, nonce string, now time.Time) ([]byte, error) {
 		Auto:    pageAddress{"auto", text["subscription"], l.Subscription["auto"]},
 		Clients: web.SubscriptionClients(), Used: pageBytes(used), Total: text["unlimited"],
 		Expire: text["never"], Status: "active",
+		Migrated: d.MigrationURL != "",
 	}
 	for _, format := range []string{"singbox", "clash", "base64"} {
 		v.Formats = append(v.Formats, pageAddress{format, text[format], l.Subscription[format]})

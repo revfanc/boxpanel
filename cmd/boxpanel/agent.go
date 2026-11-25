@@ -106,6 +106,9 @@ func printAgentInfo(ctx context.Context, conn *sql.DB, stdout io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(stdout, "节点模式（agent）\n主控: %s\nserver_id: %d\n", master.MasterURL, master.ServerID)
+	for _, address := range master.AlternateURLs {
+		fmt.Fprintf(stdout, "主控备用地址: %s\n", address)
+	}
 	if attempt, err := db.GetSetting(ctx, conn, db.AgentUpgradeAttempt); err == nil {
 		fmt.Fprintf(stdout, "最近自动升级: %s（%s 开始，日志见 journalctl -u boxpanel-upgrade-%s）\n", attempt.Tag, time.Unix(attempt.At, 0).UTC().Format(time.RFC3339), attempt.Tag)
 	}
@@ -146,7 +149,6 @@ func serveAgent(ctx context.Context, conn *sql.DB, opts serveOptions, logger *sl
 	if err != nil {
 		return err
 	}
-	defer client.Close()
 	reader, err := db.OpenReader(ctx, opts.paths.Database)
 	if err != nil {
 		return err
@@ -162,6 +164,7 @@ func serveAgent(ctx context.Context, conn *sql.DB, opts serveOptions, logger *sl
 	workerCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	node := agent.Node{Reader: reader, Writer: conn, Master: master, Key: key, Client: client, Manager: manager, Logger: logger}
+	defer node.Close()
 	var devices *alerts.Network
 	if !opts.dev && runtime.GOOS == "linux" {
 		native := host.Native{}
@@ -203,7 +206,7 @@ func runHeartbeats(ctx context.Context, conn *sql.DB, master db.AgentConnection,
 	streak, backoff := 0, 5*time.Second
 	for ctx.Err() == nil {
 		current, err := db.GetSetting(ctx, conn, db.AgentMaster)
-		if errors.Is(err, sql.ErrNoRows) || (err == nil && current != master) {
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && !current.SameIdentity(master)) {
 			return
 		}
 		delay := backoff
@@ -299,7 +302,7 @@ func recordHeartbeatResult(ctx context.Context, conn *sql.DB, master db.AgentCon
 	}
 	defer tx.Rollback()
 	current, err := db.GetSetting(ctx, tx, db.AgentMaster)
-	if err != nil || current != master {
+	if err != nil || !current.SameIdentity(master) {
 		return false, err
 	}
 	if err := db.SetSetting(ctx, tx, db.AgentLastHeartbeat, next); err != nil {

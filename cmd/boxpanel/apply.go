@@ -43,6 +43,12 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 	conn, err := app.OpenExisting(ctx, resolved.Database)
 	if err == nil {
 		defer conn.Close()
+		release, lockErr := beginMasterWrite(ctx, conn, resolved)
+		if lockErr != nil {
+			fmt.Fprintln(stderr, "无法生效内核配置。请在设置页检查主控迁移状态，或检查数据目录权限后重试。")
+			return 1
+		}
+		defer release()
 		role, roleErr := db.GetSetting(ctx, conn, db.NodeRole)
 		err = roleErr
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && role != db.RoleAgent) {

@@ -44,6 +44,7 @@ type nonceEntry struct {
 }
 
 type Master struct {
+	Maintenance func(context.Context) (func(), bool)
 	// OnStopped records a quota stop for a user with no local configuration
 	// to apply. It shares the transaction and deduplication with local stops.
 	OnStopped      func(context.Context, *sql.Tx, int64, string, time.Time) error
@@ -186,7 +187,7 @@ var specialNodeRanges = [...]netip.Prefix{
 
 var globalNodeIPv6 = netip.MustParsePrefix("2000::/3")
 
-func validNodeIP(ip netip.Addr) bool {
+func ValidPublicIP(ip netip.Addr) bool {
 	if ip.Zone() != "" {
 		return false
 	}
@@ -231,7 +232,7 @@ func (m *Master) Register(ctx context.Context, in Registration, peer string) (Id
 		address = peer
 	}
 	ip, err := netip.ParseAddr(address)
-	if err != nil || !validNodeIP(ip) {
+	if err != nil || !ValidPublicIP(ip) {
 		return Identity{}, ErrPublicIP
 	}
 	var result Identity
@@ -346,6 +347,22 @@ func ValidInterfaces(names []string) bool {
 	return true
 }
 
+// ReadHeartbeat authenticates probes and gives frozen nodes their last
+// committed generation without advancing expiry or recording contact.
+func (m *Master) ReadHeartbeat(ctx context.Context, identity authenticated) (HeartbeatReply, error) {
+	reply := HeartbeatReply{Protocol: ProtocolVersion}
+	err := m.reader.QueryRowContext(ctx, `SELECT desired_generation,coalesce(json_extract(alert_preferences,'$.interface'),''),
+		(SELECT version FROM servers WHERE is_local=1) FROM servers WHERE `+agentIdentity, identity.id, identity.publicKey).
+		Scan(&reply.DesiredGeneration, &reply.Interface, &reply.Version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return reply, ErrUnauthorized
+	}
+	if err != nil {
+		return reply, fmt.Errorf("read agent heartbeat: %w", err)
+	}
+	return reply, nil
+}
+
 func (m *Master) RecordHeartbeat(ctx context.Context, identity authenticated, in Heartbeat) (HeartbeatReply, error) {
 	reply := HeartbeatReply{Protocol: ProtocolVersion}
 	tx, err := m.writer.BeginTx(ctx, nil)
@@ -394,6 +411,9 @@ func (m *Master) RecordHeartbeat(ctx context.Context, identity authenticated, in
 		in.AppliedGeneration, in.AppliedGeneration, in.SyncError, identity.id)
 	if err != nil {
 		return reply, fmt.Errorf("record agent heartbeat: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE master_migration_nodes SET arrived=1 WHERE server_id=? AND arrived=0", identity.id); err != nil {
+		return reply, fmt.Errorf("record node arrival after migration: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return reply, fmt.Errorf("commit agent heartbeat: %w", err)
@@ -462,8 +482,16 @@ func (m *Master) Run(ctx context.Context, logger *slog.Logger) {
 	tick := time.NewTicker(HeartbeatInterval)
 	defer tick.Stop()
 	for ctx.Err() == nil {
-		if err := m.MarkOffline(ctx); err != nil && ctx.Err() == nil {
-			logger.Warn("无法更新节点离线状态，请检查主控数据库权限。")
+		release, allowed := func() {}, true
+		if m.Maintenance != nil {
+			release, allowed = m.Maintenance(ctx)
+		}
+		if allowed {
+			err := m.MarkOffline(ctx)
+			release()
+			if err != nil && ctx.Err() == nil {
+				logger.Warn("无法更新节点离线状态，请检查主控数据库权限。")
+			}
 		}
 		select {
 		case <-ctx.Done():

@@ -11,12 +11,13 @@ import { api } from '@/lib/api'
 import { useOperation } from '@/hooks/use-operation'
 import type { BackupStatus } from '@/types/api'
 import { zhCN as t } from '@/i18n/zh-CN'
+import { MasterMigration } from '@/components/MasterMigration'
 
 const passphrase = z.string().refine((value) => Array.from(value).length >= 12 && new TextEncoder().encode(value).length <= 1024, t.backup.passphraseError)
 const schema = z.object({ passphrase })
 type Values = z.infer<typeof schema>
 
-export function BackupPanel() {
+export function BackupPanel({ publicHost }: { publicHost?: string }) {
   const status = useQuery({ queryKey: ['backup', 'status'], queryFn: ({ signal }) => api<BackupStatus>('/backup/status', { signal }), refetchInterval: 60_000 })
   const download = useForm<Values>({ resolver: zodResolver(schema), defaultValues: { passphrase: '' } })
   const restore = useForm<Values>({ resolver: zodResolver(schema), defaultValues: { passphrase: '' } })
@@ -65,5 +66,6 @@ export function BackupPanel() {
     {!confirm && operation.error != null && <ErrorNotice error={operation.error} />}
     {restoring && <Notice>{t.backup.restoring} <Link className="underline" to="/login">{t.backup.login}</Link></Notice>}
     <Confirm open={confirm} onOpenChange={setConfirm} title={t.backup.confirmTitle} description={t.backup.confirmHint} pending={operation.pending} error={operation.error} onConfirm={restoreBackup} />
+    {publicHost && <MasterMigration publicHost={publicHost} />}
   </Panel>
 }

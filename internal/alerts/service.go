@@ -21,6 +21,7 @@ const bytesPerGB = 1_000_000_000
 const maxQuotaGB = math.MaxInt64 / bytesPerGB
 
 type Options struct {
+	Maintenance func(context.Context) (func(), bool)
 	Network     *Network
 	CoreRunning func(context.Context) bool
 	Certificate func(context.Context) (acme.Status, error)
@@ -292,9 +293,12 @@ func (s *Service) Run(ctx context.Context) {
 	tick := time.NewTicker(time.Minute)
 	defer tick.Stop()
 	for ctx.Err() == nil {
-		now := s.opts.Now()
-		s.log(s.sampleTraffic(ctx, now))
-		s.log(s.evaluate(ctx, now))
+		if release, allowed := s.maintenance(ctx); allowed {
+			now := s.opts.Now()
+			s.log(s.sampleTraffic(ctx, now))
+			s.log(s.evaluate(ctx, now))
+			release()
+		}
 		select {
 		case <-ctx.Done():
 		case <-tick.C:
@@ -303,4 +307,11 @@ func (s *Service) Run(ctx context.Context) {
 	for range channels {
 		<-done
 	}
+}
+
+func (s *Service) maintenance(ctx context.Context) (func(), bool) {
+	if s.opts.Maintenance == nil {
+		return func() {}, true
+	}
+	return s.opts.Maintenance(ctx)
 }

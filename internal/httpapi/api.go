@@ -22,6 +22,7 @@ import (
 	"github.com/revfanc/boxpanel/internal/alerts"
 	"github.com/revfanc/boxpanel/internal/auth"
 	"github.com/revfanc/boxpanel/internal/host"
+	"github.com/revfanc/boxpanel/internal/migration"
 	"github.com/revfanc/boxpanel/internal/reality"
 	"github.com/revfanc/boxpanel/internal/subscription"
 	"github.com/revfanc/boxpanel/internal/sysinfo"
@@ -34,6 +35,7 @@ type Options struct {
 	AgentPin       func() (string, error)
 	Alerts         *alerts.Service
 	Backups        Backups
+	Migration      *migration.Service
 	Certificates   Certificates
 	WebPath        string
 	Dev            bool
@@ -112,6 +114,10 @@ func New(service *auth.Service, opts Options) http.Handler {
 		}
 		routes[path] += method
 		var h http.Handler = handler
+		if opts.Migration != nil && method != "GET" && path != "/api/v1/auth/login" &&
+			path != "/api/v1/auth/logout" && path != "/api/v1/backup" && path != "/api/v1/migration/token" {
+			h = a.migrationWrite(h)
+		}
 		if protected {
 			h = a.authenticate(h)
 		}
@@ -141,6 +147,8 @@ func New(service *auth.Service, opts Options) http.Handler {
 	register("POST", "/api/v1/backup", a.backupPost, true)
 	register("GET", "/api/v1/backup/status", a.backupStatus, true)
 	register("POST", "/api/v1/restore", a.restorePost, true)
+	register("GET", "/api/v1/migration", a.getMigration, true)
+	register("POST", "/api/v1/migration/token", a.issueMigration, true)
 	a.registerAlerts(register)
 	a.registerResources(register)
 	a.registerSubscriptions(register)
@@ -153,12 +161,16 @@ func New(service *auth.Service, opts Options) http.Handler {
 	}
 	mux.HandleFunc("/", notFound)
 	panel := middleware(csrf(mux), opts.Logger, routes)
-	if opts.Agents == nil {
+	if opts.Agents == nil && opts.Migration == nil {
 		return panel
 	}
 	nodes := a.agentEndpoints()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == agent.Prefix || strings.HasPrefix(r.URL.Path, agent.Prefix+"/") {
+		if opts.Migration != nil && strings.HasPrefix(r.URL.Path, migration.Prefix+"/") {
+			a.migrationPeer(w, r)
+			return
+		}
+		if opts.Agents != nil && (r.URL.Path == agent.Prefix || strings.HasPrefix(r.URL.Path, agent.Prefix+"/")) {
 			nodes.ServeHTTP(w, r)
 			return
 		}

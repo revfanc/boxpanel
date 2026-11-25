@@ -122,6 +122,15 @@ case "$1" in
         mkdir -p "${BOXPANEL_SINGBOX_PATH%/*}"
         echo original-core >"$BOXPANEL_SINGBOX_PATH"
         touch "$BOXPANEL_UNIT_DIR/boxpanel.service" "$BOXPANEL_UNIT_DIR/boxpanel-singbox.service" ;;
+    migrate)
+        IFS= read -r token
+        [[ $* == *--token-stdin* && ${#token} -eq 43 ]] || exit 1
+        mkdir -p "$BOXPANEL_DATA_DIR" "${BOXPANEL_SINGBOX_PATH%/*}"
+        echo migrated >"$BOXPANEL_DB_PATH"
+        echo original-core >"$BOXPANEL_SINGBOX_PATH"
+        touch "$BOXPANEL_UNIT_DIR/boxpanel.service" "$BOXPANEL_UNIT_DIR/boxpanel-singbox.service"
+        if [[ ${MIGRATION_HANDOFF:-false} == true ]]; then touch "$BOXPANEL_DATA_DIR/.migration-handoff"; fi
+        [[ ${FAIL_MIGRATION:-false} == false ]] ;;
     apply|system) : ;;
     *) exit 99 ;;
 esac
@@ -474,12 +483,60 @@ command() { if [[ $* == "-v nft" ]]; then return 1; fi; builtin command "$@"; }\
     done
 }
 
+test_migration_install() {
+    local token=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA pin=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+    run_install --migrate-from https://old.example:2053/panel/ --token "$token" --master-pin "$pin" --public-ip 9.9.9.9 --version v0.1.0
+    contains "$FIXTURE/calls" "migrate --from https://old.example:2053/panel/ --master-pin $pin --token-stdin --public-ip 9.9.9.9"
+    contains "$FIXTURE/data/boxpanel.db" migrated
+    absent "$FIXTURE/calls" "$token"
+    absent "$FIXTURE/output" "$token"
+    absent "$FIXTURE/calls" ' init'
+    reject --migrate-from https://old.example:2053/panel/ --token "$token" --master-pin "$pin"
+    contains "$FIXTURE/output" '新机已有 boxpanel 安装文件'
+    contains "$FIXTURE/data/boxpanel.db" migrated
+}
+
+test_migration_failure_cleanup() {
+    local token=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA pin=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+    export FAIL_MIGRATION=true
+    reject --migrate-from https://old.example:2053/panel/ --token "$token" --master-pin "$pin" --version v0.1.0
+    contains "$FIXTURE/calls" 'systemctl disable --now boxpanel.service'
+    contains "$FIXTURE/calls" 'systemctl disable --now boxpanel-singbox.service'
+    contains "$FIXTURE/calls" 'system firewall-cleanup'
+    [[ ! -e $FIXTURE/data && ! -e $FIXTURE/local/bin/boxpanel && ! -e $FIXTURE/local/share/sing-box && ! -e $FIXTURE/units/boxpanel.service ]] || fail 'migration left installed assets'
+    : >"$FIXTURE/calls"
+    export MIGRATION_HANDOFF=true
+    reject --migrate-from https://old.example:2053/panel/ --token "$token" --master-pin "$pin" --version v0.1.0
+    contains "$FIXTURE/data/boxpanel.db" migrated
+    absent "$FIXTURE/calls" 'systemctl disable'
+    contains "$FIXTURE/output" '已保留新机服务'
+}
+
+test_migration_parameters() {
+    local token=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA pin=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+    local args=(--migrate-from 'https://[2001:db8::1]:2053/panel/' --token "$token" --master-pin "$pin")
+    echo backup >"$FIXTURE/example.tar.gz"
+    reject update "${args[@]}"
+    reject uninstall "${args[@]}"
+    reject "${args[@]}" --port 2053
+    reject "${args[@]}" --join https://other.example/panel
+    reject "${args[@]}" --restore "$FIXTURE/example.tar.gz"
+    reject --migrate-from https://old.example/panel --token "$token"
+    reject --migrate-from https://old.example/panel --master-pin "$pin"
+    reject --migrate-from https://old.example/panel --token short --master-pin "$pin"
+    reject "${args[@]}" --public-ip example.com
+    run_install "${args[@]}" --dry-run --version v0.1.0
+    contains "$FIXTURE/output" 'migration: dependencies'
+    absent "$FIXTURE/output" "$token"
+    [[ ! -s $FIXTURE/calls ]] || fail 'invalid migration flags ran external operations'
+}
+
 if [[ ${1:-} == --case ]]; then
     fixture
     "test_$2"
     exit 0
 fi
-for scenario in join_install join_dry_run update_agent restore_install restore_failure nft_dependency update_nft_dependency install resume update uninstall rejections download_safety optional_bbr_and_lock piped_entry package_locks apt_install_lock package_lock_timeout dnf_locks dnf_lock_timeout package_permission_error package_nonlock_error; do
+for scenario in join_install join_dry_run update_agent restore_install restore_failure migration_install migration_failure_cleanup migration_parameters nft_dependency update_nft_dependency install resume update uninstall rejections download_safety optional_bbr_and_lock piped_entry package_locks apt_install_lock package_lock_timeout dnf_locks dnf_lock_timeout package_permission_error package_nonlock_error; do
     # A separate bash process preserves errexit in the installer under test.
     output=$(mktemp)
     if bash "$0" --case "$scenario" >"$output" 2>&1; then

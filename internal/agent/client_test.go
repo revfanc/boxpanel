@@ -80,7 +80,11 @@ func TestLegacyMasterAllowsFallbackHeartbeatWithoutApplying(t *testing.T) {
 	if err := db.SetSetting(ctx, conn, db.AgentAppliedGeneration, int64(7)); err != nil {
 		t.Fatal(err)
 	}
-	node := Node{Reader: conn, Writer: conn, Client: client, Key: key, Master: db.AgentConnection{ServerID: id.ServerID}}
+	master := db.AgentConnection{ServerID: id.ServerID, MasterURL: client.MasterURL()}
+	if err := db.SetSetting(ctx, conn, db.AgentMaster, master); err != nil {
+		t.Fatal(err)
+	}
+	node := Node{Reader: conn, Writer: conn, Client: client, Key: key, Master: master}
 	beat := Heartbeat{Version: "current", SingboxActive: true, Interfaces: []string{"eth0"}}
 	for range 2 {
 		if err := node.Sync(ctx, beat, func() bool { return true }); !errors.Is(err, ErrMasterOutdated) {

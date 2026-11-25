@@ -18,32 +18,45 @@ import (
 	"strings"
 	"time"
 
+	"github.com/revfanc/boxpanel/internal/rules"
 	"github.com/revfanc/boxpanel/internal/spa"
 )
 
 var ErrMasterOutdated = errors.New("主控版本过旧，请先升级主控，节点会继续使用上次生效的配置")
+var ErrMasterUnreachable = errors.New("无法连接主控，请检查 HTTPS 地址、网络和证书信任或指纹")
 
 type Client struct {
 	base string
+	pin  string
 	http *http.Client
 }
 
-func NewClient(masterURL, pin string) (*Client, error) {
+func NormalizeMasterURL(masterURL string) (string, error) {
 	u, err := url.Parse(masterURL)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil ||
-		u.RawQuery != "" || u.ForceQuery || strings.Contains(masterURL, "#") || u.RawPath != "" {
-		return nil, fmt.Errorf("主控地址无效，请复制主控面板的 HTTPS 地址")
+	if err != nil || len(masterURL) > 512 || u.Scheme != "https" || !rules.ValidHost(u.Hostname()) || u.User != nil ||
+		u.RawQuery != "" || u.ForceQuery || strings.Contains(masterURL, "#") || u.RawPath != "" || strings.HasSuffix(u.Host, ":") {
+		return "", fmt.Errorf("主控地址无效，请复制主控面板的 HTTPS 地址")
 	}
 	if port := u.Port(); port != "" {
 		n, err := strconv.Atoi(port)
 		if err != nil || n < 1 || n > 65535 {
-			return nil, fmt.Errorf("主控端口无效，请复制主控面板的 HTTPS 地址")
+			return "", fmt.Errorf("主控端口无效，请复制主控面板的 HTTPS 地址")
 		}
 	}
 	if err := spa.ValidateWebPath(strings.TrimSuffix(strings.TrimPrefix(u.Path, "/"), "/")); err != nil || u.Path == "//" {
-		return nil, fmt.Errorf("主控路径无效，请复制主控面板首页的完整地址")
+		return "", fmt.Errorf("主控路径无效，请复制主控面板首页的完整地址")
 	}
-	u.Path = strings.TrimSuffix(u.Path, "/")
+	u.Path = strings.TrimSuffix(u.Path, "/") + "/"
+	return u.String(), nil
+}
+
+// MasterHTTPClient provides the node trust policy for other master-to-master
+// HTTPS calls. It uses the URL's hostname for the system CA verification branch.
+func MasterHTTPClient(masterURL, pin string, timeout time.Duration) (*http.Client, error) {
+	u, err := url.Parse(masterURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse master TLS address: %w", err)
+	}
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
 	if pin != "" {
 		expected := decodeBytes(pin, sha256.Size)
@@ -74,14 +87,23 @@ func NewClient(masterURL, pin string) (*Client, error) {
 			return err
 		}
 	}
-	return &Client{
-		base: u.String(),
-		http: &http.Client{
-			Transport:     &http.Transport{TLSClientConfig: tlsConfig},
-			Timeout:       10 * time.Second,
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		},
+	return &http.Client{
+		Transport:     &http.Transport{TLSClientConfig: tlsConfig},
+		Timeout:       timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}, nil
+}
+
+func NewClient(masterURL, pin string) (*Client, error) {
+	base, err := NormalizeMasterURL(masterURL)
+	if err != nil {
+		return nil, err
+	}
+	client, err := MasterHTTPClient(base, pin, 10*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{base: strings.TrimSuffix(base, "/"), pin: pin, http: client}, nil
 }
 
 func (c *Client) MasterURL() string { return c.base + "/" }
@@ -166,8 +188,25 @@ func (c *Client) Heartbeat(ctx context.Context, id int64, key ed25519.PrivateKey
 
 // SyncHeartbeat exchanges the applied and desired generations.
 func (c *Client) SyncHeartbeat(ctx context.Context, id int64, key ed25519.PrivateKey, in Heartbeat) (HeartbeatReply, error) {
+	return c.syncHeartbeat(ctx, id, key, in, false)
+}
+
+func (c *Client) ProbeHeartbeat(ctx context.Context, id int64, key ed25519.PrivateKey, in Heartbeat) (HeartbeatReply, error) {
+	return c.syncHeartbeat(ctx, id, key, in, true)
+}
+
+const HeaderMasterProbe = "X-Boxpanel-Master-Probe"
+
+func (c *Client) syncHeartbeat(ctx context.Context, id int64, key ed25519.PrivateKey, in Heartbeat, probe bool) (HeartbeatReply, error) {
 	var reply HeartbeatReply
-	resp, err := c.post(ctx, "/heartbeat", in, id, key)
+	send := func() (*http.Response, error) {
+		body, err := json.Marshal(in)
+		if err != nil {
+			return nil, fmt.Errorf("encode heartbeat: %w", err)
+		}
+		return c.requestWithProbe(ctx, http.MethodPost, "/heartbeat", body, id, key, probe)
+	}
+	resp, err := send()
 	if err != nil {
 		return reply, err
 	}
@@ -177,7 +216,7 @@ func (c *Client) SyncHeartbeat(ctx context.Context, id int64, key ed25519.Privat
 		// them after attempting the modern heartbeat.
 		resp.Body.Close()
 		in.Protocol, in.Interfaces, in.SyncError = 0, nil, ""
-		resp, err = c.post(ctx, "/heartbeat", in, id, key)
+		resp, err = send()
 		if err != nil {
 			return reply, err
 		}
@@ -194,6 +233,9 @@ func (c *Client) SyncHeartbeat(ctx context.Context, id int64, key ed25519.Privat
 	}
 	if legacy {
 		reply.Protocol = 1
+	}
+	if len(reply.MasterURLs) > 0 && (resp.Request == nil || !VerifyMasterURLs(reply, c.pin, resp.Request.Header.Get(HeaderNonce))) {
+		reply.MasterURLs = nil
 	}
 	return reply, nil
 }
@@ -278,12 +320,19 @@ func (c *Client) post(ctx context.Context, path string, value any, id int64, key
 }
 
 func (c *Client) request(ctx context.Context, method, path string, body []byte, id int64, key ed25519.PrivateKey) (*http.Response, error) {
+	return c.requestWithProbe(ctx, method, path, body, id, key, false)
+}
+
+func (c *Client) requestWithProbe(ctx context.Context, method, path string, body []byte, id int64, key ed25519.PrivateKey, probe bool) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.base+Prefix+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build node request: %w", err)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if probe {
+		req.Header.Set(HeaderMasterProbe, "1")
 	}
 	if id != 0 {
 		if err := sign(req, id, key, time.Now(), body); err != nil {
@@ -293,7 +342,7 @@ func (c *Client) request(ctx context.Context, method, path string, body []byte, 
 	resp, err := c.http.Do(req)
 	if err != nil {
 		// Avoid displaying peer-provided text, headers or request details.
-		return nil, fmt.Errorf("无法连接主控，请检查 HTTPS 地址、网络和证书信任或指纹")
+		return nil, ErrMasterUnreachable
 	}
 	return resp, nil
 }

@@ -48,9 +48,12 @@ func (n *Node) Sync(ctx context.Context, beat Heartbeat, coreActive func() bool)
 		return err
 	}
 	beat.Protocol, beat.AppliedGeneration, beat.SyncError = ProtocolVersion, &applied, n.syncError
-	reply, err := n.Client.SyncHeartbeat(ctx, n.Master.ServerID, n.Key, beat)
+	reply, err := n.connect(ctx, beat)
 	if err != nil {
 		return err
+	}
+	if reply.ReadOnly {
+		return nil
 	}
 	if n.Upgrade != nil {
 		// Before the protocol checks: an upgrade is how an outdated node recovers.
@@ -225,7 +228,7 @@ func (n *Node) verifyIdentity(ctx context.Context, q db.SettingsDB) error {
 	if err != nil {
 		return err
 	}
-	if current != n.Master {
+	if !sameMasterConnection(current, n.Master) {
 		return fmt.Errorf("node identity changed during synchronization")
 	}
 	return nil

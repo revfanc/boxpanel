@@ -75,7 +75,7 @@ export const zhCN = {
   },
 
   backup: {
-    title: '备份与恢复',
+    title: '备份与迁移',
     hint: '保留用户凭证、订阅地址、Reality 密钥和 Hysteria2 证书指纹。迁移域名后请更新 DNS；IP 地址改变时需更新客户端地址。',
     localWarning: '自动备份与服务器在同一台机器上，请定期下载加密备份到别处。',
     passphrase: '备份口令',
@@ -96,6 +96,28 @@ export const zhCN = {
     failed: '失败，请检查服务器磁盘空间和 backups 目录权限。',
     lastSuccess: '最近成功时间',
     login: '重新登录',
+  },
+  migration: {
+    title: '迁移主控',
+    generate: '生成迁移命令',
+    confirmTitle: '确认迁移主控',
+    confirmHint: '新机认领令牌后，旧面板进入只读，节点继续按现有配置服务。通常几分钟完成，令牌签发后 30 分钟内须确认新机就绪。本机入站会在交接时从旧机切换到新机，现有连接可能短暂中断。',
+    ipHint: '更换主控时客户端需手动更新订阅地址，建议使用域名。',
+    domainHint: '迁移完成后将域名的 A/AAAA 记录改为新机地址，客户端可继续使用原订阅链接。',
+    command: '迁移命令',
+    commandHint: '以 root 在全新 VPS 执行。令牌有效期为 30 分钟，只能认领一次。新机需在云安全组放行当前面板端口，位于 NAT 后时可在命令末尾添加 --public-ip <公网 IP>。',
+    issued: '迁移命令已生成。若已关闭命令，可重新生成，上一条会立即失效。',
+    frozen: '旧主控已冻结，等待新机就绪。新机失败或令牌到期后，旧主控会自动恢复写入。',
+    incoming: '新主控已恢复数据，正在等待旧主控确认交接。请查看两台主控的迁移状态。',
+    retired: '此主控已退役，请使用新主控继续管理。',
+    stopping: '旧主控内核仍在停用中。若持续未完成，请检查 systemd 日志。',
+    progress: (migrated: number, total: number) => `已迁移 ${migrated}/${total} 台节点`,
+    shutdown: '节点已全部切换。用户更新 IP 订阅地址或域名 DNS 生效后，可关闭旧主控。',
+    newPanel: '新主控面板',
+    waiting: '尚未切换的节点',
+    manualHint: '在线节点会自动尝试切换。离线节点恢复后若仍未切换，请在该节点运行以下命令。',
+    manual: '节点切换命令',
+    unavailable: '迁移需要使用标准数据目录的 Linux 生产面板和 HTTPS。可下载备份并在新机手动恢复。',
   },
 
   app: {
@@ -460,6 +482,8 @@ export const subscriptionText = /* subscription-text:start */ {
   "privacy": "请妥善保存订阅链接，不要公开分享；链接失效时请联系管理员。",
   "select": "节点选择",
   "autoSelect": "自动选择",
+  "migrationNode": "⚠ 订阅地址已变更",
+  "migrationLink": "订阅地址已变更，请复制下方新地址并在客户端更新订阅。",
   "nodes": "订阅节点",
   "realityName": "Reality · %d",
   "hysteria2Name": "Hysteria2 · %d"

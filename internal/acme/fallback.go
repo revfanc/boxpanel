@@ -30,6 +30,18 @@ func (m *Manager) FallbackPin() (string, error) {
 	return m.fallback.pin, nil
 }
 
+func (m *Manager) FallbackSigner() crypto.Signer { return m.fallback.key }
+
+// FallbackCertificate serves pinned clients connecting directly to the new
+// host's IP while a migrated domain still points at the old master.
+func (m *Manager) FallbackCertificate(name string) (*tls.Certificate, error) {
+	certificate, err := certs.SignPanelHost(name, m.fallback.key, m.opts.Now())
+	if err != nil {
+		return nil, err
+	}
+	return parseMaterial(Material{Certificate: certificate, Key: m.fallback.pem}, name, m.opts.Now())
+}
+
 func (m *Manager) loadFallback(ctx context.Context, state savedState) (fallbackKey, error) {
 	unlock, err := filelock.Acquire(ctx, m.opts.Dir+".lock")
 	if err != nil {

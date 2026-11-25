@@ -134,6 +134,11 @@ func configCommand(ctx context.Context, command string, opts app.InitOptions, st
 		return fmt.Errorf("read node role: restore node_role to master or agent")
 	}
 	if command == "reset-admin" {
+		release, err := beginMasterWrite(ctx, conn, opts.Paths)
+		if err != nil {
+			return err
+		}
+		defer release()
 		credentials, err := app.ResetAdmin(ctx, conn)
 		if err != nil {
 			return err
