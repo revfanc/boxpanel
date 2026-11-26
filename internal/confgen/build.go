@@ -177,6 +177,11 @@ func buildInbound(in Inbound, users []User, opts Options) (inboundConfig, error)
 		out.IgnoreClientBandwidth = options.UpMbps == 0 && options.DownMbps == 0
 		if options.ObfsPassword != "" {
 			out.Obfs = &obfsConfig{Type: "salamander", Password: options.ObfsPassword}
+		} else {
+			// Without masquerade a failed authentication gets Hysteria's own 404,
+			// which identifies the service to active probes. Serve a real site
+			// instead. With Salamander, HTTP/3 is unreachable, so it is omitted.
+			out.Masquerade = &masquerade{Type: "proxy", URL: Hysteria2Masquerade, RewriteHost: true}
 		}
 		seen := map[string]bool{}
 		for _, user := range users {

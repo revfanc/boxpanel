@@ -101,7 +101,8 @@ func TestRecommendationsFilterSortLimitAndEmpty(t *testing.T) {
 		return Target{}
 	}
 	got := Recommend(context.Background(), probe)
-	want := []string{names[4], names[3], names[2]}
+	// The first candidate fails; the rest are sorted by latency (lower first).
+	want := []string{names[2], names[1]}
 	var actual []string
 	for _, target := range got {
 		actual = append(actual, target.Server)
@@ -111,5 +112,47 @@ func TestRecommendationsFilterSortLimitAndEmpty(t *testing.T) {
 	}
 	if empty := Recommend(context.Background(), func(context.Context, string, int) Target { return Target{} }); empty == nil || len(empty) != 0 {
 		t.Fatal(empty)
+	}
+}
+
+func TestCandidatesAvoidMultiTenantCDNs(t *testing.T) {
+	for _, name := range strings.Split(CandidateDomains, ",") {
+		if strings.Contains(name, "cloudflare") || strings.Contains(name, "amazon") {
+			t.Fatalf("candidate %s fronts a multi-tenant CDN", name)
+		}
+	}
+}
+
+func TestCloudflareTargetsAreRefused(t *testing.T) {
+	for address, want := range map[string]bool{
+		"104.16.132.229": true, "172.67.1.1": true, "2606:4700::6810:84e5": true, "::ffff:104.16.0.1": true,
+		"23.15.142.75": false, "203.0.113.7": false, "2001:db8::1": false,
+	} {
+		if Cloudflare(netip.MustParseAddr(address)) != want {
+			t.Errorf("Cloudflare(%s) != %v", address, want)
+		}
+	}
+	lookup := func(_ context.Context, name string) ([]netip.Addr, error) {
+		if name == "cf.example.com" {
+			return []netip.Addr{netip.MustParseAddr("23.15.142.75"), netip.MustParseAddr("104.16.0.9")}, nil
+		}
+		return []netip.Addr{netip.MustParseAddr("23.15.142.75")}, nil
+	}
+	if hosted, err := HostedOnCloudflare(t.Context(), lookup, "cf.example.com"); err != nil || !hosted {
+		t.Fatal("a name with any Cloudflare address was accepted", err)
+	}
+	if hosted, _ := HostedOnCloudflare(t.Context(), lookup, "www.microsoft.com"); hosted {
+		t.Fatal("non-Cloudflare name was refused")
+	}
+	if hosted, _ := HostedOnCloudflare(t.Context(), lookup, "104.17.1.1"); !hosted {
+		t.Fatal("Cloudflare IP literal was accepted")
+	}
+	handshakes := 0
+	probe := NewProbe(ProbeOptions{Lookup: lookup, Handshake: func(context.Context, string, string) (tls.ConnectionState, error) {
+		handshakes++
+		return tls.ConnectionState{Version: tls.VersionTLS13, NegotiatedProtocol: "h2"}, nil
+	}})
+	if result := probe(t.Context(), "cf.example.com", 443); result.OK || result.Hint != CloudflareHint || handshakes != 0 {
+		t.Fatalf("Cloudflare target not refused before handshake: %+v handshakes=%d", result, handshakes)
 	}
 }

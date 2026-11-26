@@ -269,7 +269,10 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	nodes.OnStopped, nodes.Logger = alertService.UserStopped, logger
 	nodes.OnAvailability = alertService.ServerAvailability
 	panel.build = func(settings httpapi.PanelSettings) (http.Handler, error) {
-		api := httpapi.New(service, httpapi.Options{WebPath: settings.WebPath, Dev: opts.dev, Logger: logger, System: system, Singbox: manager, DB: conn, ReadDB: reader, Applier: manager, PanelPort: settings.WebPort, Subscriptions: store, PreparePanel: panel.prepare, Certificates: certificates, Backups: backupAPI, Migration: migrations, Alerts: alertService, Agents: nodes, AgentPin: certificates.FallbackPin})
+		api := httpapi.New(service, httpapi.Options{WebPath: settings.WebPath, Dev: opts.dev, Logger: logger, System: system, Singbox: manager, DB: conn, ReadDB: reader, Applier: manager, PanelPort: settings.WebPort, Subscriptions: store, PreparePanel: panel.prepare, Certificates: certificates, Backups: backupAPI, Migration: migrations, Alerts: alertService, Agents: nodes, AgentPin: certificates.FallbackPin,
+			RealityLookup: func(ctx context.Context, name string) ([]netip.Addr, error) {
+				return net.DefaultResolver.LookupNetIP(ctx, "ip", name)
+			}})
 		spaHandler, err := spa.New(web.Assets, spa.Options{WebPath: settings.WebPath, Version: version, API: api})
 		if err != nil {
 			return nil, fmt.Errorf("prepare HTTP server: %w", err)

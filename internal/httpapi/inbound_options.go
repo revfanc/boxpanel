@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -45,6 +46,30 @@ func rejectRemoteKeyOptions(patch json.RawMessage) error {
 	for _, key := range []string{"private_key", "public_key", "short_ids"} {
 		if _, ok := fields[key]; ok {
 			return invalid("options."+key, "远端入站的密钥在节点上生成，请省略此字段。")
+		}
+	}
+	return nil
+}
+
+// rejectCloudflareTarget refuses a submitted Reality target hosted on
+// Cloudflare. It runs before any write transaction because it resolves DNS; an
+// unresolvable name is left to the existing probe and validation.
+func (a *api) rejectCloudflareTarget(ctx context.Context, patch json.RawMessage) error {
+	if a.opts.RealityLookup == nil || patch == nil {
+		return nil
+	}
+	fields := optionFields(patch)
+	for _, key := range []string{"server_name", "handshake_server"} {
+		raw, exists := fields[key]
+		var host string
+		if !exists || json.Unmarshal(raw, &host) != nil || !reality.ValidServer(host) {
+			continue
+		}
+		lookup, cancel := context.WithTimeout(ctx, reality.ProbeTimeout)
+		hosted, _ := reality.HostedOnCloudflare(lookup, a.opts.RealityLookup, host)
+		cancel()
+		if hosted {
+			return invalid("options."+key, reality.CloudflareHint)
 		}
 	}
 	return nil

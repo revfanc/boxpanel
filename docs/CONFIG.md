@@ -53,6 +53,9 @@
   强制客户端使用 BBR；任一值为正时输出正值并省略 `ignore_client_bandwidth`。
   因此不能仅靠“不填带宽”表达“强制 BBR”。非空 `obfs_password` 映射到
   `obfs:{type:"salamander",password:...}`，为空则省略整个 `obfs`。
+  未启用混淆时固定输出 `masquerade:{type:"proxy",url:"https://www.bing.com/",rewrite_host:true}`
+  （常量 `confgen.Hysteria2Masquerade`，sing-box 1.11+ 对象写法），让认证失败的 HTTP/3 请求得到真实站点而非 Hysteria 自带 404，
+  避免被主动探测识别；启用 Salamander 时 HTTP/3 不可达，省略 masquerade。不是存储选项，旧节点解码不受影响。
 - 端口跳跃：面板用 nftables（无则 iptables）把 UDP `start-end` DNAT/REDIRECT 到 `port`，面板启动时重新下发，删除入站时清理。
 
 ## 2. 服务端配置（confgen）
@@ -541,7 +544,9 @@ check 只校验格式，不启动 TUN、不连接节点、不下载 rule-set。
 
 ## 5. Reality 伪装目标检测（`internal/reality`）
 
-- 内置候选：若干大型站点域名，集中在 `internal/reality/probe.go` 的 `CandidateDomains` 常量；
+- 内置候选：若干大型站点域名，集中在 `internal/reality/probe.go` 的 `CandidateDomains` 常量。
+  不含 Cloudflare、CloudFront 等多租户 CDN 入口：Reality 会把未认证连接原样转发给目标，此类目标会让服务器被当作
+  「优选 IP」替他人中转流量。检测、推荐、新建与修改入站均拒绝解析到 Cloudflare 公布 IP 段（`internal/reality/cdn.go`）的目标；
   T3.1 不新增设置覆盖入口（设置接口属于 T3.2）。域名只是候选，每次须重新验证可用性。
 - 对每个候选从**服务器本机**发起 TLS 握手，判定：支持 TLS 1.3、ALPN 协商到 `h2`、证书有效、握手耗时。
 - 推荐：满足条件者按耗时升序取前 3；引导流程默认选第 1 个。

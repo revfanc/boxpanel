@@ -70,6 +70,11 @@
         ],
         "certificate_path": "/etc/boxpanel/certs/hy2.crt",
         "key_path": "/etc/boxpanel/certs/hy2.key"
+      },
+      "masquerade": {
+        "type": "proxy",
+        "url": "https://www.bing.com/",
+        "rewrite_host": true
       }
     }
   ],

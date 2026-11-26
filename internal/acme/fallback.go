@@ -125,6 +125,12 @@ func legacySelfSignedKey(certFile, keyFile string) crypto.Signer {
 	return key
 }
 
+// legacySubject reports a self-signed leaf that still advertises the product
+// name; it is reissued for the same host and key.
+func legacySubject(leaf *x509.Certificate) bool {
+	return leaf.Subject.CommonName == certs.LegacyCommonName
+}
+
 func selfSigned(leaf *x509.Certificate) bool {
 	return bytes.Equal(leaf.RawSubject, leaf.RawIssuer) &&
 		leaf.CheckSignature(leaf.SignatureAlgorithm, leaf.RawTBSCertificate, leaf.Signature) == nil

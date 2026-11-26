@@ -351,7 +351,8 @@ applied_firewall、applied_users 和新随机 apply_generation，再提交资源
 
 ## 8. 安全基线
 
-- 面板默认 HTTPS；新安装尝试 ACME，未签发成功时使用自签备用证书。引导按实际证书类型解释浏览器警告，详见 §13。
+- 面板默认 HTTPS；新安装尝试 ACME，未签发成功时使用自签备用证书。自签证书主题使用主机本身（IP 或域名），
+  不再使用 `CN=boxpanel`，避免证书搜索引擎按主题批量列出面板；旧证书启动时以同一备用密钥重签，固定指纹不变。引导按实际证书类型解释浏览器警告，详见 §13。
 - 会话 cookie：`HttpOnly; Secure; SameSite=Strict; Path=/{web_path}/`，有效期 7 天。
 - 登录限流：同 IP 5 次失败锁 15 分钟。
 - 管理 API 对写操作校验 `Origin`/`Sec-Fetch-Site`，防 CSRF。

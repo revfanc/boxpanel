@@ -6,7 +6,7 @@ import { LinkButton } from '@/components/LinkButton'
 import { Badge } from '@/components/ui/badge'
 import { Label } from '@/components/ui/label'
 import { ChoiceSelect } from '@/components/ChoiceSelect'
-import { Page, Panel, Empty, Confirm } from '@/components/ResourceUI'
+import { Page, Panel, Empty, Confirm, Notice } from '@/components/ResourceUI'
 import { ErrorNotice, Loading } from '@/components/Feedback'
 import { inboundsQuery, refreshResources, serversQuery } from '@/lib/resources'
 import { api } from '@/lib/api'
@@ -77,6 +77,7 @@ function InboundList({ servers, filter, scoped = false }: { servers: Server[]; f
           <div className="flex flex-wrap gap-2"><Badge variant="secondary">{node.protocol === 'vless_reality' ? t.inbounds.reality : t.inbounds.hysteria2}</Badge><Badge variant={node.enabled ? 'default' : 'outline'}>{node.enabled ? t.common.enabled : t.common.disabled}</Badge></div>
           <p className="text-sm">{t.inbounds.port}: {node.port} / {node.protocol === 'vless_reality' ? 'TCP' : 'UDP'}</p>
           {server && !scoped && <p className="text-sm text-muted-foreground">{t.servers.owner(server.name)}</p>}
+          {node.warning && <Notice>{node.warning}</Notice>}
           {node.key_status === 'pending' && <p className="text-sm text-muted-foreground">{t.inbounds.pendingKeys}</p>}
           {!node.enabled && <p className="text-sm text-muted-foreground">{node.key_status ? t.inbounds.remoteApply : t.common.applyHint}</p>}
             <div className="flex flex-wrap gap-2">

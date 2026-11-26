@@ -225,7 +225,7 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/reality/recommend` | `{targets: [{server, tls13, h2, latency_ms, ok}]}`，前 3 个推荐 |
-| POST | `/reality/check` | `{server, port?}` → 单个检测结果 |
+| POST | `/reality/check` | `{server, port?}` → 单个检测结果；目标解析到 Cloudflare 时 `ok:false` 并在 `hint` 说明中转风险 |
 
 ## 服务器（T8.1–T9.5）
 
@@ -381,6 +381,8 @@ T9.5 增补字段沿用协议 2。`metrics` 包含 `cpu`（0–100，保留一�
 跨服务器移动涉及本机时仍使用本机 Apply 的事务。创建返回 201，修改或启停返回 200 最新脱敏对象，删除成功返回 204。
 入站响应含 `server_id`。创建省略时使用本机，修改省略时保持归属。可选择本机和 `online` 或 `offline` 的远端服务器。
 未接入、已移除或未知的目标服务器返回 `422 server_unavailable`。远端入站响应附带 `key_status`（`pending` 或 `ready`）。
+新建或修改 Reality 入站时，`options.server_name` / `handshake_server` 解析到 Cloudflare 返回 `400 invalid_argument`；
+入站列表对目标已在 Cloudflare 的既有 Reality 入站附带 `warning`（解析结果按主机缓存 10 分钟，解析失败不标记）。
 
 端口、标识和跳跃范围按目标服务器校验，主控只探测本机的实际端口和 Reality 推荐。远端 Reality 的目标需手动填写。
 远端 Reality 写请求中的 `private_key`、`public_key` 和 `short_ids` 返回 400，由节点生成。

@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -117,6 +118,11 @@ func newResources(t *testing.T, dev bool) *resourceFixture {
 	}
 	f.h = New(service, Options{Dev: dev, DB: conn, Applier: f.apply, Singbox: manager, PanelPort: 2053, Logger: slog.New(slog.NewTextHandler(logs, nil)), ListeningPorts: func(context.Context) (map[sysinfo.Socket]bool, error) { return f.busy, nil }, RealityProbe: func(_ context.Context, server string, _ int) reality.Target {
 		return reality.Target{Server: server, TLS13: true, H2: true, OK: true, LatencyMS: 10}
+	}, RealityLookup: func(_ context.Context, name string) ([]netip.Addr, error) {
+		if name == "cf.example.com" {
+			return []netip.Addr{netip.MustParseAddr("104.16.0.9")}, nil
+		}
+		return []netip.Addr{netip.MustParseAddr("203.0.113.9")}, nil
 	}})
 	w := request(t, f.h, "POST", "https://example.test/api/v1/auth/login", `{"username":"admin","password":"test-password"}`, nil, nil)
 	requireStatus(t, w, 200)
@@ -247,6 +253,36 @@ func TestUserHandlersEveryWriteAppliesAndRedacts(t *testing.T) {
 		}
 	}
 }
+
+// A Cloudflare-hosted Reality target would let strangers relay through this
+// server into Cloudflare; create and update refuse it before writing anything.
+func TestRealityCloudflareTargetIsRefused(t *testing.T) {
+	f := newResources(t, false)
+	for _, body := range []string{`{"protocol":"vless_reality","options":{"server_name":"cf.example.com"}}`,
+		`{"protocol":"vless_reality","options":{"server_name":"104.17.1.1"}}`} {
+		w := f.call(t, "POST", "inbounds", body, 400)
+		if !strings.Contains(w.Body.String(), "Cloudflare") || f.apply.calls != 0 {
+			t.Fatal("Cloudflare target accepted or applied:", w.Body.String())
+		}
+	}
+	f.write(t, "POST", "inbounds", `{"protocol":"vless_reality","options":{"server_name":"www.example.com"}}`, 201)
+	if strings.Contains(f.call(t, "GET", "inbounds", "", 200).Body.String(), `"warning"`) {
+		t.Fatal("non-Cloudflare target flagged")
+	}
+	// An inbound stored before the check (or moved by DNS) is flagged in the list.
+	if _, err := f.conn.Exec(`UPDATE inbounds SET options=json_set(options,'$.handshake_server','cf.example.com') WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(f.call(t, "GET", "inbounds", "", 200).Body.String(), `"warning":"`+reality.CloudflareHint) {
+		t.Fatal("existing Cloudflare target not flagged")
+	}
+	calls := f.apply.calls
+	w := f.call(t, "PUT", "inbounds/1", `{"options":{"server_name":"cf.example.com","handshake_server":"cf.example.com"}}`, 400)
+	if !strings.Contains(w.Body.String(), "Cloudflare") || f.apply.calls != calls {
+		t.Fatal("update to a Cloudflare target was accepted:", w.Body.String())
+	}
+}
+
 func TestInboundHandlersEveryWriteAppliesAndFirewallFollows(t *testing.T) {
 	f := newResources(t, false)
 	in := decodeResult[inboundRecord](t, f.write(t, "POST", "inbounds", `{"protocol":"vless_reality"}`, 201))

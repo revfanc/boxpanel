@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/revfanc/boxpanel/internal/auth"
@@ -30,6 +31,7 @@ type inboundRecord struct {
 	CreatedAt int64           `json:"created_at"`
 	UpdatedAt int64           `json:"updated_at"`
 	KeyStatus string          `json:"key_status,omitempty"`
+	Warning   string          `json:"warning,omitempty"`
 	keyID     string
 	keysReady bool
 }
@@ -76,6 +78,7 @@ func (a *api) inboundList(w http.ResponseWriter, r *http.Request) {
 		a.resourceError(w, fmt.Errorf("list inbounds: %w", err))
 		return
 	}
+	a.warnCloudflareTargets(r.Context(), result)
 	writeJSON(w, 200, result)
 }
 func (a *api) inboundGet(w http.ResponseWriter, r *http.Request) {
@@ -256,6 +259,10 @@ func (a *api) inboundCreate(w http.ResponseWriter, r *http.Request) {
 		a.resourceError(w, err)
 		return
 	}
+	if err := a.rejectCloudflareTarget(ctx, input.Options); err != nil {
+		a.resourceError(w, err)
+		return
+	}
 	options, err := a.prepareInbound(ctx, *input.Protocol, input.Options, server.local)
 	if err != nil {
 		a.resourceError(w, err)
@@ -368,6 +375,12 @@ func (a *api) mutateInbound(w http.ResponseWriter, r *http.Request, deleted bool
 	if err != nil {
 		a.resourceError(w, err)
 		return
+	}
+	if !deleted {
+		if err := a.rejectCloudflareTarget(ctx, input.Options); err != nil {
+			a.resourceError(w, err)
+			return
+		}
 	}
 	var sockets map[sysinfo.Socket]bool
 	if !deleted && target.local {
@@ -514,5 +527,70 @@ func (a *api) inboundToggle(w http.ResponseWriter, r *http.Request) {
 func (a *api) inboundDelete(w http.ResponseWriter, r *http.Request) {
 	if noBody(w, r) {
 		a.mutateInbound(w, r, true, inboundInput{})
+	}
+}
+
+type cdnResult struct {
+	hosted  bool
+	checked time.Time
+}
+
+const cdnCacheTTL = 10 * time.Minute
+
+// warnCloudflareTargets flags existing Reality inbounds whose target is on
+// Cloudflare (created before the check existed or since moved by DNS). Hosts
+// are resolved concurrently, at most once per cache period, and a lookup that
+// fails or times out simply leaves the inbound unflagged.
+func (a *api) warnCloudflareTargets(ctx context.Context, inbounds []inboundRecord) {
+	if a.opts.RealityLookup == nil {
+		return
+	}
+	hosts := map[string][]int{}
+	for i, in := range inbounds {
+		if in.Protocol != "vless_reality" {
+			continue
+		}
+		var options confgen.RealityOptions
+		if json.Unmarshal(in.Options, &options) == nil && reality.ValidServer(options.HandshakeServer) {
+			hosts[options.HandshakeServer] = append(hosts[options.HandshakeServer], i)
+		}
+	}
+	now := time.Now()
+	results := make(map[string]bool, len(hosts))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	lookup, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	for host := range hosts {
+		a.cdnMu.Lock()
+		cached, ok := a.cdnCache[host]
+		a.cdnMu.Unlock()
+		if ok && now.Sub(cached.checked) < cdnCacheTTL {
+			results[host] = cached.hosted
+			continue
+		}
+		wg.Go(func() {
+			hosted, err := reality.HostedOnCloudflare(lookup, a.opts.RealityLookup, host)
+			if err != nil {
+				return
+			}
+			a.cdnMu.Lock()
+			if a.cdnCache == nil || len(a.cdnCache) > 1024 {
+				a.cdnCache = map[string]cdnResult{}
+			}
+			a.cdnCache[host] = cdnResult{hosted: hosted, checked: now}
+			a.cdnMu.Unlock()
+			mu.Lock()
+			results[host] = hosted
+			mu.Unlock()
+		})
+	}
+	wg.Wait()
+	for host, indexes := range hosts {
+		if results[host] {
+			for _, i := range indexes {
+				inbounds[i].Warning = reality.CloudflareHint
+			}
+		}
 	}
 }

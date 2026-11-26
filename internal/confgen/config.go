@@ -37,6 +37,14 @@ type inboundConfig struct {
 	IgnoreClientBandwidth bool         `json:"ignore_client_bandwidth,omitempty"`
 	Obfs                  *obfsConfig  `json:"obfs,omitempty"`
 	TLS                   tlsConfig    `json:"tls"`
+	Masquerade            *masquerade  `json:"masquerade,omitempty"`
+}
+
+// masquerade is the sing-box 1.11+ object form (type proxy: url, rewrite_host).
+type masquerade struct {
+	Type        string `json:"type"`
+	URL         string `json:"url"`
+	RewriteHost bool   `json:"rewrite_host"`
 }
 
 type serverUser struct {

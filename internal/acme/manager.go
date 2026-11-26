@@ -225,7 +225,7 @@ func (m *Manager) reconcileLocal(ctx context.Context) error {
 		data, err := os.ReadFile(filepath.Join(m.opts.Dir, state.File))
 		if err == nil {
 			pair, err := parseMaterial(Material{data, data}, name, m.opts.Now())
-			if err == nil && (state.Type == "acme" || certs.SPKIPin(pair.Leaf.RawSubjectPublicKeyInfo) == m.fallback.pin) {
+			if err == nil && (state.Type == "acme" || certs.SPKIPin(pair.Leaf.RawSubjectPublicKeyInfo) == m.fallback.pin && !legacySubject(pair.Leaf)) {
 				m.current.Store(pair)
 				return nil
 			}
@@ -239,7 +239,7 @@ func (m *Manager) reconcileLocal(ctx context.Context) error {
 	material := Material{Key: m.fallback.pem}
 	material.Certificate, _ = os.ReadFile(m.opts.CertFile)
 	pair, err := parseMaterial(material, name, now)
-	if err != nil || !selfSigned(pair.Leaf) {
+	if err != nil || !selfSigned(pair.Leaf) || legacySubject(pair.Leaf) {
 		material.Certificate, err = certs.SignPanelHost(name, m.fallback.key, now)
 		if err != nil {
 			return err

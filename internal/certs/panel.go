@@ -20,20 +20,26 @@ import (
 
 const PanelFallbackKeyFile = "panel-fallback.key"
 
+// LegacyCommonName was the subject of panel certificates before v0.5.1. It let
+// certificate search engines list every panel, so it is no longer issued and
+// stored leaves carrying it are reissued with the same key.
+const LegacyCommonName = "boxpanel"
+
 func Panel(ip netip.Addr, now time.Time) (certificate, privateKey []byte, err error) {
 	if !ip.IsValid() || ip.Zone() != "" {
 		return nil, nil, fmt.Errorf("generate panel certificate: provide a valid IP address without a zone")
 	}
-	return selfSigned("boxpanel", nil, []net.IP{net.IP(ip.AsSlice())}, now)
+	// The subject names only the host the client already dialled.
+	return selfSigned(ip.String(), nil, []net.IP{net.IP(ip.AsSlice())}, now)
 }
 
 // SignPanelHost issues a self-signed leaf using the existing fallback key.
 // The caller validates the host.
 func SignPanelHost(name string, key crypto.Signer, now time.Time) ([]byte, error) {
 	if ip, err := netip.ParseAddr(name); err == nil {
-		return signSelfSigned("boxpanel", nil, []net.IP{net.IP(ip.AsSlice())}, key, now)
+		return signSelfSigned(ip.String(), nil, []net.IP{net.IP(ip.AsSlice())}, key, now)
 	}
-	return signSelfSigned("boxpanel", []string{name}, nil, key, now)
+	return signSelfSigned(name, []string{name}, nil, key, now)
 }
 
 func GenerateTLSKey() (*ecdsa.PrivateKey, error) {

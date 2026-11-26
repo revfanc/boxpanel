@@ -176,6 +176,7 @@ export interface IssuedJoinToken extends JoinToken {
 interface InboundBase {
   server_id: number
   key_status?: 'pending' | 'ready'
+  warning?: string
   id: number
   tag: string
   port: number

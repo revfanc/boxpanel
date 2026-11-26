@@ -46,6 +46,13 @@ it('shows the server assignment without a selector', async () => {
   expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
 })
 
+it('shows the server warning for a Reality target that would relay strangers', async () => {
+  const warning = 'cloudflare-relay-warning'
+  mockAPI({ '/inbounds': () => Response.json([{ ...inbound, warning }]) })
+  mountPage(<InboundsPage />)
+  expect(await screen.findByText(warning)).toBeVisible()
+})
+
 it('filters inbounds from the URL, updates it on selection and follows browser history', async () => {
   const edge = { ...server, id: 2, name: 'Edge', is_local: false, status: 'online' }
   const pending = { ...edge, id: 3, name: 'Pending', status: 'pending' }

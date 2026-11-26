@@ -31,21 +31,24 @@ import (
 const CookieName = "boxpanel_session"
 
 type Options struct {
-	Agents         *agent.Master
-	AgentPin       func() (string, error)
-	Alerts         *alerts.Service
-	Backups        Backups
-	Migration      *migration.Service
-	Certificates   Certificates
-	WebPath        string
-	Dev            bool
-	Logger         *slog.Logger
-	System         System
-	Singbox        Singbox
-	DB             *sql.DB
-	ReadDB         *sql.DB // independent read-only WAL pool
-	Applier        Applier
-	RealityProbe   reality.Probe
+	Agents       *agent.Master
+	AgentPin     func() (string, error)
+	Alerts       *alerts.Service
+	Backups      Backups
+	Migration    *migration.Service
+	Certificates Certificates
+	WebPath      string
+	Dev          bool
+	Logger       *slog.Logger
+	System       System
+	Singbox      Singbox
+	DB           *sql.DB
+	ReadDB       *sql.DB // independent read-only WAL pool
+	Applier      Applier
+	RealityProbe reality.Probe
+	// RealityLookup resolves Reality targets on save to refuse Cloudflare-hosted
+	// ones. Nil skips the check (tests without network).
+	RealityLookup  func(context.Context, string) ([]netip.Addr, error)
 	ListeningPorts func(context.Context) (map[sysinfo.Socket]bool, error)
 	LookupIP       func(context.Context, string) ([]netip.Addr, error)
 	DialContext    func(context.Context, string, string) (net.Conn, error)
@@ -61,6 +64,8 @@ type api struct {
 	opts       Options
 	cookiePath string
 	settingsMu sync.Mutex
+	cdnMu      sync.Mutex
+	cdnCache   map[string]cdnResult
 }
 
 type adminKey struct{}

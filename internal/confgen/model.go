@@ -62,6 +62,11 @@ type RealityOptions struct {
 	Fingerprint     string   `json:"fingerprint"` // client metadata, never emitted here
 }
 
+// Hysteria2Masquerade answers unauthenticated HTTP/3 requests when Salamander
+// obfuscation is off. It is a fixed public site, not an option, so nodes that
+// predate it keep decoding stored options.
+const Hysteria2Masquerade = "https://www.bing.com/"
+
 type Hysteria2Options struct {
 	SNI          string      `json:"sni"`
 	CertMode     string      `json:"cert_mode"`

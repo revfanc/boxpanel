@@ -15,7 +15,10 @@ import (
 
 // CandidateDomains is immutable. These are candidates, never presumed healthy:
 // every recommendation requires a fresh verified TLS handshake from the server.
-const CandidateDomains = "www.microsoft.com,www.apple.com,www.cloudflare.com,www.bing.com,www.amazon.com"
+// Multi-tenant CDN front doors (Cloudflare, CloudFront) are excluded: Reality
+// relays unauthenticated traffic to its target, so such a target turns the
+// server into a free relay for other tenants.
+const CandidateDomains = "www.microsoft.com,www.apple.com,www.bing.com"
 const ProbeTimeout = 3 * time.Second
 
 type Target struct {
@@ -72,6 +75,10 @@ func NewProbe(opts ProbeOptions) Probe {
 		// validated IP directly, preserving SNI, to prevent DNS rebinding.
 		for _, ip := range ips {
 			if !PublicIP(ip) {
+				return result
+			}
+			if Cloudflare(ip) {
+				result.Hint = CloudflareHint
 				return result
 			}
 		}

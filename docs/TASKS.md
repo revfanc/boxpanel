@@ -1541,6 +1541,15 @@ T8.2–T8.4 已有：生成加入命令、有效令牌与撤销、状态/版本/
   网速与经节点的负载吻合；概览三台服务器显示指标、用户流量占比与网卡计费。
 - [ ] 仍待实机：第 2 步用户在两台服务器分别产生流量后的分项对账，第 5 步实机 375px 窄屏（Chrome 窗口无法缩放，本地开发面板已测无溢出）。
 
+### 安全加固：扫描指纹与 Reality 中转（2026-11-26）
+
+- [x] 面板自签证书主题由 `CN=boxpanel` 改为主机本身，旧证书以同一备用密钥重签（固定指纹不变）。实测：旧版对无 SNI 的 IP 访问返回 `CN=boxpanel`。
+- [x] Reality：候选去掉 `www.cloudflare.com`、`www.amazon.com`；检测/推荐/新建/修改拒绝 Cloudflare 托管目标，入站列表提醒既有此类目标。
+  实测测试节点目标 `www.microsoft.com`（Akamai）对 apple/bing/cloudflare SNI 返回 403/400，不能被当中转。
+- [x] Hysteria2 未启用混淆时默认 masquerade 反代 `https://www.bing.com/`，golden 经 sing-box 1.14.4 check。
+- [ ] 实机：升级后核对 IP 访问证书主题、Hysteria2 HTTP/3 探测返回伪装站点、面板拒绝 Cloudflare 目标。
+- 未做（按需）：登录限速按 IPv6 /64 聚合并避免满表时误伤管理员；Reality 前置 SNI 过滤（会削弱抗探测，不默认）。
+
 ## M7 后续增强（MVP 之后，按需排期）
 
 - T7.1 见上方详细任务（已排期）

@@ -8,11 +8,13 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"database/sql"
 	"encoding/pem"
 	"errors"
 	"io"
 	"log/slog"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -561,5 +563,46 @@ func TestPruneKeepsActiveAndPreviousAcrossRestart(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.m.opts.Dir, abandoned)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("abandoned bundle retained")
+	}
+}
+
+// Panels issued before v0.5.1 carry CN=boxpanel. On start the stored leaf is
+// reissued for the same host and fallback key, so pins keep working.
+func TestLegacyPanelSubjectIsReissued(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	for key, value := range map[db.SettingKey[string]]string{db.PublicHost: "203.0.113.7", db.PanelTLSMode: "self_signed"} {
+		if err := db.SetSetting(ctx, f.conn, key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pin, err := f.m.FallbackPin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{SerialNumber: big.NewInt(7), Subject: pkix.Name{CommonName: certs.LegacyCommonName},
+		NotBefore: f.now.Add(-time.Hour), NotAfter: f.now.AddDate(1, 0, 0), IPAddresses: []net.IP{net.ParseIP("203.0.113.7")},
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, BasicConstraintsValid: true}
+	signer := f.m.FallbackSigner()
+	der, err := x509.CreateCertificate(rand.Reader, template, template, signer.Public(), signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f.m.opts.CertFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := New(ctx, f.conn, f.m.opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Tick(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	pair, err := m.GetCertificate(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pair.Leaf.Subject.CommonName != "203.0.113.7" || certs.SPKIPin(pair.Leaf.RawSubjectPublicKeyInfo) != pin {
+		t.Fatalf("legacy leaf not reissued with the same key: CN=%q", pair.Leaf.Subject.CommonName)
 	}
 }
