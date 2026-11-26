@@ -1547,7 +1547,11 @@ T8.2–T8.4 已有：生成加入命令、有效令牌与撤销、状态/版本/
 - [x] Reality：候选去掉 `www.cloudflare.com`、`www.amazon.com`；检测/推荐/新建/修改拒绝 Cloudflare 托管目标，入站列表提醒既有此类目标。
   实测测试节点目标 `www.microsoft.com`（Akamai）对 apple/bing/cloudflare SNI 返回 403/400，不能被当中转。
 - [x] Hysteria2 未启用混淆时默认 masquerade 反代 `https://www.bing.com/`，golden 经 sing-box 1.14.4 check。
-- [ ] 实机：升级后核对 IP 访问证书主题、Hysteria2 HTTP/3 探测返回伪装站点、面板拒绝 Cloudflare 目标。
+- [x] 实机（2026-11-26，`v0.5.1-rc.1`）：主控升级后无 SNI 的 IP 访问证书由 `CN = boxpanel` 变为 `CN = 85.189.54.156`，
+  域名访问仍为 Let's Encrypt，两节点保持在线（固定指纹未变）；bp-old 自动跟随升级。节点新建未混淆的 Hysteria2 入站后，
+  配置含 `masquerade{proxy, https://www.bing.com/}`，HTTP/3 探测 `/` 返回 200「Search - Microsoft Bing」，`/auth` 返回 Bing 的 404。
+  推荐仅返回 apple/microsoft/bing；检测 `www.cloudflare.com` 为 `ok:false` 并给出中转风险提示；把既有入站改为 `discord.com`
+  或新建 `www.cloudflare.com` 目标均返回 400。
 - 未做（按需）：登录限速按 IPv6 /64 聚合并避免满表时误伤管理员；Reality 前置 SNI 过滤（会削弱抗探测，不默认）。
 
 ## M7 后续增强（MVP 之后，按需排期）
