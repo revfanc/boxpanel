@@ -16,7 +16,7 @@ import (
 func (a *api) migrationError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, db.ErrMigrationReadOnly):
-		writeError(w, 409, "migration_read_only", "当前主控处于迁移只读状态", "迁移完成后请在新主控操作；若迁移失败，请等待旧主控解冻后重试。")
+		writeError(w, 409, "migration_read_only", "当前主控处于迁移只读状态", "迁移完成后请在新主控操作；若新机已失败或已销毁，可在「设置 → 备份与迁移」中止迁移后重试。")
 	case errors.Is(err, migration.ErrToken):
 		writeError(w, 401, "invalid_migration_token", migration.ErrToken.Error(), "请回到设置页生成并复制新的迁移命令。")
 	case errors.Is(err, migration.ErrCommitted):
@@ -93,6 +93,30 @@ func (a *api) issueMigration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 201, grant)
+}
+
+// cancelMigration unfreezes the source when the target cannot finish, such as
+// after it was destroyed or killed before reporting failure.
+func (a *api) cancelMigration(w http.ResponseWriter, r *http.Request) {
+	if a.opts.Migration == nil {
+		writeError(w, 409, "migration_unavailable", "当前环境无法管理主控迁移", "请在使用标准数据目录的 Linux 生产面板上操作。")
+		return
+	}
+	var in struct {
+		Confirm bool `json:"confirm"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if !in.Confirm {
+		writeError(w, 400, "migration_confirmation_required", "请确认中止主控迁移", "确认新机已失败或已停止后重试。")
+		return
+	}
+	if err := a.opts.Migration.Cancel(r.Context()); err != nil {
+		a.migrationError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Peer calls live outside the buffered management middleware. The private

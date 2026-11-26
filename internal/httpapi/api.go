@@ -123,7 +123,8 @@ func New(service *auth.Service, opts Options) http.Handler {
 		routes[path] += method
 		var h http.Handler = handler
 		if opts.Migration != nil && method != "GET" && path != "/api/v1/auth/login" &&
-			path != "/api/v1/auth/logout" && path != "/api/v1/backup" && path != "/api/v1/migration/token" {
+			path != "/api/v1/auth/logout" && path != "/api/v1/backup" && path != "/api/v1/migration/token" &&
+			path != "/api/v1/migration/cancel" {
 			h = a.migrationWrite(h)
 		}
 		if protected {
@@ -157,6 +158,7 @@ func New(service *auth.Service, opts Options) http.Handler {
 	register("POST", "/api/v1/restore", a.restorePost, true)
 	register("GET", "/api/v1/migration", a.getMigration, true)
 	register("POST", "/api/v1/migration/token", a.issueMigration, true)
+	register("POST", "/api/v1/migration/cancel", a.cancelMigration, true)
 	a.registerAlerts(register)
 	a.registerResources(register)
 	a.registerServerPanel(register)

@@ -28,18 +28,31 @@ export function MasterMigration({ publicHost }: { publicHost: string }) {
   const status = useQuery({ queryKey: statusKey, queryFn: ({ signal }) => api<Status>('/migration', { signal }), refetchInterval: 3000 })
   const operation = useOperation()
   const [confirm, setConfirm] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
+  const [cancelled, setCancelled] = useState(false)
   const [grant, setGrant] = useState<Grant | null>(null)
   const ipMode = publicHost.includes(':') || /^(?:\d{1,3}\.){3}\d{1,3}$/.test(publicHost)
   const modeHint = ipMode ? t.migration.ipHint : t.migration.domainHint
   const data = status.data
   const issueAllowed = data && ['idle', 'issued', 'active'].includes(data.phase)
   const showGrant = grant && data?.phase === 'issued' && data.expires_at === grant.expires_at
+  const cancelAllowed = data && ['issued', 'frozen'].includes(data.phase)
 
   function issue() {
     void operation.run(() => api<Grant>('/migration/token', { method: 'POST', body: { confirm: true } }), (result) => {
       setGrant(result)
       setConfirm(false)
+      setCancelled(false)
       client.setQueryData<Status>(statusKey, { phase: 'issued', expires_at: result.expires_at, migrated: 0, total: 0, core_stopped: false })
+    })
+  }
+
+  function cancel() {
+    void operation.run(() => api<void>('/migration/cancel', { method: 'POST', body: { confirm: true } }), () => {
+      setGrant(null)
+      setCancelling(false)
+      setCancelled(true)
+      void client.invalidateQueries({ queryKey: statusKey })
     })
   }
 
@@ -64,11 +77,16 @@ export function MasterMigration({ publicHost }: { publicHost: string }) {
         <CopyField label={t.migration.manual} value={`boxpanel set-master ${quote(data.target_url)}`} />
       </>}
     </div>}
-    {issueAllowed && <Button variant="outline" disabled={operation.pending} onClick={() => { operation.reset(); setConfirm(true) }}>{t.migration.generate}</Button>}
+    {cancelled && data?.phase !== 'issued' && data?.phase !== 'frozen' && <Notice>{t.migration.cancelled}</Notice>}
+    <div className="flex flex-wrap gap-2">
+      {issueAllowed && <Button variant="outline" disabled={operation.pending} onClick={() => { operation.reset(); setConfirm(true) }}>{t.migration.generate}</Button>}
+      {cancelAllowed && <Button variant="outline" disabled={operation.pending} onClick={() => { operation.reset(); setCancelling(true) }}>{t.migration.cancel}</Button>}
+    </div>
     {showGrant && <>
       <Notice>{t.migration.commandHint}</Notice>
       <CopyField label={t.migration.command} value={installCommand(grant.version, `--migrate-from ${quote(grant.source_url)} --token ${quote(grant.token)} --master-pin ${quote(grant.master_pin)}`)} />
     </>}
+    <Confirm open={cancelling} onOpenChange={setCancelling} title={t.migration.cancelTitle} description={data?.phase === 'frozen' ? t.migration.cancelFrozen : t.migration.cancelIssued} pending={operation.pending} error={operation.error} onConfirm={cancel} />
     <Confirm open={confirm} onOpenChange={setConfirm} title={t.migration.confirmTitle} description={<>{t.migration.confirmHint}<br />{modeHint}</>} pending={operation.pending} error={operation.error} onConfirm={issue} />
   </section>
 }

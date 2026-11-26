@@ -28,6 +28,26 @@ describe('master migration settings', () => {
     expect(screen.queryByRole('button', { name: t.migration.generate })).not.toBeInTheDocument()
   })
 
+  it('lets the administrator abort a frozen migration after confirming', async () => {
+    let phase = 'frozen'
+    const fetch = mockAPI({
+      '/migration': () => Response.json({ phase, migrated: 0, total: 2, expires_at: 2_000_000_000 }),
+      'POST /migration/cancel': () => { phase = 'idle'; return new Response(null, { status: 204 }) },
+    })
+    const { user } = mountPage(<MasterMigration publicHost="panel.example.com" />)
+    expect(await screen.findByText(t.migration.frozen)).toBeVisible()
+    expect(screen.queryByRole('button', { name: t.migration.generate })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: t.migration.cancel }))
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(t.migration.cancelFrozen)
+    expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/migration/cancel'))).toBe(false)
+    await user.click(screen.getByRole('button', { name: t.common.confirm }))
+    expect(await screen.findByText(t.migration.cancelled)).toBeVisible()
+    const call = fetch.mock.calls.find(([url]) => String(url).endsWith('/migration/cancel'))
+    expect(call?.[1]?.body).toBe(JSON.stringify({ confirm: true }))
+    expect(await screen.findByRole('button', { name: t.migration.generate })).toBeVisible()
+    expect(screen.queryByRole('button', { name: t.migration.cancel })).not.toBeInTheDocument()
+  })
+
   it('shows a manual switch command on the target and a shutdown hint on the retired master', async () => {
     const target = 'https://9.9.9.9:2053/panel/'
     mockAPI({ '/migration': () => Response.json({ phase: 'active', target_url: target, migrated: 1, total: 2, waiting: [{ id: 3, name: 'offline-edge' }] }) })

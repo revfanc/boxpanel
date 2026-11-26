@@ -105,6 +105,14 @@ func TestMasterMigrationLifecycleOverHTTPS(t *testing.T) {
 	cookie := &http.Cookie{Name: CookieName, Value: login.Token}
 	requireStatus(t, request(t, oldEndpoint.Config.Handler, "POST", oldURL+"api/v1/migration/token", `{"confirm":true}`, nil, nil), 401)
 	requireStatus(t, request(t, oldEndpoint.Config.Handler, "POST", oldURL+"api/v1/migration/token", `{"confirm":true}`, cookie, map[string]string{"Origin": "https://other.example"}), 403)
+	// The administrator can withdraw a command; cancel needs a session and confirmation.
+	requireStatus(t, request(t, oldEndpoint.Config.Handler, "POST", oldURL+"api/v1/migration/token", `{"confirm":true}`, cookie, nil), 201)
+	requireStatus(t, request(t, oldEndpoint.Config.Handler, "POST", oldURL+"api/v1/migration/cancel", `{"confirm":true}`, nil, nil), 401)
+	requireStatus(t, request(t, oldEndpoint.Config.Handler, "POST", oldURL+"api/v1/migration/cancel", `{"confirm":false}`, cookie, nil), 400)
+	requireStatus(t, request(t, oldEndpoint.Config.Handler, "POST", oldURL+"api/v1/migration/cancel", `{"confirm":true}`, cookie, nil), 204)
+	if status := request(t, oldEndpoint.Config.Handler, "GET", oldURL+"api/v1/migration", "", cookie, nil); !strings.Contains(status.Body.String(), `"phase":"idle"`) {
+		t.Fatal("cancelled command still pending", status.Body.String())
+	}
 	grantResponse := request(t, oldEndpoint.Config.Handler, "POST", oldURL+"api/v1/migration/token", `{"confirm":true}`, cookie, nil)
 	requireStatus(t, grantResponse, 201)
 	var grant migration.Grant
@@ -127,6 +135,8 @@ func TestMasterMigrationLifecycleOverHTTPS(t *testing.T) {
 	}
 	requireStatus(t, request(t, oldEndpoint.Config.Handler, "GET", oldURL+"api/v1/auth/me", "", cookie, nil), 200)
 	requireStatus(t, request(t, oldEndpoint.Config.Handler, "POST", oldURL+"api/v1/users", `{"name":"new"}`, cookie, nil), 409)
+	// Cancel stays reachable while frozen; an unconfirmed request changes nothing.
+	requireStatus(t, request(t, oldEndpoint.Config.Handler, "POST", oldURL+"api/v1/migration/cancel", `{"confirm":false}`, cookie, nil), 400)
 	if reply, err := oldClient.SyncHeartbeat(ctx, original.ServerID, edge.Key, beat); err != nil || !reply.ReadOnly || len(reply.MasterURLs) > 0 {
 		t.Fatal("frozen heartbeat is not read-only", err)
 	}

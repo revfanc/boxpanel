@@ -68,8 +68,13 @@ func runMigration(args []string, stdout, stderr io.Writer) int {
 		if readErr != nil || !migration.ValidSecret(value) {
 			err = migration.ErrToken
 		} else {
-			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			// Closing the SSH session or killing the installer stops the transfer
+			// and withdraws the claim instead of leaving the source frozen.
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 			defer stop()
+			if !stopWithParent() {
+				stop()
+			}
 			err = receiveMigration(ctx, resolved, c, *from, *pin, value, *ip, paths.acmeDirectory, stdout, restoreDependencies{})
 		}
 	}
@@ -107,12 +112,14 @@ func receiveMigration(ctx context.Context, p app.Paths, core singboxPaths, sourc
 	}()
 	transfer, cancel := context.WithTimeout(ctx, migration.Lifetime)
 	defer cancel()
+	fmt.Fprintln(out, "[5/8] 认领令牌并接收旧主控快照")
 	archive, target, expires, err := client.Download(transfer, migration.Claim{Token: token, Secret: secret, PublicIP: publicIP, Version: version})
 	if err != nil {
 		return err
 	}
 	prepare, cancel := context.WithDeadline(transfer, time.Unix(expires, 0))
 	defer cancel()
+	fmt.Fprintln(out, "[6/8] 校验快照、恢复身份与证书")
 	stage, err := backup.Stage(prepare, archive, filepath.Dir(p.DataDir))
 	if err != nil {
 		return err
@@ -170,12 +177,13 @@ func receiveMigration(ctx context.Context, p app.Paths, core singboxPaths, sourc
 		}
 		return nil
 	}
+	fmt.Fprintln(out, "[7/8] 启动服务并验证新主控就绪")
 	if err := restoreWith(prepare, p, core, stage, true, directory, out, deps); err != nil {
 		return err
 	}
 	retained = true
 	if activated {
-		fmt.Fprintf(out, "主控迁移完成：%s\n请使用原管理员凭证登录，在「备份与迁移」查看节点进度。使用域名时，请将 DNS 改到新机。\n", target)
+		fmt.Fprintf(out, "主控迁移完成：%s\n迁移会使原有登录会话失效，请使用原管理员账号密码重新登录，在「备份与迁移」查看节点进度。使用域名时，请将 DNS 改到新机。\n", target)
 	} else {
 		fmt.Fprintln(out, "新机已就绪，正在核对旧主控的迁移结果。请在两台主控的「备份与迁移」查看状态并保留新机，直至确认交接。")
 	}

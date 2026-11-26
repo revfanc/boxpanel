@@ -633,6 +633,7 @@ JSON 请求沿用 8 KiB 限制，拒绝 null（含嵌套字段）、重复/未�
 |---|---|---|
 | GET | `/migration` | `{phase, target_url?, expires_at?, migrated, total, core_stopped, waiting?}`。`waiting` 为新主控上未切换的 `[{id,name}]` |
 | POST | `/migration/token` | `{"confirm":true}`，201 返回 `{token, expires_at, source_url, master_pin, version}`。仅此次响应包含令牌全文 |
+| POST | `/migration/cancel` | `{"confirm":true}`，204。中止尚未交接的迁移：issued 令牌立即失效，frozen 立即解冻并丢弃交换标识，在途新机确认就绪时得到 401 并自行回滚；已退役返回 409 `migration_committed`，无迁移时幂等返回 204。冻结期间仍可调用 |
 
 `phase` 可为 `unavailable`、`idle`、`issued`、`frozen`、`incoming`、`active` 或 `retired`。时间使用 Unix 秒。
 重签替换未认领令牌。冻结、待确认和退役期间，业务写接口返回 `409 migration_read_only`。会话登录、退出及加密备份下载仍可用。

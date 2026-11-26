@@ -27,6 +27,7 @@ TEMP_DIR=
 STAGED_BINARY=
 LOCKED=false
 MIGRATION_INSTALLING=false
+MIGRATE_PID=
 
 say() { printf '%s\n' "$*"; }
 die() { say "错误：$*" >&2; exit 1; }
@@ -168,6 +169,11 @@ cleanup() {
     [[ -z $STAGED_BINARY ]] || rm -f -- "$STAGED_BINARY"
     [[ -z $TEMP_DIR ]] || rm -rf -- "$TEMP_DIR"
     if [[ $LOCKED == true ]]; then rmdir -- "$LOCK_DIR"; fi
+    if [[ -n $MIGRATE_PID ]] && kill -0 "$MIGRATE_PID" 2>/dev/null; then
+        # SIGTERM makes boxpanel migrate withdraw its claim and roll back first.
+        kill -TERM "$MIGRATE_PID" 2>/dev/null || true
+        wait "$MIGRATE_PID" 2>/dev/null || true
+    fi
     if ((status != 0)); then
         if [[ -n $MIGRATE_FROM ]]; then
             if [[ $MIGRATION_INSTALLING == true ]]; then cleanup_migration; fi
@@ -405,21 +411,23 @@ install_agent() {
 install_migration() {
     local path
     for path in "$BINARY" "$CORE_BINARY" "$UNIT_DIR/boxpanel.service" "$UNIT_DIR/boxpanel-singbox.service"; do
-        [[ ! -e $path && ! -L $path ]] || die '新机已有 boxpanel 安装文件；请使用全新 VPS，避免覆盖已有实例。'
+        [[ ! -e $path && ! -L $path ]] || die '新机已有 boxpanel 安装文件；请使用全新 VPS。若是上次中断的迁移残留，先运行 bash install.sh uninstall --yes --purge 再重新执行迁移命令。'
     done
-    [[ ! -L $DATA_DIR && ( ! -e $DATA_DIR || ( -d $DATA_DIR && -z $(ls -A -- "$DATA_DIR") ) ) ]] || die '新机数据目录需要为空，请使用全新 VPS。'
+    [[ ! -L $DATA_DIR && ( ! -e $DATA_DIR || ( -d $DATA_DIR && -z $(ls -A -- "$DATA_DIR") ) ) ]] || die '新机数据目录需要为空；请使用全新 VPS。若是上次中断的迁移残留，先运行 bash install.sh uninstall --yes --purge 再重新执行迁移命令。'
     progress 3 '安装主控依赖'
     install_dependencies
     progress 4 '下载并校验旧主控同版本的 boxpanel'
     stage_release
     MIGRATION_INSTALLING=true
     replace_binary
-    progress 5 '认领令牌并接收旧主控快照'
-    progress 6 '校验快照、恢复身份与证书'
-    progress 7 '启动服务并验证新主控就绪'
+    # boxpanel migrate prints steps 5-7 as it reaches them. It runs as a tracked
+    # child so cleanup can stop it (and withdraw the claim) before removing files.
     local migrate_args=(migrate --from "$MIGRATE_FROM" --master-pin "$MASTER_PIN" --token-stdin)
     [[ -z $JOIN_PUBLIC_IP ]] || migrate_args+=(--public-ip "$JOIN_PUBLIC_IP")
-    printf '%s\n' "$JOIN_TOKEN" | "$BINARY" "${migrate_args[@]}"
+    printf '%s\n' "$JOIN_TOKEN" | "$BINARY" "${migrate_args[@]}" &
+    MIGRATE_PID=$!
+    wait "$MIGRATE_PID"
+    MIGRATE_PID=
     MIGRATION_INSTALLING=false
     progress 8 '迁移命令执行结束，请查看上方结果'
 }
@@ -521,6 +529,7 @@ main() {
     trap cleanup EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
+    trap 'exit 129' HUP
     configure_cli
     case "$COMMAND" in
         install)

@@ -286,6 +286,59 @@ func (s *Service) Abort(ctx context.Context, secret string) error {
 	return err
 }
 
+// Cancel lets the administrator end an unfinished migration on the source,
+// for example after the target machine was destroyed or killed before it could
+// report failure. The exchange ID is discarded, so a target that is still
+// running is refused at ready and rolls itself back. A committed retirement
+// cannot be cancelled.
+func (s *Service) Cancel(ctx context.Context) error {
+	release, err := s.exclusive(ctx)
+	if err != nil {
+		return ErrBusy
+	}
+	defer release()
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin migration cancel: %w", err)
+	}
+	defer tx.Rollback()
+	state, err := db.LoadMasterMigration(ctx, tx, db.MigrationOutgoing)
+	if err != nil {
+		return err
+	}
+	if state.Phase == db.MigrationRetired {
+		return ErrCommitted
+	}
+	if !state.Pending() {
+		return nil
+	}
+	if err := db.SetSetting(ctx, tx, db.MigrationOutgoing, db.MasterMigration{}); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// clearExpired persists the automatic unfreeze that readers already apply.
+func (s *Service) clearExpired(ctx context.Context) {
+	release, err := s.exclusive(ctx)
+	if err != nil {
+		return
+	}
+	defer release()
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return
+	}
+	defer tx.Rollback()
+	state, err := db.LoadMasterMigration(ctx, tx, db.MigrationOutgoing)
+	if err != nil || !state.Expired(s.now()) {
+		return
+	}
+	if db.SetSetting(ctx, tx, db.MigrationOutgoing, db.MasterMigration{}) == nil {
+		_ = tx.Commit()
+	}
+}
+
 func (s *Service) updateOutgoing(ctx context.Context, id string, mutate func(*db.MasterMigration) error) (bool, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -379,6 +432,10 @@ func (s *Service) Run(ctx context.Context) {
 func (s *Service) maintain(ctx context.Context) {
 	out, err := db.LoadMasterMigration(ctx, s.ReadDB, db.MigrationOutgoing)
 	if err != nil {
+		return
+	}
+	if out.Expired(s.now()) {
+		s.clearExpired(ctx)
 		return
 	}
 	if out.Phase == db.MigrationRetired {

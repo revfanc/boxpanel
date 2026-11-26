@@ -94,3 +94,81 @@ func TestMigrationTokenReplacementExpiryAndConcurrentClaim(t *testing.T) {
 		t.Fatal("unused expired grant could be claimed", err)
 	}
 }
+
+func TestMigrationCancelAndExpiredCleanup(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	conn, err := db.Open(ctx, filepath.Join(dir, "boxpanel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	now := time.Now().Truncate(time.Second)
+	s := &Service{DB: conn, ReadDB: conn, DataDir: dir, Version: "v1", Now: func() time.Time { return now }}
+	const source = "https://panel.example.com:2053/panel/"
+	if err := s.Cancel(ctx); err != nil {
+		t.Fatal("cancel without a migration should be a no-op", err)
+	}
+	freeze := func() (Claim, string) {
+		t.Helper()
+		grant, err := s.Issue(ctx, source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		secret, _ := NewSecret()
+		claim := Claim{Token: grant.Token, Secret: secret, Version: s.Version, PublicIP: "8.8.4.4"}
+		state, err := s.Claim(ctx, claim, "127.0.0.1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return claim, state.TargetURL
+	}
+
+	// A frozen source whose target died is unfrozen by the administrator; the
+	// abandoned target can neither confirm ready nor claim again.
+	claim, target := freeze()
+	if err := s.Cancel(ctx); err != nil {
+		t.Fatal(err)
+	}
+	release, err := s.BeginWrite(ctx)
+	if err != nil {
+		t.Fatal("cancelled migration left the source read-only", err)
+	}
+	release()
+	if err := s.Ready(ctx, Ready{Secret: claim.Secret, TargetURL: target}); !errors.Is(err, ErrToken) {
+		t.Fatal("cancelled target could still confirm ready", err)
+	}
+	if _, err := s.Claim(ctx, claim, "8.8.8.8"); !errors.Is(err, ErrToken) {
+		t.Fatal("cancelled token could be claimed again", err)
+	}
+
+	// An issued command is withdrawn too.
+	grant, err := s.Issue(ctx, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Cancel(ctx); err != nil {
+		t.Fatal(err)
+	}
+	secret, _ := NewSecret()
+	if _, err := s.Claim(ctx, Claim{Token: grant.Token, Secret: secret, Version: s.Version, PublicIP: "8.8.4.4"}, ""); !errors.Is(err, ErrToken) {
+		t.Fatal("withdrawn command could still be claimed", err)
+	}
+
+	// Expiry is persisted by maintenance instead of only being inferred on read.
+	freeze()
+	now = now.Add(Lifetime)
+	s.maintain(ctx)
+	saved, err := db.LoadMasterMigration(ctx, conn, db.MigrationOutgoing)
+	if err != nil || saved.Phase != "" {
+		t.Fatalf("expired freeze still stored as %q: %v", saved.Phase, err)
+	}
+
+	// A committed retirement cannot be cancelled.
+	if err := db.SetSetting(ctx, conn, db.MigrationOutgoing, db.MasterMigration{Phase: db.MigrationRetired, ID: "x", TargetURL: target}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Cancel(ctx); !errors.Is(err, ErrCommitted) {
+		t.Fatal("retired source was cancelled", err)
+	}
+}

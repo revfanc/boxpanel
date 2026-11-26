@@ -130,6 +130,12 @@ case "$1" in
         echo original-core >"$BOXPANEL_SINGBOX_PATH"
         touch "$BOXPANEL_UNIT_DIR/boxpanel.service" "$BOXPANEL_UNIT_DIR/boxpanel-singbox.service"
         if [[ ${MIGRATION_HANDOFF:-false} == true ]]; then touch "$BOXPANEL_DATA_DIR/.migration-handoff"; fi
+        if [[ ${HANG_MIGRATION:-false} == true ]]; then
+            # Mirror boxpanel migrate: record the stop, then exit as a signal would.
+            trap 'echo "migrate stopped while data dir exists=$([[ -e $BOXPANEL_DB_PATH ]] && echo yes || echo no)" >>"$FIXTURE/calls"; exit 143' TERM
+            touch "$FIXTURE/migrate-running"
+            while :; do sleep 0.1; done
+        fi
         [[ ${FAIL_MIGRATION:-false} == false ]] ;;
     apply|system) : ;;
     *) exit 99 ;;
@@ -512,6 +518,27 @@ test_migration_failure_cleanup() {
     contains "$FIXTURE/output" '已保留新机服务'
 }
 
+# Steps 5-7 come from boxpanel migrate itself. Stopping the installer must stop
+# the migrate child before cleanup removes the files it is still using.
+test_migration_interrupted() {
+    local token=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA pin=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+    export HANG_MIGRATION=true
+    bash "$FIXTURE/driver" --migrate-from https://old.example:2053/panel/ --token "$token" --master-pin "$pin" --version v0.1.0 >"$FIXTURE/output" 2>&1 &
+    local installer=$! waited=0
+    until [[ -e $FIXTURE/migrate-running ]]; do
+        sleep 0.1
+        ((++waited < 100)) || fail 'migrate did not start'
+    done
+    kill -TERM "$installer"
+    if wait "$installer"; then fail 'interrupted migration reported success'; fi
+    contains "$FIXTURE/calls" 'migrate stopped while data dir exists=yes'
+    absent "$FIXTURE/output" '[5/8]'
+    contains "$FIXTURE/output" '主控迁移未完成'
+    [[ ! -e $FIXTURE/data && ! -e $FIXTURE/local/bin/boxpanel && ! -e $FIXTURE/units/boxpanel.service ]] || fail 'interrupted migration left installed assets'
+    pgrep -f "$FIXTURE/local/bin/boxpanel migrate" >/dev/null && fail 'migrate child still running'
+    return 0
+}
+
 test_migration_parameters() {
     local token=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA pin=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
     local args=(--migrate-from 'https://[2001:db8::1]:2053/panel/' --token "$token" --master-pin "$pin")
@@ -536,7 +563,7 @@ if [[ ${1:-} == --case ]]; then
     "test_$2"
     exit 0
 fi
-for scenario in join_install join_dry_run update_agent restore_install restore_failure migration_install migration_failure_cleanup migration_parameters nft_dependency update_nft_dependency install resume update uninstall rejections download_safety optional_bbr_and_lock piped_entry package_locks apt_install_lock package_lock_timeout dnf_locks dnf_lock_timeout package_permission_error package_nonlock_error; do
+for scenario in join_install join_dry_run update_agent restore_install restore_failure migration_install migration_failure_cleanup migration_interrupted migration_parameters nft_dependency update_nft_dependency install resume update uninstall rejections download_safety optional_bbr_and_lock piped_entry package_locks apt_install_lock package_lock_timeout dnf_locks dnf_lock_timeout package_permission_error package_nonlock_error; do
     # A separate bash process preserves errexit in the installer under test.
     output=$(mktemp)
     if bash "$0" --case "$scenario" >"$output" 2>&1; then
