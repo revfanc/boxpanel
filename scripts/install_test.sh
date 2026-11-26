@@ -39,6 +39,7 @@ DATA_DIR="$FIXTURE/data"
 CORE_BINARY="$FIXTURE/local/share/sing-box"
 UNIT_DIR="$FIXTURE/units"
 LOCK_DIR="$FIXTURE/lock"
+LOCK_FILE="$FIXTURE/lock.flock"
 OS_RELEASE="$FIXTURE/os-release"
 SYSTEMD_DIR="$FIXTURE/systemd"
 export PATH="$FIXTURE/bin:$PATH"
@@ -261,6 +262,24 @@ test_optional_bbr_and_lock() {
     mkdir "$FIXTURE/lock"
     reject update --version v0.1.0
     [[ -d $FIXTURE/lock ]] || fail 'removed another installer lock'
+}
+
+# With flock(1) available, a lock file left by a killed installer is ignored and
+# only a live holder blocks. The stand-in records that the descriptor was used.
+test_flock_lock() {
+    cat >"$FIXTURE/bin/flock" <<'EOF'
+#!/usr/bin/env bash
+echo "flock $*" >>"$FIXTURE/calls"
+[[ ! -e $FIXTURE/lock-held ]]
+EOF
+    chmod 0755 "$FIXTURE/bin/flock"
+    : >"$FIXTURE/lock.flock"
+    run_install install --non-interactive
+    contains "$FIXTURE/calls" 'flock -n 9'
+    [[ ! -e $FIXTURE/lock ]] || fail 'flock path also created the mkdir lock'
+    touch "$FIXTURE/lock-held"
+    reject update --version v0.1.0
+    contains "$FIXTURE/output" '另一个安装或迁移进程正在运行'
 }
 
 test_download_safety() {
@@ -563,7 +582,7 @@ if [[ ${1:-} == --case ]]; then
     "test_$2"
     exit 0
 fi
-for scenario in join_install join_dry_run update_agent restore_install restore_failure migration_install migration_failure_cleanup migration_interrupted migration_parameters nft_dependency update_nft_dependency install resume update uninstall rejections download_safety optional_bbr_and_lock piped_entry package_locks apt_install_lock package_lock_timeout dnf_locks dnf_lock_timeout package_permission_error package_nonlock_error; do
+for scenario in join_install join_dry_run update_agent restore_install restore_failure migration_install migration_failure_cleanup migration_interrupted migration_parameters nft_dependency update_nft_dependency install resume update uninstall rejections download_safety optional_bbr_and_lock flock_lock piped_entry package_locks apt_install_lock package_lock_timeout dnf_locks dnf_lock_timeout package_permission_error package_nonlock_error; do
     # A separate bash process preserves errexit in the installer under test.
     output=$(mktemp)
     if bash "$0" --case "$scenario" >"$output" 2>&1; then

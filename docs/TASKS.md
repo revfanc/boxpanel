@@ -1458,6 +1458,16 @@ T8.2–T8.4 已有：生成加入命令、有效令牌与撤销、状态/版本/
   测试：迁移服务覆盖中止 issued/frozen、作废后 ready/claim 被拒、退役不可中止、到期持久清空；HTTPS 生命周期覆盖 cancel 鉴权、确认和冻结可达；
   安装器新增中断用例（TERM 安装器时子进程在数据仍在时收到 SIGTERM，随后清理）；前端覆盖中止确认流程；
   父进程退出信号测试在 Linux 实机通过。`make lint test build` 通过（25 个 Go 包、26 项安装脚本、162 项 Vitest）。修复随下一个版本发布。
+- [x] rc.2 实机复测（2026-11-26，`v0.5.0-rc.2` 主控 → 全新 VPS，域名模式）：
+  1. 认领后 `kill -9` 新机 `boxpanel migrate`，旧主控 frozen，点「中止迁移」后立即 active，写接口恢复（创建/删除用户 201/204）；
+     新机残留的 `.restore-lock` 为 flock 文件，下一次迁移未被阻塞。
+  2. 新机已启动恢复面板、即将确认就绪时暂停，旧主控中止后恢复新机：确认就绪被拒（令牌无效），新机回滚，安装器清理全部文件，旧主控保持 active。
+  3. 认领后 SIGTERM 安装器：`boxpanel migrate` 收到信号撤销认领，旧主控立即 active，新机清理完毕。
+  4. 认领后 SIGKILL 安装器：`boxpanel migrate` 经父进程退出信号撤销认领，旧主控立即 active；安装器未能清理，残留二进制与 rc.2 的
+     `/run/boxpanel-installer.lock` 目录，下一次安装被该锁拦截。
+  5. 第 5–7 步进度由 `boxpanel migrate` 按实际阶段输出。
+- [x] 已修复（2026-11-26，rc.2 之后）：安装器自身锁改用 `flock(1)`（`/run/boxpanel-installer.flock`，fd 9，`boxpanel migrate` 继承），
+  被强杀后不残留阻塞；无 flock 时退回 mkdir。Linux 实机验证：仅存旧目录锁时卸载正常完成，另一进程持锁时报「另一个安装或迁移进程正在运行」。
 
 ### T9.5 以服务器为中心的面板重构与统一流量展示
 

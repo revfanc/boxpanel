@@ -7,6 +7,7 @@ DATA_DIR=/etc/boxpanel
 CORE_BINARY=/usr/local/share/boxpanel/sing-box
 UNIT_DIR=/etc/systemd/system
 LOCK_DIR=/run/boxpanel-installer.lock
+LOCK_FILE=/run/boxpanel-installer.flock
 OS_RELEASE=/etc/os-release
 SYSTEMD_DIR=/run/systemd/system
 COMMAND=install
@@ -161,6 +162,20 @@ configure_cli() {
     export BOXPANEL_SINGBOX_PATH="$CORE_BINARY" BOXPANEL_SINGBOX_CONFIG="$DATA_DIR/sing-box.json"
     export BOXPANEL_UNIT_DIR="$UNIT_DIR" BOXPANEL_BINARY="$BINARY"
     unset BOXPANEL_LISTEN_HOST
+}
+
+# flock(1) ships with util-linux on every supported distribution. The kernel
+# drops the lock when the last holder exits, so an installer killed by SIGKILL
+# leaves nothing behind; boxpanel migrate inherits the descriptor and keeps the
+# lock while it is still running. mkdir remains only as a fallback.
+acquire_install_lock() {
+    if command -v flock >/dev/null; then
+        exec 9>>"$LOCK_FILE"
+        flock -n 9 || die '另一个安装或迁移进程正在运行；请等待其结束后重试。'
+        return
+    fi
+    mkdir -- "$LOCK_DIR" 2>/dev/null || die "另一个安装进程可能正在运行；确认没有运行后删除 $LOCK_DIR 再重试。"
+    LOCKED=true
 }
 
 cleanup() {
@@ -524,8 +539,7 @@ main() {
     fi
     progress 2 '检查 root/systemd 并锁定安装操作'
     preflight
-    mkdir -- "$LOCK_DIR" 2>/dev/null || die "另一个安装进程可能正在运行；确认没有运行后删除 $LOCK_DIR 再重试。"
-    LOCKED=true
+    acquire_install_lock
     trap cleanup EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
