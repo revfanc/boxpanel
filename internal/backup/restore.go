@@ -12,6 +12,7 @@ import (
 
 	"github.com/revfanc/boxpanel/internal/app"
 	"github.com/revfanc/boxpanel/internal/db"
+	"github.com/revfanc/boxpanel/internal/filelock"
 )
 
 // Stage validates/migrates only a private sibling directory. No live database is
@@ -146,10 +147,19 @@ func Restore(ctx context.Context, target, stage string, h Hooks) (saved string, 
 		return "", fmt.Errorf("restore: data directory must not be a symbolic link")
 	}
 	lock := target + ".restore-lock"
-	if err = os.Mkdir(lock, 0700); err != nil {
-		return "", fmt.Errorf("restore busy; confirm no restore is running before removing %s", lock)
+	// Older versions used an empty directory here, which a killed
+	// restore left behind. Remove only that empty legacy marker.
+	if info, e := os.Lstat(lock); e == nil && info.IsDir() {
+		_ = os.Remove(lock)
 	}
-	defer os.Remove(lock)
+	release, e := filelock.TryAcquire(lock)
+	if errors.Is(e, filelock.ErrBusy) {
+		return "", fmt.Errorf("另一个恢复或迁移正在运行，请等待其结束后重试")
+	}
+	if e != nil {
+		return "", fmt.Errorf("lock restore: %w", e)
+	}
+	defer release()
 	// Even a partial stop failure must restore the previous service state.
 	if err = h.Stop(ctx); err != nil {
 		recovery, cancel := context.WithTimeout(context.Background(), 90*time.Second)

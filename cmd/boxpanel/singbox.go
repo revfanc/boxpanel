@@ -16,6 +16,7 @@ import (
 
 	"github.com/revfanc/boxpanel/internal/app"
 	"github.com/revfanc/boxpanel/internal/db"
+	"github.com/revfanc/boxpanel/internal/filelock"
 	"github.com/revfanc/boxpanel/internal/host"
 	"github.com/revfanc/boxpanel/internal/singbox"
 )
@@ -274,12 +275,14 @@ func singboxCommand(ctx context.Context, opts singboxOptions, deps singboxDepend
 		return fmt.Errorf("create binary directory: %w", err)
 	}
 	lock := filepath.Join(filepath.Dir(opts.core.binary), ".boxpanel-singbox-install.lock")
-	f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		return fmt.Errorf("lock installation (if interrupted, confirm no installer is running before removing %s): %w", lock, err)
+	release, err := filelock.TryAcquire(lock)
+	if errors.Is(err, filelock.ErrBusy) {
+		return fmt.Errorf("另一个 sing-box 安装正在运行，请等待其结束后重试")
 	}
-	f.Close()
-	defer os.Remove(lock)
+	if err != nil {
+		return fmt.Errorf("lock sing-box installation: %w", err)
+	}
+	defer release()
 	inspector.Binary = opts.core.binary
 	status, err := inspector.Status(ctx)
 	if err != nil {

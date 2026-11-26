@@ -13,6 +13,7 @@ import (
 
 	"github.com/revfanc/boxpanel/internal/app"
 	"github.com/revfanc/boxpanel/internal/db"
+	"github.com/revfanc/boxpanel/internal/filelock"
 	"github.com/revfanc/boxpanel/internal/host"
 	"github.com/revfanc/boxpanel/internal/singbox"
 )
@@ -107,6 +108,37 @@ func TestSingboxInstallCLIAndIdempotency(t *testing.T) {
 	opts.command = "status"
 	if err := singboxCommand(context.Background(), opts, deps, &out); err != nil || !strings.Contains(out.String(), "running=false") {
 		t.Fatal(out.String(), err)
+	}
+}
+
+// A killed installer leaves its lock file; only a live holder may block.
+func TestSingboxInstallLockLeftoverAndBusy(t *testing.T) {
+	opts, deps, installer, _ := cliFixture(t)
+	lock := filepath.Join(filepath.Dir(opts.core.binary), ".boxpanel-singbox-install.lock")
+	if err := os.MkdirAll(filepath.Dir(lock), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lock, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := singboxCommand(context.Background(), opts, deps, &out); err != nil {
+		t.Fatalf("leftover lock file blocked install: %v", err)
+	}
+	if _, err := os.Lstat(lock); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("install left its lock behind: %v", err)
+	}
+	release, err := filelock.TryAcquire(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	calls := installer.calls
+	if err := singboxCommand(context.Background(), opts, deps, &out); err == nil || !strings.Contains(err.Error(), "请等待其结束后重试") {
+		t.Fatalf("concurrent install = %v", err)
+	}
+	if installer.calls != calls {
+		t.Fatal("concurrent install downloaded")
 	}
 }
 

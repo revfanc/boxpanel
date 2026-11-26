@@ -19,6 +19,7 @@ import (
 	"github.com/revfanc/boxpanel/internal/app"
 	"github.com/revfanc/boxpanel/internal/certs"
 	"github.com/revfanc/boxpanel/internal/db"
+	"github.com/revfanc/boxpanel/internal/filelock"
 	"github.com/revfanc/boxpanel/internal/firewall"
 	"github.com/revfanc/boxpanel/internal/reality"
 	"github.com/revfanc/boxpanel/internal/singbox"
@@ -438,6 +439,43 @@ func TestRestoreRollbackAtEachStep(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A restore killed by older versions left an empty lock directory; a running
+// restore must still be refused, and a finished one must leave no lock behind.
+func TestRestoreLockLegacyDirectoryAndBusy(t *testing.T) {
+	parent := t.TempDir()
+	target := filepath.Join(parent, "data")
+	stage := filepath.Join(parent, "stage")
+	for _, dir := range []string{stage, target + ".restore-lock"} {
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ok := func(context.Context) error { return nil }
+	hooks := Hooks{Stop: ok, Apply: ok, Start: ok, Recover: func(context.Context, bool) error { return nil }}
+	if _, err := Restore(context.Background(), target, stage, hooks); err != nil {
+		t.Fatalf("legacy lock directory blocked restore: %v", err)
+	}
+	if _, err := os.Lstat(target + ".restore-lock"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("restore left its lock behind: %v", err)
+	}
+
+	release, err := filelock.TryAcquire(target + ".restore-lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	stage2 := filepath.Join(parent, "stage2")
+	if err := os.Mkdir(stage2, 0700); err != nil {
+		t.Fatal(err)
+	}
+	stopped := false
+	busy := hooks
+	busy.Stop = func(context.Context) error { stopped = true; return nil }
+	if _, err := Restore(context.Background(), target, stage2, busy); err == nil || stopped {
+		t.Fatalf("concurrent restore ran: err=%v stopped=%v", err, stopped)
 	}
 }
 

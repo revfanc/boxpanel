@@ -1443,14 +1443,16 @@ T8.2–T8.4 已有：生成加入命令、有效令牌与撤销、状态/版本/
 - [x] 实机离线节点（2026-11-26）：迁移期间停止节点，迁移后启动，它向退役旧主控发一次心跳即获签名地址并自动跟随，无需操作；
   另对其运行 `boxpanel set-master <新主控 URL>`，下一轮心跳切换成功，原地址保留为备用。
 - [x] 实机分享页（2026-11-26）：退役旧主控对浏览器返回 200 分享页，提示地址已变更，订阅地址与三种导入链接指向新主控；无效令牌 404。
+- [x] 已修复（2026-11-26）：`kill -9` 中断 `boxpanel migrate` 后，新机残留 `/etc/boxpanel.restore-lock` 目录和
+  `/usr/local/share/boxpanel/.boxpanel-singbox-install.lock`，下次迁移报 `restore busy` 或 `lock installation`，需手动删除。
+  两处改用 `filelock.TryAcquire`（flock，进程退出即由内核释放，正常结束时持锁删除文件），残留文件不再阻塞；
+  旧版本留下的空 `.restore-lock` 目录自动清除；仅在另一进程仍持锁时报中文「请等待其结束后重试」。
+  测试覆盖残留文件、并发占用及 SIGKILL 持锁子进程，并在 Linux 实机运行 filelock 测试通过；修复随下一个版本发布。
 - [ ] 实机发现的问题（待修）：
-  1. `kill -9` 中断 `boxpanel migrate` 后，新机残留 `/etc/boxpanel.restore-lock` 目录和
-     `/usr/local/share/boxpanel/.boxpanel-singbox-install.lock`，安装器失败清理未删除；下次迁移报 `restore busy` 或
-     `lock installation`（英文原文），需手动删除后才能继续。
-  2. `scripts/install.sh` 在调用 `boxpanel migrate` 前一次性打印 [5/8]–[7/8]，失败时看似已到第 7 步，进度与实际不符。
-  3. 新机硬中断后旧主控保持 frozen 直至令牌到期（最长 30 分钟），界面无手动解冻入口；数据库记录到期后仍为 frozen，由读取时判定。
-  4. 只杀安装器外层 bash 不会停止 `boxpanel migrate`，迁移会继续完成。
-  5. 迁移不带登录会话，新主控需重新登录（若为设计行为，应在迁移完成提示中说明）。
+  1. `scripts/install.sh` 在调用 `boxpanel migrate` 前一次性打印 [5/8]–[7/8]，失败时看似已到第 7 步，进度与实际不符。
+  2. 新机硬中断后旧主控保持 frozen 直至令牌到期（最长 30 分钟），界面无手动解冻入口；数据库记录到期后仍为 frozen，由读取时判定。
+  3. 只杀安装器外层 bash 不会停止 `boxpanel migrate`，迁移会继续完成。
+  4. 迁移不带登录会话，新主控需重新登录（若为设计行为，应在迁移完成提示中说明）。
 
 ### T9.5 以服务器为中心的面板重构与统一流量展示
 
