@@ -289,6 +289,14 @@ func (s *httpsSender) send(ctx context.Context, channel string, cfg db.AlertChan
 	default:
 		return errDestination
 	}
+	// A deadline of our own lets a response cut short by the timeout be told
+	// apart from a provider's malformed reply: a timed-out body read can end in
+	// a clean but truncated EOF instead of a timeout error.
+	if s.client.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.client.Timeout)
+		defer cancel()
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return errDestination
@@ -301,7 +309,7 @@ func (s *httpsSender) send(ctx context.Context, channel string, cfg db.AlertChan
 		switch {
 		case errors.Is(err, errDestination):
 			return errDestination
-		case errors.Is(err, errTimeout) || errors.As(err, &timeout) && timeout.Timeout():
+		case errors.Is(err, errTimeout) || errors.As(err, &timeout) && timeout.Timeout() || ctx.Err() == context.DeadlineExceeded:
 			return errTimeout
 		default:
 			return errNetwork
@@ -313,6 +321,9 @@ func (s *httpsSender) send(ctx context.Context, channel string, cfg db.AlertChan
 	}
 	const maxResponse = 64 << 10
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
+	if ctx.Err() == context.DeadlineExceeded {
+		return errTimeout
+	}
 	if err != nil {
 		var timeout net.Error
 		if errors.As(err, &timeout) && timeout.Timeout() {
