@@ -57,6 +57,8 @@ type Master struct {
 	joins          map[string][]time.Time
 	nonces         map[nonceKey]struct{}
 	nonceOrder     list.List
+	logMu          sync.Mutex
+	logs           map[int64]*logStream
 }
 
 func NewMaster(writer, reader *sql.DB, now func() time.Time) *Master {
@@ -66,7 +68,8 @@ func NewMaster(writer, reader *sql.DB, now func() time.Time) *Master {
 	if now == nil {
 		now = time.Now
 	}
-	return &Master{writer: writer, reader: reader, now: now, Logger: slog.Default(), joins: make(map[string][]time.Time), nonces: make(map[nonceKey]struct{})}
+	return &Master{writer: writer, reader: reader, now: now, Logger: slog.Default(), joins: make(map[string][]time.Time),
+		nonces: make(map[nonceKey]struct{}), logs: make(map[int64]*logStream)}
 }
 
 func (m *Master) AllowJoin(peer string) (bool, int) {
@@ -405,9 +408,17 @@ func (m *Master) RecordHeartbeat(ctx context.Context, identity authenticated, in
 		}
 		names = new(string(encoded))
 	}
+	var monitoring *string
+	if in.Metrics != nil {
+		encoded, err := json.Marshal(in.Metrics.monitoring(in.SingboxActive))
+		if err != nil {
+			return reply, fmt.Errorf("encode node monitoring: %w", err)
+		}
+		monitoring = new(string(encoded))
+	}
 	_, err = tx.ExecContext(ctx, `UPDATE servers SET status='online',last_seen_at=?,updated_at=?,version=?,singbox_active=?,uptime=?,
-		protocol=?,interfaces=coalesce(?,interfaces),applied_generation=coalesce(?,applied_generation),sync_error=CASE WHEN ? IS NULL THEN sync_error ELSE ? END
-		WHERE id=?`, now.Unix(), now.Unix(), in.Version, in.SingboxActive, in.Uptime, max(1, in.Protocol), names,
+		protocol=?,interfaces=coalesce(?,interfaces),monitoring=?,applied_generation=coalesce(?,applied_generation),sync_error=CASE WHEN ? IS NULL THEN sync_error ELSE ? END
+		WHERE id=?`, now.Unix(), now.Unix(), in.Version, in.SingboxActive, in.Uptime, max(1, in.Protocol), names, monitoring,
 		in.AppliedGeneration, in.AppliedGeneration, in.SyncError, identity.id)
 	if err != nil {
 		return reply, fmt.Errorf("record agent heartbeat: %w", err)
@@ -415,8 +426,19 @@ func (m *Master) RecordHeartbeat(ctx context.Context, identity authenticated, in
 	if _, err := tx.ExecContext(ctx, "UPDATE master_migration_nodes SET arrived=1 WHERE server_id=? AND arrived=0", identity.id); err != nil {
 		return reply, fmt.Errorf("record node arrival after migration: %w", err)
 	}
+	if err := recordRestartResult(ctx, tx, identity.id, in.RestartResult); err != nil {
+		return reply, err
+	}
+	if monitoring != nil && in.Protocol >= MinNodeProtocol {
+		if err := tx.QueryRowContext(ctx, "SELECT restart_status='pending' FROM servers WHERE id=?", identity.id).Scan(&reply.RestartPending); err != nil {
+			return reply, fmt.Errorf("read node restart state: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return reply, fmt.Errorf("commit agent heartbeat: %w", err)
+	}
+	if monitoring != nil && in.Protocol >= MinNodeProtocol {
+		reply.LogRequest = m.logRequest(identity.id)
 	}
 	return reply, nil
 }
@@ -434,6 +456,9 @@ func (m *Master) Remove(ctx context.Context, id int64) error {
 	if n == 0 {
 		return sql.ErrNoRows
 	}
+	m.logMu.Lock()
+	delete(m.logs, id)
+	m.logMu.Unlock()
 	return nil
 }
 
@@ -482,6 +507,9 @@ func (m *Master) Run(ctx context.Context, logger *slog.Logger) {
 	tick := time.NewTicker(HeartbeatInterval)
 	defer tick.Stop()
 	for ctx.Err() == nil {
+		m.logMu.Lock()
+		m.pruneLogs(m.now())
+		m.logMu.Unlock()
 		release, allowed := func() {}, true
 		if m.Maintenance != nil {
 			release, allowed = m.Maintenance(ctx)

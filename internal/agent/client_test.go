@@ -22,6 +22,44 @@ import (
 	"github.com/revfanc/boxpanel/internal/db"
 )
 
+func TestHeartbeatDropsOnlyOptionalMonitoringForOlderProtocolTwoMaster(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+			w.WriteHeader(400)
+			return
+		}
+		attempts.Add(1)
+		if string(body["protocol"]) != "2" || string(body["interfaces"]) != `["eth0"]` || r.Header.Get(HeaderSignature) == "" {
+			t.Error("fallback removed existing heartbeat fields or authentication")
+		}
+		if body["metrics"] != nil {
+			w.WriteHeader(400)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(HeartbeatReply{Protocol: ProtocolVersion, DesiredGeneration: 7})
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, certs.SPKIPin(server.Certificate().RawSubjectPublicKeyInfo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply, err := client.SyncHeartbeat(t.Context(), 2, key, Heartbeat{
+		Version: "test", Protocol: ProtocolVersion, Interfaces: []string{"eth0"},
+		Metrics: &Metrics{},
+	})
+	if err != nil || reply.Protocol != ProtocolVersion || reply.DesiredGeneration != 7 || attempts.Load() != 2 {
+		t.Fatalf("optional heartbeat fields interrupted compatible sync: %+v, %v", reply, err)
+	}
+}
+
 func TestLegacyMasterAllowsFallbackHeartbeatWithoutApplying(t *testing.T) {
 	var currentJoins, legacyJoins, legacyBeats, reportedOutdated atomic.Int64
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

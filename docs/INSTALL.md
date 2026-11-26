@@ -526,7 +526,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/main/script
   若节点注册成功但服务启动失败，请排查 `journalctl -u boxpanel` 后执行
   `systemctl enable --now boxpanel.service boxpanel-singbox.service`。
   若加入响应丢失，请在主控检查是否留下待连接记录，移除后签发新令牌。
-- 先升级主控，再升级节点。首次心跳后，在主控「节点」选择该服务器创建入站。在「服务器」查看版本与生效结果。
+- 先升级主控，再升级节点。首次心跳后，在主控「服务器」打开对应详情，在「入站」新建入站，在「状态」查看版本与生效结果。
   位于 NAT 后的节点仍需按实际协议映射入站端口及配置的 UDP 跳跃端口。等待入站公开材料上报后再更新客户端订阅。
 - 主控暂时不可达时节点继续使用已经生效的配置。节点恢复后缺少 Reality 或 Hysteria2 密钥时会重新生成并上报。
   使用原公钥或指纹的客户端需要刷新订阅。
@@ -535,7 +535,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/main/script
 
 ### T8.7 节点升级
 
-- 先升级主控，再在远端服务器卡片复制升级命令，以 root 在节点执行。主控为发布版时，命令从相同 tag 取脚本并显式指定该版本。
+- 先升级主控，再在远端服务器的「状态」标签复制升级命令，以 root 在节点执行。主控为发布版时，命令从相同 tag 取脚本并显式指定该版本。
   主控为开发构建时，命令从 `main` 取脚本，使用默认的最新发布版。旧节点心跳可继续联系主控，协议恢复兼容后自动继续同步。
 - `install.sh update` 在 `agent` 角色下校验并原子替换 boxpanel，重启 `boxpanel.service`，用节点的 `system ready` 检查本机内核。
   脚本保留 `agent.key`、镜像 DB、sing-box 配置及内核二进制，不运行初始化、加入向导或 sing-box 安装。节点启动仍按原流程迁移 DB，
@@ -546,7 +546,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/main/script
   仅当二进制位于 `/usr/local/bin/boxpanel`（安装脚本布局）时启用；开始前把 `{tag, at}` 记入 `agent_upgrade_attempt`，
   同一 tag 6 小时内不重试，重启后也不重复。`boxpanel info` 显示最近一次尝试，进度见 `journalctl -u 'boxpanel-upgrade-*'`。
   该功能需要节点已运行包含 T9.3 的版本，首次仍需手动升级一次。
-- 主控的网卡账期用量可从远端卡片「流量告警」查看。网卡选择经心跳下发，无需重启节点内核。
+- 各服务器网卡账期用量在其「流量」标签查看。网卡选择在「告警」设置，经心跳下发，无需重启节点内核。
   主控备份复制到节点留待后续。
 
 ## 10. T9.4 主控迁移

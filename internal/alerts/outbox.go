@@ -252,38 +252,41 @@ func (s *Service) deliverNext(ctx context.Context, channel string) bool {
 }
 
 type Overview struct {
-	Billing     Billing    `json:"billing"`
+	Billing Billing `json:"billing"`
+	Notifications
+}
+
+type Notifications struct {
 	Unread      []Event    `json:"unread"`
 	UnreadCount int        `json:"unread_count"`
 	Recent      []Delivery `json:"recent"`
 }
 
 func (s *Service) Overview(ctx context.Context) (Overview, error) {
-	out := Overview{Unread: []Event{}, Recent: []Delivery{}}
+	var out Overview
 	tx, err := s.reader.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return out, fmt.Errorf("read alert overview: %w", err)
 	}
 	defer tx.Rollback()
-	cfg, err := loadConfig(ctx, tx)
+	out.Billing, err = s.ReadBilling(ctx, tx, 0)
 	if err != nil {
 		return out, err
 	}
-	serverID, err := db.LocalServerID(ctx, tx)
-	if err != nil {
-		return out, err
-	}
-	out.Billing, err = billing(ctx, tx, serverID, cfg, s.opts.Now(), s.opts.Network != nil)
-	if err != nil {
-		return out, err
-	}
+	out.Notifications, err = ReadNotifications(ctx, tx)
+	return out, err
+}
+
+func ReadNotifications(ctx context.Context, tx *sql.Tx) (Notifications, error) {
+	var out Notifications
 	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM alert_events WHERE read_at=0").Scan(&out.UnreadCount); err != nil {
 		return out, fmt.Errorf("count unread alerts: %w", err)
 	}
-	out.Unread, err = unread(ctx, tx)
+	events, err := unread(ctx, tx)
 	if err != nil {
 		return out, err
 	}
+	out.Unread = events
 	out.Recent, err = recent(ctx, tx)
 	return out, err
 }

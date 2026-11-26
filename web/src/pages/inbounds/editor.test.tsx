@@ -104,8 +104,8 @@ it('selects a reachable or offline server for creation and bypasses local Realit
   expect(screen.queryByRole('button', { name: t.inbounds.check })).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: t.inbounds.recommend })).not.toBeInTheDocument()
   await user.click(screen.getByRole('button', { name: t.common.create }))
-  await waitFor(() => expect(router.state.location.pathname).toBe('/inbounds'))
-  expect(router.state.location.search).toBe('?server=2')
+  await waitFor(() => expect(router.state.location.pathname).toBe('/servers/2'))
+  expect(router.state.location.search).toBe('?tab=inbounds')
   for (const route of ['/inbounds/suggest', '/inbounds']) {
     const request = fetch.mock.calls.find(([url, init]) => url.endsWith(route) && init?.method === 'POST')
     expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ server_id: 2 })

@@ -17,3 +17,13 @@ export function safeNext(value: string | null): string {
 export function loginPath(next: string) {
   return `/login?${new URLSearchParams({ next: safeNext(next) })}`
 }
+
+export function serverID(value: string | null | undefined) {
+  if (!value || !/^\d+$/.test(value)) return undefined
+  const id = Number(value)
+  return Number.isSafeInteger(id) && id > 0 ? id : undefined
+}
+
+export function serverPath(id: number, tab?: 'inbounds' | 'traffic' | 'alerts' | 'logs') {
+  return `/servers/${id}${tab ? `?tab=${tab}` : ''}` as const
+}

@@ -3,6 +3,7 @@ package sysinfo
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -23,6 +24,53 @@ type Status struct {
 	Net       Rates   `json:"net"`
 	Singbox   Singbox `json:"singbox"`
 }
+
+type UsageMB struct {
+	Used  uint64 `json:"used_mb"`
+	Total uint64 `json:"total_mb"`
+}
+
+// Metrics is the compact status shared by the local panel and node heartbeats.
+// A present but unsupported sample distinguishes an unavailable host probe
+// from a node that does not yet implement monitoring.
+type Metrics struct {
+	Supported bool    `json:"supported"`
+	CPU       float64 `json:"cpu"`
+	Mem       UsageMB `json:"mem"`
+	Disk      UsageMB `json:"disk"`
+	Uptime    int64   `json:"uptime"`
+	Net       Rates   `json:"net"`
+}
+
+type Monitoring struct {
+	Metrics *Metrics `json:"metrics,omitempty"`
+	Core    *Singbox `json:"singbox,omitempty"`
+}
+
+func (s Status) Metrics() *Metrics {
+	const bytesPerMB = 1_000_000
+	return &Metrics{
+		Supported: s.Supported, CPU: math.Round(s.CPU*10) / 10, Uptime: s.Uptime,
+		Mem:  UsageMB{Used: s.Mem.Used / bytesPerMB, Total: s.Mem.Total / bytesPerMB},
+		Disk: UsageMB{Used: s.Disk.Used / bytesPerMB, Total: s.Disk.Total / bytesPerMB},
+		Net:  Rates{RX: math.Round(s.Net.RX), TX: math.Round(s.Net.TX)},
+	}
+}
+
+func (s *Service) Monitor(ctx context.Context) Monitoring {
+	result, err := s.hostStatus(ctx)
+	out := Monitoring{Metrics: &Metrics{}}
+	if err == nil {
+		out.Metrics = result.Metrics()
+	}
+	if s.supported() {
+		if core, err := s.opts.Singbox.Status(ctx); err == nil {
+			out.Core = &core
+		}
+	}
+	return out
+}
+
 type sample struct {
 	cpu cpuCounters
 	net map[string]NetworkCounters
@@ -30,6 +78,18 @@ type sample struct {
 }
 
 func (s *Service) Status(ctx context.Context) (Status, error) {
+	result, err := s.hostStatus(ctx)
+	if err != nil || !result.Supported {
+		return result, err
+	}
+	result.Singbox, err = s.opts.Singbox.Status(ctx)
+	if err != nil {
+		return result, fmt.Errorf("read sing-box status: %w", err)
+	}
+	return result, nil
+}
+
+func (s *Service) hostStatus(ctx context.Context) (Status, error) {
 	var result Status
 	if !s.supported() {
 		return result, nil
@@ -80,10 +140,6 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 	}
 	if result.Disk.Total == 0 || result.Disk.Used > result.Disk.Total {
 		return result, fmt.Errorf("invalid filesystem usage")
-	}
-	result.Singbox, err = s.opts.Singbox.Status(ctx)
-	if err != nil {
-		return result, fmt.Errorf("read sing-box status: %w", err)
 	}
 	current := sample{cpu: cpu, net: network, at: s.opts.Now()}
 	if prev := s.previous; prev != nil && current.at.After(prev.at) {

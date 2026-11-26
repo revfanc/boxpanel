@@ -40,6 +40,11 @@ export default defineConfig([
     rules: { 'react-refresh/only-export-components': ['error', { allowExportNames: ['badgeVariants'] }] },
   },
   {
+    // Preserve the CLI-generated Tabs variant export.
+    files: ['src/components/ui/tabs.tsx'],
+    rules: { 'react-refresh/only-export-components': ['error', { allowExportNames: ['tabsListVariants'] }] },
+  },
+  {
     // Preserve CLI-generated shadcn files; the hook is an intentional export.
     files: ['src/components/ui/sidebar.tsx'],
     rules: {

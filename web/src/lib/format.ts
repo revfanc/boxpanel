@@ -1,4 +1,5 @@
 import { zhCN as t } from '@/i18n/zh-CN'
+import type { ServerMetrics } from '@/types/api'
 export function bytes(value: number) {
   if (!Number.isFinite(value) || value < 0) return t.common.unknown
   const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB']
@@ -10,6 +11,17 @@ export function duration(seconds: number) {
   return hours >= 24 ? t.dashboard.days(Math.floor(hours / 24), hours % 24) : t.dashboard.minutes(hours, Math.floor(seconds % 3600 / 60))
 }
 export function expiry(seconds: number) { return seconds === 0 ? t.common.never : new Date(seconds * 1000).toLocaleString('zh-CN') }
+
+const metricNumber = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 })
+function metricSize(mb: number) {
+  return mb >= 1000 ? `${metricNumber.format(mb / 1000)} GB` : `${metricNumber.format(mb)} MB`
+}
+export function metricUsage(usage: ServerMetrics['mem']) {
+  return t.dashboard.memoryUsage(metricSize(usage.used_mb), metricSize(usage.total_mb))
+}
+export function metricRates(net: ServerMetrics['net']) {
+  return t.dashboard.rates(bytes(net.rx_rate), bytes(net.tx_rate))
+}
 
 const relativeFormatter = new Intl.RelativeTimeFormat('zh-CN')
 export function relativeTime(timestamp: number, now: number) {

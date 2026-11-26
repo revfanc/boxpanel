@@ -58,6 +58,10 @@ func (m *Master) Desired(ctx context.Context, identity authenticated) (Desired, 
 	if err != nil {
 		return out, err
 	}
+	if err := tx.QueryRowContext(ctx, `SELECT CASE WHEN restart_status='pending' AND monitoring IS NOT NULL
+		THEN restart_id ELSE '' END FROM servers WHERE id=?`, identity.id).Scan(&out.RestartID); err != nil {
+		return out, fmt.Errorf("read desired restart command: %w", err)
+	}
 	out.Inbounds, err = desiredInbounds(ctx, tx, identity.id)
 	if err != nil {
 		return out, err

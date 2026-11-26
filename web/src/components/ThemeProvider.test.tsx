@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { expect, it, vi } from 'vitest'
 import { ThemeProvider } from './ThemeProvider'
@@ -16,14 +16,15 @@ it('follows system changes, persists explicit choices and synchronizes storage',
   act(() => { media.matches = false; changes.forEach((change) => change()) })
   expect(document.documentElement).not.toHaveClass('dark')
   await user.click(screen.getByRole('button', { name: zhCN.theme.label }))
-  await user.click(screen.getByRole('menuitemradio', { name: zhCN.theme.dark }))
+  await user.click(await screen.findByRole('menuitemradio', { name: zhCN.theme.dark }))
   expect(document.documentElement).toHaveClass('dark')
   expect(localStorage.getItem(THEME_KEY)).toBe('dark')
+  await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument())
   act(() => { media.matches = false; changes.forEach((change) => change()) })
   expect(document.documentElement).toHaveClass('dark')
   await user.click(screen.getByRole('button', { name: zhCN.theme.label }))
-  await user.click(screen.getByRole('menuitemradio', { name: zhCN.theme.light }))
-  expect(document.documentElement).not.toHaveClass('dark')
+  await user.click(await screen.findByRole('menuitemradio', { name: zhCN.theme.light }))
+  await waitFor(() => expect(document.documentElement).not.toHaveClass('dark'))
   act(() => window.dispatchEvent(new StorageEvent('storage', { key: THEME_KEY, newValue: 'dark' })))
   expect(document.documentElement).toHaveClass('dark')
   act(() => window.dispatchEvent(new StorageEvent('storage', { key: THEME_KEY, newValue: null })))
@@ -43,6 +44,6 @@ it('restores a saved choice and still works when storage is unavailable', async 
   expect(document.documentElement).not.toHaveClass('dark')
   const user = userEvent.setup()
   await user.click(screen.getByRole('button', { name: zhCN.theme.label }))
-  await user.click(screen.getByRole('menuitemradio', { name: zhCN.theme.dark }))
+  await user.click(await screen.findByRole('menuitemradio', { name: zhCN.theme.dark }))
   expect(document.documentElement).toHaveClass('dark')
 })

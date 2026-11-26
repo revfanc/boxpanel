@@ -4,22 +4,23 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Controller, useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { ServerBilling } from '@/components/AlertOverview'
+import { ChoiceSelect } from '@/components/ChoiceSelect'
 import { ErrorNotice, Loading } from '@/components/Feedback'
 import { Field, Notice, Panel, Submit, Toggle } from '@/components/ResourceUI'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useOperation } from '@/hooks/use-operation'
-import { alertOverviewQuery, alertSettingsFor, alertSettingsQuery } from '@/lib/alerts'
+import { alertSettingsFor, alertSettingsQuery } from '@/lib/alerts'
+import { queryKeys } from '@/lib/query'
+import { serverTrafficQuery } from '@/lib/resources'
 import { api } from '@/lib/api'
 import { zhCN as t } from '@/i18n/zh-CN'
-import type { AlertConfig, AlertSettings, AlertKind, NotificationChannel, NotificationChannelSettings } from '@/types/api'
+import type { AlertConfig, ServerAlertSettings, AlertKind, NotificationChannel, NotificationChannelSettings } from '@/types/api'
 
 const a = t.alerts
 const eventKinds = Object.keys(a.event) as AlertKind[]
-const localEvents = eventKinds.filter((kind) => kind !== 'server_recovered')
-const remoteEvents: AlertKind[] = ['server_quota_80', 'server_quota_100']
+const billingEvents: AlertKind[] = ['server_quota_80', 'server_quota_90', 'server_quota_100']
+const globalEvents = eventKinds.filter((kind) => !billingEvents.includes(kind) && kind !== 'server_recovered')
 const channelKinds = ['bark', 'server_chan', 'telegram'] as const
 const billingModes = ['out', 'both', 'max', 'in'] as const
 const configSchema = z.object({
@@ -30,7 +31,7 @@ const configSchema = z.object({
   events: z.partialRecord(z.enum(eventKinds), z.boolean()),
 })
 
-function BillingSettings({ settings, serverID }: { settings: AlertSettings; serverID?: number }) {
+function BillingSettings({ settings, serverID }: { settings: ServerAlertSettings; serverID: number }) {
   const form = useForm<AlertConfig>({ resolver: zodResolver(configSchema), defaultValues: settings.config })
   const events = useWatch({ control: form.control, name: 'events' })
   const { errors } = form.formState
@@ -38,19 +39,17 @@ function BillingSettings({ settings, serverID }: { settings: AlertSettings; serv
   const client = useQueryClient()
   const devices = useId()
   const mode = useId()
-  const shownEvents = serverID === undefined ? localEvents : remoteEvents
   const settingsKey = alertSettingsFor(serverID).queryKey
 
   return <Panel title={a.settings} hint={a.accounting}>
     <form className="space-y-4" noValidate onSubmit={form.handleSubmit((values) => {
-      const events = Object.fromEntries(shownEvents.map((kind) => [kind, values.events[kind] ?? true]))
-      const body = { ...values, events, ...(serverID === undefined ? {} : { server_id: serverID }) }
-      void operation.run(() => api<AlertConfig>('/alerts/settings', { method: 'PUT', body }), async (config) => {
+      const events = Object.fromEntries(billingEvents.map((kind) => [kind, values.events[kind] ?? true]))
+      void operation.run(() => api<AlertConfig>(`/servers/${serverID}/alerts`, { method: 'PUT', body: { ...values, events } }), async (config) => {
         form.reset(config)
         client.setQueryData(settingsKey, (current) => current && ({ ...current, config }))
         await Promise.all([
-          client.invalidateQueries({ queryKey: alertOverviewQuery.queryKey }),
-          client.invalidateQueries({ queryKey: settingsKey, exact: true }),
+          client.invalidateQueries({ queryKey: queryKeys.overview }),
+          client.invalidateQueries({ queryKey: serverTrafficQuery(serverID).queryKey }),
         ])
       })
     })}>
@@ -65,19 +64,16 @@ function BillingSettings({ settings, serverID }: { settings: AlertSettings; serv
           <div className="space-y-2">
             <Label htmlFor={mode}>{a.mode}</Label>
             <Controller name="billing_mode" control={form.control} render={({ field, fieldState }) => (
-              <Select name={field.name} value={field.value} onValueChange={field.onChange} disabled={operation.pending}>
-                <SelectTrigger id={mode} className="w-full" ref={field.ref} onBlur={field.onBlur} aria-invalid={fieldState.invalid}><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {billingModes.map((value) => <SelectItem key={value} value={value}>{a.modes[value]}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <ChoiceSelect id={mode} className="w-full" name={field.name} value={field.value} onChange={field.onChange}
+                disabled={operation.pending} ref={field.ref} onBlur={field.onBlur} aria-invalid={fieldState.invalid}
+                options={billingModes.map((value) => ({ value, label: a.modes[value] }))} />
             )} />
           </div>
         </div>
         <fieldset className="space-y-2">
           <legend className="text-sm font-medium">{a.thresholds}</legend>
           <div className="grid gap-2 sm:grid-cols-2">
-            {shownEvents.map((kind) => <Toggle key={kind} label={kind === 'server_offline' ? a.offlineNotifications : a.event[kind]}
+            {billingEvents.map((kind) => <Toggle key={kind} label={a.event[kind]}
               checked={events[kind] ?? true} onChange={(checked) => form.setValue(`events.${kind}`, checked, { shouldDirty: true })} />)}
           </div>
         </fieldset>
@@ -89,13 +85,12 @@ function BillingSettings({ settings, serverID }: { settings: AlertSettings; serv
   </Panel>
 }
 
-export function RemoteAlertSettings({ serverID }: { serverID: number }) {
+export function ServerAlertPanel({ serverID }: { serverID: number }) {
   const query = useQuery({ ...alertSettingsFor(serverID), refetchInterval: 30_000 })
   if (query.isPending) return <Loading />
   if (query.isError && !query.data) return <ErrorNotice error={query.error} retry={() => { void query.refetch() }} />
   return <>
     {query.isError && <ErrorNotice error={query.error} retry={() => { void query.refetch() }} />}
-    <ServerBilling billing={query.data.billing} showSettingsLink={false} />
     <BillingSettings settings={query.data} serverID={serverID} />
   </>
 }
@@ -136,7 +131,7 @@ function ChannelForm({ kind, saved }: { kind: NotificationChannel; saved: Notifi
         <Submit pending={save.pending} label={a.channelSave(a.channelNames[kind])} />
         <Button type="button" variant="outline" disabled={!canTest} onClick={() => {
           save.reset()
-          void test.run(() => api(`/alerts/channels/${kind}/test`, { method: 'POST' }), () => client.invalidateQueries({ queryKey: alertOverviewQuery.queryKey }))
+          void test.run(() => api(`/alerts/channels/${kind}/test`, { method: 'POST' }), () => client.invalidateQueries({ queryKey: queryKeys.overview }))
         }}>{test.pending ? t.common.working : a.sendTest}</Button>
       </div>
     </fieldset>
@@ -147,16 +142,40 @@ function ChannelForm({ kind, saved }: { kind: NotificationChannel; saved: Notifi
   </form>
 }
 
+function NotificationEvents({ initial }: { initial: AlertConfig['events'] }) {
+  const form = useForm({ defaultValues: { events: initial } })
+  const events = useWatch({ control: form.control, name: 'events' })
+  const operation = useOperation()
+  const client = useQueryClient()
+  return <Panel title={a.globalEvents}>
+    <form className="space-y-4" onSubmit={form.handleSubmit((values) => {
+      const body = { events: Object.fromEntries(globalEvents.map((kind) => [kind, values.events[kind] ?? true])) }
+      void operation.run(() => api<AlertConfig>('/alerts/settings', { method: 'PUT', body }), (config) => {
+        form.reset({ events: config.events })
+        client.setQueryData(alertSettingsQuery.queryKey, (current) => current && ({ ...current, config }))
+      })
+    })}>
+      <fieldset disabled={operation.pending} className="grid gap-2 sm:grid-cols-2">
+        {globalEvents.map((kind) => <Toggle key={kind} label={kind === 'server_offline' ? a.offlineNotifications : a.event[kind]}
+          checked={events[kind] ?? true} onChange={(checked) => form.setValue(`events.${kind}`, checked, { shouldDirty: true })} />)}
+      </fieldset>
+      <Submit pending={operation.pending} label={a.saveEvents} />
+      {operation.error != null && <ErrorNotice error={operation.error} />}
+      {operation.success && <Notice>{t.common.saved}</Notice>}
+    </form>
+  </Panel>
+}
+
 export function AlertSettingsPanel() {
   const query = useQuery(alertSettingsQuery)
-  if (query.isPending) return <Panel title={a.settings}><Loading /></Panel>
-  if (query.isError) return <Panel title={a.settings}><ErrorNotice error={query.error} retry={() => { void query.refetch() }} /></Panel>
+  if (query.isPending) return <Panel title={a.channels}><Loading /></Panel>
+  if (query.isError) return <Panel title={a.channels}><ErrorNotice error={query.error} retry={() => { void query.refetch() }} /></Panel>
   return <>
-    <BillingSettings settings={query.data} />
     <Panel title={a.channels} hint={a.channelsHint}>
       <div className="grid items-start gap-4 xl:grid-cols-3">
         {channelKinds.map((kind) => <ChannelForm key={kind} kind={kind} saved={query.data.channels[kind]} />)}
       </div>
     </Panel>
+    <NotificationEvents initial={query.data.config.events} />
   </>
 }

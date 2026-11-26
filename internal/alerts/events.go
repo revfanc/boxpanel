@@ -376,7 +376,7 @@ func (r eventRecorder) serverBillingEvents(ctx context.Context, localSupported b
 	}
 	for _, server := range servers {
 		r.serverID, r.address = server.id, server.address
-		r.cfg, err = decodeConfig(server.preferences)
+		r.cfg, err = decodeServerConfig(server.preferences, false)
 		if err != nil {
 			return err
 		}
@@ -399,7 +399,7 @@ func (r eventRecorder) billingEvents(ctx context.Context, local bool) error {
 		kind  string
 		level int
 	}{{serverQuota80, 80}, {serverQuota90, 90}, {serverQuota100, 100}} {
-		if !local && item.level == 90 || !thresholdReached(usage.Used, usage.Quota, item.level) {
+		if !thresholdReached(usage.Used, usage.Quota, item.level) {
 			continue
 		}
 		if _, err := r.record(ctx, Event{Key: r.serverKey(item.kind, usage.StartsAt), Kind: item.kind,

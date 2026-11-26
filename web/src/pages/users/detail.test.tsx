@@ -34,7 +34,7 @@ it.each([false, true])('shows usage shares by server, including zero usage (%s)'
       { server_id: 2, name: 'Edge', is_local: false, up: 0, down: reset ? 0 : 3072 },
     ],
   }) })
-  mountPage(<UserDetailPage />, '/users/1', '/users/:id')
+  mountPage(<UserDetailPage />, '/users/1?tab=traffic', '/users/:id')
   const table = within(await screen.findByRole('table', { name: t.users.trafficByServer }))
   const local = within(table.getByRole('rowheader', { name: `Master ${t.users.localAndUnattributed}` }).closest('tr')!)
   const remote = within(table.getByRole('rowheader', { name: 'Edge' }).closest('tr')!)
@@ -86,6 +86,10 @@ it('asks for confirmation before credential reset and disable', async () => {
   expect(screen.getByRole('alertdialog')).toHaveTextContent(t.users.credentialsHint)
   expect(screen.getByRole('alertdialog')).toHaveTextContent(t.common.applyHint)
   await user.click(screen.getByRole('button', { name: t.common.cancel }))
+  await user.click(screen.getByRole('tab', { name: t.users.tabs.settings }))
+  expect(screen.getByLabelText(t.users.limit)).toBeVisible()
+  expect(screen.getByLabelText(t.users.expire)).toBeVisible()
+  expect(screen.getByRole('group', { name: t.users.servers })).toBeVisible()
   await user.click(screen.getByRole('button', { name: t.common.disable }))
   expect(screen.getByRole('alertdialog')).toHaveTextContent(t.common.disableHint)
 })
@@ -107,7 +111,7 @@ it('confirms traffic reset, keeps errors and refreshes actual usage after succes
     '/users/1': () => Response.json({ ...proxyUser, traffic_up: reset ? 0 : 2048, traffic_down: reset ? 0 : 4096, traffic_reset_day: 16, traffic_reset_at: reset ? 1794787200 : 0 }),
     'POST /users/1/reset-traffic': () => { if (fail) return failure(422); reset = true; return Response.json({ ...proxyUser, traffic_up: 0, traffic_down: 0 }) },
   })
-  const { user } = mountPage(<UserDetailPage />, '/users/1', '/users/:id')
+  const { user } = mountPage(<UserDetailPage />, '/users/1?tab=traffic', '/users/:id')
   await user.click(await screen.findByRole('button', { name: t.users.resetTraffic }))
   expect(screen.getByText(t.users.usageHint)).toBeVisible()
   expect(screen.getByText(`${t.users.resetDay}: ${t.users.resetOnDay(16)}`)).toBeVisible()
@@ -122,5 +126,5 @@ it('confirms traffic reset, keeps errors and refreshes actual usage after succes
   await user.click(screen.getByRole('button', { name: t.common.confirm }))
   await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
   expect(await screen.findByText(/2026-11-16T00:00:00.000Z/)).toBeVisible()
-  expect(screen.getByText(/0 B/)).toBeVisible()
+  expect(screen.getByText(/已用流量: 0 B/)).toBeVisible()
 })

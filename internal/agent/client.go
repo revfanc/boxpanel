@@ -210,6 +210,16 @@ func (c *Client) syncHeartbeat(ctx context.Context, id int64, key ed25519.Privat
 	if err != nil {
 		return reply, err
 	}
+	if resp.StatusCode == http.StatusBadRequest && (in.Metrics != nil || in.RestartResult != nil) {
+		// T9.4 and earlier use strict JSON, including masters on protocol 2.
+		// Drop only the new fields first so existing sync can continue.
+		resp.Body.Close()
+		in.Metrics, in.RestartResult = nil, nil
+		resp, err = send()
+		if err != nil {
+			return reply, err
+		}
+	}
 	legacy := resp.StatusCode == http.StatusBadRequest && in.Protocol != 0
 	if legacy {
 		// Old masters also reject new sync error codes. Keep contact with
@@ -284,6 +294,18 @@ func (c *Client) ReportInterfaceSamples(ctx context.Context, id int64, key ed255
 		return err
 	}
 	defer resp.Body.Close()
+	return nodeResponse(resp, http.StatusNoContent)
+}
+
+func (c *Client) ReportLogs(ctx context.Context, id int64, key ed25519.PrivateKey, report LogReport) error {
+	resp, err := c.post(ctx, "/logs", report, id, key)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusConflict {
+		return ErrLogInactive
+	}
 	return nodeResponse(resp, http.StatusNoContent)
 }
 

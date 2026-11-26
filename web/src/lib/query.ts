@@ -1,19 +1,18 @@
 import { QueryClient, queryOptions } from '@tanstack/react-query'
 import { api, APIError, invalidResponse, advanceSession } from '@/lib/api'
 import { setupSteps } from '@/types/api'
-import type { Admin, PanelSettings, SetupStatus, SystemStatus, CertificateStatus } from '@/types/api'
+import type { Admin, PanelSettings, SetupStatus, CertificateStatus } from '@/types/api'
 
 export const queryKeys = {
   auth: ['auth', 'me'] as const,
   setup: ['setup', 'status'] as const,
   settings: ['settings'] as const,
   cert: ['cert'] as const,
-  system: ['system', 'status'] as const,
   inbounds: ['inbounds'] as const,
   servers: ['servers'] as const,
   users: ['users'] as const,
   rules: ['rules'] as const,
-  logs: ['singbox', 'logs'] as const,
+  overview: ['overview'] as const,
 }
 
 export function createQueryClient() {
@@ -58,10 +57,6 @@ export const setupQuery = queryOptions({
 export const settingsQuery = queryOptions({
   queryKey: queryKeys.settings,
   queryFn: ({ signal }) => api<PanelSettings>('/settings', { signal }),
-})
-export const systemQuery = queryOptions({
-  queryKey: queryKeys.system,
-  queryFn: ({ signal }) => api<SystemStatus>('/system/status', { signal }),
 })
 export const certQuery = queryOptions({
   queryKey: queryKeys.cert,

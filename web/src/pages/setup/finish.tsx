@@ -1,7 +1,8 @@
-import { Tabs } from 'radix-ui'
 import { useQuery } from '@tanstack/react-query'
 import { QRCodeSVG } from 'qrcode.react'
 import { Button } from '@/components/ui/button'
+import { LinkButton } from '@/components/LinkButton'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Notice, Panel } from '@/components/ResourceUI'
 import { CopyField } from '@/components/CopyField'
 import { ErrorNotice, Loading } from '@/components/Feedback'
@@ -30,19 +31,19 @@ export function FinishStep({ complete }: { complete: () => void }) {
         <CopyField label={t.users.auto} value={data.subscription.auto} />
       </>)}
     </>}
-    <Tabs.Root defaultValue="Windows" className="min-w-0 space-y-4">
-      <Tabs.List aria-label={t.setup.clients} className="flex flex-wrap gap-2">{platforms.map((platform) => <Tabs.Trigger key={platform} value={platform} className="rounded-md border px-3 py-2 text-sm data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{platform}</Tabs.Trigger>)}</Tabs.List>
-      {platforms.map((platform) => <Tabs.Content key={platform} value={platform} className="space-y-4">{clients.filter((client) => client.platforms.includes(platform)).map((client) => {
+    <Tabs defaultValue="Windows" className="min-w-0 space-y-4">
+      <TabsList aria-label={t.setup.clients} className="max-w-full flex-wrap group-data-horizontal/tabs:h-auto">{platforms.map((platform) => <TabsTrigger key={platform} value={platform}>{platform}</TabsTrigger>)}</TabsList>
+      {platforms.map((platform) => <TabsContent key={platform} value={platform} className="space-y-4">{clients.filter((client) => client.platforms.includes(platform)).map((client) => {
         const format = client.formats[0]
         const url = data?.nodes.length ? data.subscription[format] : undefined
         const link = url ? clientImport(client, url, user?.name ?? 'boxpanel') : undefined
         return <Panel key={client.name} title={client.name}>
-          <div className="flex flex-wrap gap-3"><Button variant="outline" asChild><a href={client.download} target="_blank" rel="noreferrer">{t.setup.download}</a></Button><a href={client.source} target="_blank" rel="noreferrer" className="self-center text-sm underline">{t.setup.source}</a>{link && <Button asChild><a href={link} rel="noreferrer">{t.setup.import}</a></Button>}</div>
+          <div className="flex flex-wrap gap-3"><LinkButton variant="outline"  render={<a href={client.download} target="_blank" rel="noreferrer" />}>{t.setup.download}</LinkButton><a href={client.source} target="_blank" rel="noreferrer" className="self-center text-sm underline">{t.setup.source}</a>{link && <LinkButton render={<a href={link} rel="noreferrer" />}>{t.setup.import}</LinkButton>}</div>
           {url && <CopyField label={t.users[format]} value={url} />}
           <ol className="list-inside list-decimal space-y-2 text-sm leading-6">{t.setup.installSteps.map((step) => <li key={step}>{step}</li>)}</ol>
         </Panel>
-      })}</Tabs.Content>)}
-    </Tabs.Root>
+      })}</TabsContent>)}
+    </Tabs>
     <Notice>{sub.compatibility}</Notice><SetupCertificate />
     <Button onClick={complete}>{t.setup.enter}</Button>
   </>

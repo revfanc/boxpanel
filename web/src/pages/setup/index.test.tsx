@@ -13,7 +13,7 @@ import { setupSteps, type SetupStatus, type SystemCheck, type Inbound, type User
 import { clients, platforms } from '@/data/clients'
 import { zhCN as t, subscriptionText as sub } from '@/i18n/zh-CN'
 
-const check: SystemCheck = { os: '', arch: 'arm64', virt: '', ipv4: '', ipv6: '', bbr: { enabled: false, available: false }, firewall: { type: 'none', active: false }, singbox: systemStatus.singbox, ports: [], items: [{ id: 'platform', level: 'warn', title: 'Development', hint: 'Use Linux to apply' }] }
+const check: SystemCheck = { os: '', arch: 'arm64', virt: '', ipv4: '', ipv6: '', bbr: { enabled: false, available: false }, firewall: { type: 'none', active: false }, singbox: systemStatus.singbox!, ports: [], items: [{ id: 'platform', level: 'warn', title: 'Development', hint: 'Use Linux to apply' }] }
 const hy2: Inbound = { ...inbound, id: 2, tag: 'hysteria2-8443', protocol: 'hysteria2', port: 8443, remark: 'Hysteria2', options: { sni: 'www.bing.com', cert_mode: 'self_signed', up_mbps: 0, down_mbps: 0, port_hopping: { enabled: false, start: 20000, end: 30000 } } }
 const baseStatus: SetupStatus = { completed: false, step: 'welcome', domain: '', hysteria2: true }
 const disposers: (() => void)[] = []

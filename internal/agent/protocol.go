@@ -52,13 +52,15 @@ type Identity struct {
 }
 
 type Heartbeat struct {
-	Version           string   `json:"version"`
-	Protocol          int      `json:"protocol,omitempty"`
-	Interfaces        []string `json:"interfaces,omitzero"`
-	SingboxActive     bool     `json:"singbox_active"`
-	Uptime            int64    `json:"uptime"`
-	AppliedGeneration *int64   `json:"applied_generation,omitempty"`
-	SyncError         string   `json:"sync_error,omitempty"`
+	Metrics           *Metrics       `json:"metrics,omitempty"`
+	Version           string         `json:"version"`
+	Protocol          int            `json:"protocol,omitempty"`
+	Interfaces        []string       `json:"interfaces,omitzero"`
+	SingboxActive     bool           `json:"singbox_active"`
+	Uptime            int64          `json:"uptime"`
+	AppliedGeneration *int64         `json:"applied_generation,omitempty"`
+	SyncError         string         `json:"sync_error,omitempty"`
+	RestartResult     *RestartResult `json:"restart_result,omitempty"`
 }
 
 var encoding = base64.RawURLEncoding.Strict()
@@ -97,6 +99,7 @@ type Desired struct {
 	Inbounds   []DesiredInbound `json:"inbounds"`
 	Users      []DesiredUser    `json:"users"`
 	Route      DesiredRoute     `json:"route"`
+	RestartID  string           `json:"restart_id,omitempty"`
 }
 
 type DesiredInbound struct {
@@ -137,11 +140,13 @@ type HeartbeatReply struct {
 	Interface         string `json:"interface"`
 	// AutoUpgrade asks the node to follow Version when it is a newer release.
 	// Older nodes ignore the field, so the protocol version is unchanged.
-	AutoUpgrade         bool     `json:"auto_upgrade,omitempty"`
-	ReadOnly            bool     `json:"read_only,omitempty"`
-	MasterURLs          []string `json:"master_urls,omitempty"`
-	MasterURLsKey       string   `json:"master_urls_key,omitempty"`
-	MasterURLsSignature string   `json:"master_urls_signature,omitempty"`
+	AutoUpgrade         bool        `json:"auto_upgrade,omitempty"`
+	ReadOnly            bool        `json:"read_only,omitempty"`
+	MasterURLs          []string    `json:"master_urls,omitempty"`
+	MasterURLsKey       string      `json:"master_urls_key,omitempty"`
+	MasterURLsSignature string      `json:"master_urls_signature,omitempty"`
+	LogRequest          *LogRequest `json:"log_request,omitempty"`
+	RestartPending      bool        `json:"restart_pending,omitempty"`
 }
 
 var releaseTag = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)(?:-rc\.([0-9]+))?$`)

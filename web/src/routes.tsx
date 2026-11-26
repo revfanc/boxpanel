@@ -2,7 +2,7 @@ import type { RouteObject } from 'react-router'
 import App from '@/App'
 import { SessionGuard } from '@/components/SessionGuard'
 import { NotFoundPage, RouteErrorPage } from '@/pages/not-found'
-import { AppLayout, LoginPage, DashboardPage, LogsPage, SettingsPage, ServersPage, InboundsPage, NewInboundPage, EditInboundPage, UsersPage, UserDetailPage, RulesPage, SetupPage } from '@/pages/lazy'
+import { AppLayout, LoginPage, DashboardPage, LogsPage, SettingsPage, ServersPage, ServerDetailPage, InboundsPage, NewInboundPage, EditInboundPage, UsersPage, UserDetailPage, RulesPage, SetupPage } from '@/pages/lazy'
 
 export const routes: RouteObject[] = [{
   Component: App,
@@ -15,6 +15,7 @@ export const routes: RouteObject[] = [{
       { Component: AppLayout, children: [
       { index: true, Component: DashboardPage },
       { path: 'servers', Component: ServersPage },
+      { path: 'servers/:id', Component: ServerDetailPage },
       { path: 'inbounds', Component: InboundsPage },
       { path: 'inbounds/new', Component: NewInboundPage },
       { path: 'inbounds/:id', Component: EditInboundPage },

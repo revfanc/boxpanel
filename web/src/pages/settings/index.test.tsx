@@ -31,6 +31,7 @@ it('saves the subscription auto group switch as a boolean', async () => {
     },
   })
   const { user } = mountPage(<SettingsPage />)
+  await user.click(await screen.findByRole('tab', { name: t.settings.tabs.subscription }))
   const toggle = await screen.findByRole('switch', { name: t.settings.autoGroup })
   expect(toggle).toHaveAccessibleDescription(t.settings.autoGroupHint)
   expect(toggle).not.toBeChecked()

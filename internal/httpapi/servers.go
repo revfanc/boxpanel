@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/http"
@@ -35,6 +36,8 @@ type serverRecord struct {
 	Uptime            *int64               `json:"uptime,omitempty"`
 	InboundCounts     *serverInboundCounts `json:"inbound_counts,omitempty"`
 	AutoUpgrade       *bool                `json:"auto_upgrade,omitempty"`
+	monitoring        sql.NullString
+	restart           *agent.RestartState
 }
 
 type serverInboundCounts struct {
@@ -42,7 +45,12 @@ type serverInboundCounts struct {
 	Pending int64 `json:"pending"`
 }
 
-const serverColumns = "id,name,public_host,is_local,status,last_seen_at,version,created_at,updated_at,desired_generation,applied_generation,sync_error,singbox_active,uptime,protocol,auto_upgrade"
+const serverColumns = "id,name,public_host,is_local,status,last_seen_at,version,created_at,updated_at,desired_generation,applied_generation,sync_error,singbox_active,uptime,protocol,auto_upgrade,monitoring,restart_id,restart_status,restart_error"
+
+const serverSelect = `SELECT ` + serverColumns + `,
+	(SELECT count(*) FROM inbounds WHERE server_id=servers.id AND (agent_key_id='' OR agent_keys_ready=1)),
+	(SELECT count(*) FROM inbounds WHERE server_id=servers.id AND agent_key_id<>'' AND agent_keys_ready=0)
+	FROM servers WHERE status<>'removed'`
 
 func scanServer(row rowScanner, counts *serverInboundCounts) (serverRecord, error) {
 	var s serverRecord
@@ -51,8 +59,10 @@ func scanServer(row rowScanner, counts *serverInboundCounts) (serverRecord, erro
 	var active *bool
 	var uptime *int64
 	var autoUpgrade bool
+	var restart agent.RestartState
 	dest := []any{&s.ID, &s.Name, &s.PublicHost, &s.IsLocal, &s.Status, &s.LastSeenAt,
-		&s.Version, &s.CreatedAt, &s.UpdatedAt, &desired, &applied, &syncError, &active, &uptime, &s.Protocol, &autoUpgrade}
+		&s.Version, &s.CreatedAt, &s.UpdatedAt, &desired, &applied, &syncError, &active, &uptime, &s.Protocol, &autoUpgrade,
+		&s.monitoring, &restart.ID, &restart.Status, &restart.Error}
 	if counts != nil {
 		dest = append(dest, &counts.Ready, &counts.Pending)
 	}
@@ -60,6 +70,9 @@ func scanServer(row rowScanner, counts *serverInboundCounts) (serverRecord, erro
 		return s, fmt.Errorf("read server: %w", err)
 	}
 	s.InboundCounts = counts
+	if restart.ID != "" {
+		s.restart = &restart
+	}
 	if !s.IsLocal {
 		s.UpgradeRequired = s.Protocol < agent.MinNodeProtocol
 		s.AutoUpgrade = &autoUpgrade
@@ -91,26 +104,9 @@ func (a *api) serverList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT `+serverColumns+`,
-		(SELECT count(*) FROM inbounds WHERE server_id=servers.id AND (agent_key_id='' OR agent_keys_ready=1)),
-		(SELECT count(*) FROM inbounds WHERE server_id=servers.id AND agent_key_id<>'' AND agent_keys_ready=0)
-		FROM servers WHERE status<>'removed' ORDER BY is_local DESC, id`)
+	servers, err := readServers(ctx, tx)
 	if err != nil {
-		a.resourceError(w, fmt.Errorf("list servers: %w", err))
-		return
-	}
-	defer rows.Close()
-	servers := []serverRecord{}
-	for rows.Next() {
-		s, err := scanServer(rows, &serverInboundCounts{})
-		if err != nil {
-			a.resourceError(w, err)
-			return
-		}
-		servers = append(servers, s)
-	}
-	if err := rows.Err(); err != nil {
-		a.resourceError(w, fmt.Errorf("list servers: %w", err))
+		a.resourceError(w, err)
 		return
 	}
 	remote := make(map[int64]int)
@@ -144,6 +140,47 @@ func (a *api) serverList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, servers)
+}
+
+func readServers(ctx context.Context, tx *sql.Tx) ([]serverRecord, error) {
+	rows, err := tx.QueryContext(ctx, serverSelect+" ORDER BY is_local DESC,id")
+	if err != nil {
+		return nil, fmt.Errorf("list servers: %w", err)
+	}
+	defer rows.Close()
+	servers := []serverRecord{}
+	for rows.Next() {
+		s, err := scanServer(rows, &serverInboundCounts{})
+		if err != nil {
+			return nil, err
+		}
+		servers = append(servers, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list servers: %w", err)
+	}
+	return servers, nil
+}
+
+func (a *api) loadServer(r *http.Request) (serverRecord, error) {
+	id, err := resourceID(r)
+	if err != nil {
+		return serverRecord{}, err
+	}
+	conn, err := a.readDB()
+	if err != nil {
+		return serverRecord{}, err
+	}
+	return scanServer(conn.QueryRowContext(r.Context(), serverSelect+" AND id=?", id), &serverInboundCounts{})
+}
+
+func (a *api) serverGet(w http.ResponseWriter, r *http.Request) {
+	server, err := a.loadServer(r)
+	if err != nil {
+		a.resourceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, server)
 }
 
 func (a *api) serverRename(w http.ResponseWriter, r *http.Request) {

@@ -1,5 +1,5 @@
 import { Link } from 'react-router'
-import { Button } from '@/components/ui/button'
+import { LinkButton } from '@/components/LinkButton'
 import { zhCN } from '@/i18n/zh-CN'
 
 export function NotFoundPage() {
@@ -7,7 +7,7 @@ export function NotFoundPage() {
     <span className="text-6xl font-semibold tracking-tight text-muted-foreground/50" aria-hidden="true">404</span>
     <h1 className="text-xl font-semibold">{zhCN.common.notFoundTitle}</h1>
     <p className="text-sm leading-7 text-muted-foreground">{zhCN.common.notFoundHint}</p>
-    <Button asChild><Link to="/">{zhCN.common.backHome}</Link></Button>
+    <LinkButton render={<Link to="/" />}>{zhCN.common.backHome}</LinkButton>
   </section>
 }
 
@@ -15,6 +15,6 @@ export function RouteErrorPage() {
   return <main className="mx-auto max-w-lg space-y-4 p-6 text-center">
     <h1 className="text-xl font-semibold">{zhCN.common.pageError}</h1>
     <p className="text-sm text-muted-foreground">{zhCN.common.pageErrorHint}</p>
-    <Button asChild><Link to="/">{zhCN.common.backHome}</Link></Button>
+    <LinkButton render={<Link to="/" />}>{zhCN.common.backHome}</LinkButton>
   </main>
 }

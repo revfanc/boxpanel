@@ -1,8 +1,8 @@
 import { screen, within } from '@testing-library/react'
 import { expect, it } from 'vitest'
 import { DashboardPage } from '@/pages/dashboard'
-import { AlertSettingsPanel } from '@/components/AlertSettings'
-import { alertOverview, alertSettings, failure, mockAPI, mountPage } from '@/test/resources'
+import { AlertSettingsPanel, ServerAlertPanel } from '@/components/AlertSettings'
+import { billing, overview, alertSettings, mockAPI, mountPage } from '@/test/resources'
 import { zhCN as t } from '@/i18n/zh-CN'
 
 const a = t.alerts
@@ -10,9 +10,10 @@ const a = t.alerts
 it('shows billing, unread events and failed notifications even when system metrics fail', async () => {
   let read = false
   const fetch = mockAPI({
-    '/system/status': () => failure(),
-    '/alerts': () => Response.json({
-      billing: { ...alertOverview.billing, supported: true, interface: 'eth0', sampled_at: 1735689600, used: 950e9, quota: 1e12, percent: 95 },
+    '/overview': () => Response.json({
+      ...overview,
+      servers: [{ ...overview.servers[0], system: { ...overview.servers[0]!.system, metrics: null },
+        billing: { ...billing, supported: true, interface: 'eth0', sampled_at: 1735689600, used: 950e9, quota: 1e12, percent: 95 } }],
       unread_count: read ? 0 : 1,
       unread: read ? [] : [{ key: 'hash', kind: 'user_quota_80', address: 'node.example.com', username: 'alice', used: 80, limit: 100, created_at: 1735689600 }],
       recent: [{ id: 1, channel: 'bark', kind: 'test', status: 'failed', error: 'timeout', updated_at: 1735689600, attempts: 8, grouped: false }],
@@ -20,8 +21,7 @@ it('shows billing, unread events and failed notifications even when system metri
     'POST /alerts/events/hash/read': () => { read = true; return new Response(null, { status: 204 }) },
   })
   const { user } = mountPage(<DashboardPage />)
-  expect(await screen.findByText('95.0%')).toBeVisible()
-  expect(screen.getByText('2025-01-01 00:00:00 UTC 至 2025-02-01 00:00:00 UTC · 仅出站')).toBeVisible()
+  expect(await screen.findByText(/95\.0%/)).toBeVisible()
   expect(screen.getByText(a.failure.timeout)).toBeVisible()
   expect(screen.getByText(`${a.event.user_quota_80} · alice`)).toBeVisible()
   await user.click(screen.getByRole('button', { name: a.markRead }))
@@ -30,26 +30,40 @@ it('shows billing, unread events and failed notifications even when system metri
   expect(fetch.mock.calls.some(([url, init]) => url.endsWith('/alerts/events/hash/read') && init?.method === 'POST')).toBe(true)
 })
 
-it('saves billing settings and individual event switches', async () => {
-  const fetch = mockAPI({ 'PUT /alerts/settings': (init) => Response.json(JSON.parse(String(init.body))) })
-  const { user } = mountPage(<AlertSettingsPanel />)
+it.each([1, 2])('uses the same billing form and saves thresholds for server %i', async (id) => {
+  const path = '/servers/' + id + '/alerts'
+  const fetch = mockAPI({ ['PUT ' + path]: (init) => Response.json(JSON.parse(String(init.body))) })
+  const { user } = mountPage(<ServerAlertPanel serverID={id} />)
   const quota = await screen.findByLabelText(a.quota)
   await user.clear(quota)
   await user.type(quota, '500')
   await user.click(screen.getByRole('combobox', { name: a.mode }))
   await user.click(await screen.findByRole('option', { name: a.modes.both }))
   await user.click(screen.getByRole('switch', { name: a.event.server_quota_90 }))
-  const availability = screen.getByRole('switch', { name: a.offlineNotifications })
-  expect(availability).toBeChecked()
-  await user.click(availability)
+  expect(screen.queryByRole('switch', { name: a.offlineNotifications })).not.toBeInTheDocument()
   await user.click(screen.getByRole('button', { name: a.saveSettings }))
   expect(await screen.findByText(a.settingsSaved)).toBeVisible()
-  const call = fetch.mock.calls.find(([url, init]) => url.endsWith('/alerts/settings') && init?.method === 'PUT')
-  expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ quota_gb: 500, billing_mode: 'both', events: { server_quota_90: false, server_offline: false } })
+  const call = fetch.mock.calls.find(([url, init]) => url.endsWith(path) && init?.method === 'PUT')
+  expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ quota_gb: 500, billing_mode: 'both', events: { server_quota_90: false } })
+})
+
+it('saves global availability notifications without editing a server quota', async () => {
+  const fetch = mockAPI({ 'PUT /alerts/settings': (init) => Response.json({ ...alertSettings.config, ...JSON.parse(String(init.body)) }) })
+  const { user } = mountPage(<AlertSettingsPanel />)
+  const availability = await screen.findByRole('switch', { name: a.offlineNotifications })
+  expect(availability).toBeChecked()
+  expect(screen.queryByLabelText(a.quota)).not.toBeInTheDocument()
+  await user.click(availability)
+  await user.click(screen.getByRole('button', { name: a.saveEvents }))
+  expect(await screen.findByText(t.common.saved)).toBeVisible()
+  const call = fetch.mock.calls.find(([, init]) => init?.method === 'PUT')
+  const payload = JSON.parse(String(call?.[1]?.body))
+  expect(payload).toEqual({ events: expect.objectContaining({ server_offline: false }) })
+  expect(payload.events).not.toHaveProperty('server_quota_90')
 })
 
 it('shows remote recovery with its duration in the dashboard inbox', async () => {
-  mockAPI({ '/alerts': () => Response.json({ ...alertOverview, unread_count: 1, unread: [
+  mockAPI({ '/overview': () => Response.json({ ...overview, unread_count: 1, unread: [
     { key: 'recovered', kind: 'server_recovered', server_id: 2, address: 'edge.example.com', used: 0, limit: 0,
       created_at: 1735689600, offline_seconds: 120 },
   ] }) })

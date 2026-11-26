@@ -23,17 +23,6 @@ export interface SingboxStatus {
   uptime: number
 }
 
-export interface Usage { used: number; total: number }
-export interface SystemStatus {
-  supported: boolean
-  cpu: number
-  mem: Usage
-  disk: Usage
-  uptime: number
-  net: { rx_rate: number; tx_rate: number }
-  singbox: SingboxStatus
-}
-
 export interface PublicIPs { ipv4: string; ipv6: string }
 export interface BBR { enabled: boolean; available: boolean }
 export interface SystemCheck extends PublicIPs {
@@ -123,6 +112,54 @@ export interface Server {
   updated_at: number
 }
 
+export interface ServerMetrics {
+  supported: boolean
+  cpu: number
+  mem: { used_mb: number; total_mb: number }
+  disk: { used_mb: number; total_mb: number }
+  uptime: number
+  net: { rx_rate: number; tx_rate: number }
+}
+export interface RestartState {
+  id: string
+  status: 'pending' | 'succeeded' | 'failed'
+  error?: string
+}
+export interface ServerStatus {
+  server_id: number
+  metrics: ServerMetrics | null
+  metrics_at: number | null
+  singbox: SingboxStatus | null
+  singbox_active: boolean | null
+  restart: RestartState | null
+}
+export interface CycleBytes { up: number; down: number }
+export interface TrafficUser extends CycleBytes {
+  id: number
+  name: string
+  expire_at: number
+  traffic_limit: number
+}
+export interface ServerTraffic {
+  server_id: number
+  billing: ServerBilling
+  user_traffic: CycleBytes
+  users: TrafficUser[]
+}
+export interface OverviewServer extends Server {
+  system: ServerStatus
+  billing: ServerBilling
+  user_traffic: CycleBytes
+  share_percent: number
+}
+export interface PanelOverview extends Notifications {
+  servers: OverviewServer[]
+  user_traffic: CycleBytes
+  top_users: TrafficUser[]
+  expiring_users: TrafficUser[]
+  exhausted_users: TrafficUser[]
+}
+
 export interface JoinToken {
   id: number
   name: string
@@ -205,7 +242,7 @@ export interface RulesSettings {
 export type RulesPreview =
   | { format: 'singbox'; config: Record<string, unknown> }
   | { format: 'clash'; config: string }
-export interface SingboxLogs { lines: string[] }
+export interface ServerLogs { ready: boolean; lines: string[] }
 
 export interface BackupStatus {
   last_attempt: number
@@ -234,11 +271,13 @@ export interface NotificationChannelSettings {
   chat_id_mask?: string
 }
 
-export interface AlertSettings {
+export interface ServerAlertSettings {
   config: AlertConfig
-  channels: Record<NotificationChannel, NotificationChannelSettings>
   interfaces: string[]
-  billing: AlertOverview['billing']
+}
+export interface AlertSettings extends ServerAlertSettings {
+  channels: Record<NotificationChannel, NotificationChannelSettings>
+  billing: ServerBilling
 }
 
 export interface AlertEvent {
@@ -266,19 +305,19 @@ export interface NotificationDelivery {
   grouped: boolean
 }
 
-export interface AlertOverview {
-  billing: {
-    supported: boolean
-    interface: string
-    sampled_at: number
-    stale: boolean
-    starts_at: number
-    ends_at: number
-    billing_mode: BillingMode
-    used: number
-    quota: number
-    percent: number
-  }
+export interface ServerBilling {
+  supported: boolean
+  interface: string
+  sampled_at: number
+  stale: boolean
+  starts_at: number
+  ends_at: number
+  billing_mode: BillingMode
+  used: number
+  quota: number
+  percent: number
+}
+export interface Notifications {
   unread: AlertEvent[]
   unread_count: number
   recent: NotificationDelivery[]

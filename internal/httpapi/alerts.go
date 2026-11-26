@@ -112,12 +112,21 @@ func (a *api) alertSaveSettings(w http.ResponseWriter, r *http.Request) {
 func (a *api) alertServerID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	query, err := url.ParseQuery(r.URL.RawQuery)
 	values, exists := query["server_id"]
+	var id int64
+	if r.PathValue("id") != "" {
+		var pathErr error
+		id, pathErr = resourceID(r)
+		if pathErr != nil {
+			a.resourceError(w, pathErr)
+			return 0, false
+		}
+	}
 	if err == nil && !exists {
-		return 0, true
+		return id, true
 	}
 	if err == nil && len(values) == 1 {
-		if id, err := strconv.ParseInt(values[0], 10, 64); err == nil && id > 0 {
-			return id, true
+		if queryID, err := strconv.ParseInt(values[0], 10, 64); err == nil && queryID > 0 && (id == 0 || id == queryID) {
+			return queryID, true
 		}
 	}
 	a.resourceError(w, invalid("server_id", "请使用服务器列表返回的正整数 ID。"))

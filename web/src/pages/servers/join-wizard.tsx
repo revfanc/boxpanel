@@ -7,6 +7,7 @@ import { CopyField } from '@/components/CopyField'
 import { ErrorNotice, Loading } from '@/components/Feedback'
 import { Field, Notice, Panel, Submit } from '@/components/ResourceUI'
 import { Button } from '@/components/ui/button'
+import { LinkButton } from '@/components/LinkButton'
 import { useOperation } from '@/hooks/use-operation'
 import { zhCN as t } from '@/i18n/zh-CN'
 import { api, APIError } from '@/lib/api'
@@ -59,7 +60,7 @@ function WaitForNode({ tokenID, regenerate }: { tokenID: number; regenerate: () 
     const { id, name, public_host, version } = query.data.server
     return <>
       <Notice>{t.servers.connected(name, public_host, version || t.common.unknown)}</Notice>
-      <Button asChild><Link to={`/inbounds/new?server=${id}`}>{t.servers.createInbound}</Link></Button>
+      <LinkButton render={<Link to={`/inbounds/new?server=${id}`} />}>{t.servers.createInbound}</LinkButton>
     </>
   }
   if (state === 'unavailable') return <>
