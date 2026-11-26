@@ -40,6 +40,7 @@ CORE_BINARY="$FIXTURE/local/share/sing-box"
 UNIT_DIR="$FIXTURE/units"
 LOCK_DIR="$FIXTURE/lock"
 LOCK_FILE="$FIXTURE/lock.flock"
+FLOCK_BIN="${TEST_FLOCK_BIN:-$FLOCK_BIN}"
 OS_RELEASE="$FIXTURE/os-release"
 SYSTEMD_DIR="$FIXTURE/systemd"
 export PATH="$FIXTURE/bin:$PATH"
@@ -259,9 +260,12 @@ test_optional_bbr_and_lock() {
     unset FAIL_CLI
     contains "$FIXTURE/output" 'BBR 未开启'
     [[ ! -e $FIXTURE/data/.installing ]] || fail 'BBR failure prevented completion'
+    # Exercise the mkdir fallback even where flock(1) exists (Linux CI).
+    export TEST_FLOCK_BIN=missing-flock-for-test
     mkdir "$FIXTURE/lock"
     reject update --version v0.1.0
     [[ -d $FIXTURE/lock ]] || fail 'removed another installer lock'
+    unset TEST_FLOCK_BIN
 }
 
 # With flock(1) available, a lock file left by a killed installer is ignored and

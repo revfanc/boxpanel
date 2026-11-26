@@ -8,6 +8,7 @@ CORE_BINARY=/usr/local/share/boxpanel/sing-box
 UNIT_DIR=/etc/systemd/system
 LOCK_DIR=/run/boxpanel-installer.lock
 LOCK_FILE=/run/boxpanel-installer.flock
+FLOCK_BIN=flock
 OS_RELEASE=/etc/os-release
 SYSTEMD_DIR=/run/systemd/system
 COMMAND=install
@@ -169,9 +170,9 @@ configure_cli() {
 # leaves nothing behind; boxpanel migrate inherits the descriptor and keeps the
 # lock while it is still running. mkdir remains only as a fallback.
 acquire_install_lock() {
-    if command -v flock >/dev/null; then
+    if command -v "$FLOCK_BIN" >/dev/null; then
         exec 9>>"$LOCK_FILE"
-        flock -n 9 || die '另一个安装或迁移进程正在运行；请等待其结束后重试。'
+        "$FLOCK_BIN" -n 9 || die '另一个安装或迁移进程正在运行；请等待其结束后重试。'
         return
     fi
     mkdir -- "$LOCK_DIR" 2>/dev/null || die "另一个安装进程可能正在运行；确认没有运行后删除 $LOCK_DIR 再重试。"
