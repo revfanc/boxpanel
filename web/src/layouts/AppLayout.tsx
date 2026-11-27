@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Box, LayoutDashboard, LogOut, Menu, Server, Settings, Shuffle, Users, X, LoaderCircle } from 'lucide-react'
-import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router'
+import { Box, LayoutDashboard, LogOut, Network, Menu, Server, Settings, Shuffle, Users, X, LoaderCircle } from 'lucide-react'
+import { Link, Outlet, useLocation, useNavigate } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider } from '@/components/ui/sidebar'
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { ThemeSwitch } from '@/components/ThemeSwitch'
 import { ErrorNotice } from '@/components/Feedback'
 import { CertificateWarning } from '@/components/Certificate'
+import { serverID } from '@/lib/navigation'
 import { api } from '@/lib/api'
 import { replaceSession, sessionQuery, settingsQuery } from '@/lib/query'
 import { zhCN } from '@/i18n/zh-CN'
@@ -15,6 +16,7 @@ import { zhCN } from '@/i18n/zh-CN'
 const navigation = [
   { to: '/', label: zhCN.pages.home, icon: LayoutDashboard },
   { to: '/servers', label: zhCN.pages.servers, icon: Server },
+  { to: '/inbounds', label: zhCN.pages.inbounds, icon: Network },
   { to: '/users', label: zhCN.pages.users, icon: Users },
   { to: '/rules', label: zhCN.pages.rules, icon: Shuffle },
   { to: '/settings', label: zhCN.pages.settings, icon: Settings },
@@ -22,13 +24,15 @@ const navigation = [
 
 function Navigation({ close }: { close?: () => void }) {
   const location = useLocation()
+  const inServerEditor = location.pathname.startsWith('/inbounds/') && serverID(new URLSearchParams(location.search).get('server'))
+  const section = inServerEditor ? '/servers' : '/' + location.pathname.split('/')[1]
   return <nav aria-label={zhCN.app.navigation}>
     <SidebarGroup>
       <SidebarGroupLabel>{zhCN.app.navigationGroup}</SidebarGroupLabel>
       <SidebarMenu className="gap-1">
         {navigation.map(({ to, label, icon: Icon }) => <SidebarMenuItem key={to}>
-          <SidebarMenuButton render={<NavLink to={to} end={to === '/'} onClick={close} />}
-            isActive={location.pathname === to || location.pathname.startsWith(`${to}/`) || to === '/servers' && location.pathname.startsWith('/inbounds')}
+          <SidebarMenuButton render={<Link to={to} aria-current={section === to ? 'page' : undefined} onClick={close} />}
+            isActive={section === to}
             className="h-11 gap-3 px-3">
             <Icon aria-hidden="true" /><span>{label}</span>
           </SidebarMenuButton>

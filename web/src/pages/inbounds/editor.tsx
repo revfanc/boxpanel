@@ -11,7 +11,7 @@ import { Page, Panel, Field, Toggle, Submit, Notice, BackLink, Empty, RadioCard 
 import { ErrorNotice, Loading } from '@/components/Feedback'
 import { inboundQuery, refreshResources, serversQuery } from '@/lib/resources'
 import { api } from '@/lib/api'
-import { serverID, serverPath } from '@/lib/navigation'
+import { inboundListPath } from '@/lib/navigation'
 import { useOperation } from '@/hooks/use-operation'
 import { inboundSchema, inboundDefaults, inboundBody, type InboundFormValues } from '@/schemas/inbound'
 import type { Inbound, InboundSuggestion, Protocol, RealityTarget, Server } from '@/types/api'
@@ -147,15 +147,15 @@ export function NewInboundPage() {
   const [params, setParams] = useSearchParams()
   const navigate = useNavigate()
   const [protocol, setProtocol] = useState<Protocol | null>(null)
-  const requested = params.get('server')
+  const requested = params.get('target') ?? params.get('server') ?? params.get('filter')
   const target = servers.data?.find((server) => String(server.id) === requested && server.status !== 'pending')
   const unavailable = requested !== null && !target
-  const returnTo = target ? serverPath(target.id, 'inbounds') : '/inbounds'
+  const returnTo = inboundListPath(params)
   return <Page title={t.pages.newInbound} actions={<BackLink to={returnTo} />}>
     {servers.isError && <ErrorNotice error={servers.error} retry={() => { void servers.refetch() }} />}
     {servers.data && <ServerSelect servers={servers.data} selected={unavailable ? null : target?.id} onChange={(server) => {
       const next = new URLSearchParams(params)
-      next.set('server', String(server.id))
+      next.set('target', String(server.id))
       setParams(next, { replace: true })
     }} />}
     {unavailable && (servers.isPending ? <Loading /> : servers.data && <Notice>{t.inbounds.serverUnavailable}</Notice>)}
@@ -174,15 +174,15 @@ export function NewInboundPage() {
 export function EditInboundPage() {
   const { id = '' } = useParams()
   const [params] = useSearchParams()
-  const owner = serverID(params.get('server'))
+  const returnTo = inboundListPath(params)
   const inbound = useQuery(inboundQuery(id))
-  return <Page title={t.pages.editInbound} actions={<BackLink to={owner ? serverPath(owner, 'inbounds') : '/inbounds'} />}>
-    {inbound.isPending ? <Loading /> : inbound.isError ? <ErrorNotice error={inbound.error} retry={() => { void inbound.refetch() }} /> : <EditableInbound key={inbound.data.id} inbound={inbound.data} scoped={!!owner} />}
+  return <Page title={t.pages.editInbound} actions={<BackLink to={returnTo} />}>
+    {inbound.isPending ? <Loading /> : inbound.isError ? <ErrorNotice error={inbound.error} retry={() => { void inbound.refetch() }} /> : <EditableInbound key={inbound.data.id} inbound={inbound.data} returnTo={returnTo} />}
   </Page>
 }
 
 
-function EditableInbound({ inbound, scoped }: { inbound: Inbound; scoped: boolean }) {
+function EditableInbound({ inbound, returnTo }: { inbound: Inbound; returnTo: string }) {
   const servers = useQuery(serversQuery)
   const navigate = useNavigate()
   const [target, setTarget] = useState<Server>()
@@ -190,6 +190,6 @@ function EditableInbound({ inbound, scoped }: { inbound: Inbound; scoped: boolea
     {servers.isError && <ErrorNotice error={servers.error} retry={() => { void servers.refetch() }} />}
     {servers.data && <ServerSelect servers={servers.data} selected={target?.id ?? inbound.server_id} onChange={setTarget} />}
     <InboundForm protocol={inbound.protocol} source={inbound} target={target}
-      onSaved={scoped ? (saved) => { void navigate(serverPath(saved.server_id, 'inbounds')) } : undefined} />
+      onSaved={() => navigate(returnTo)} />
   </>
 }
