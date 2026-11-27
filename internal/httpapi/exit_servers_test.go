@@ -130,6 +130,10 @@ func TestExitServersLifecycle(t *testing.T) {
 
 	// Failed local apply leaves the reservation and the original generation intact.
 	f.runner.failCheck = true
+	f.call(t, "PUT", "servers/2", `{"public_host":"8.8.8.9"}`, 422)
+	if s := decodeResult[serverRecord](t, f.call(t, "GET", "servers/2", "", 200)); s.PublicHost != "8.8.8.8" {
+		t.Fatal("failed local apply changed subscription address")
+	}
 	f.call(t, "PUT", fmt.Sprintf("servers/%d/exit-address", entry.Master.ServerID), `{"address":"8.8.8.9"}`, 422)
 	f.runner.failCheck = false
 	if config, err := client.Desired(ctx, entry.Master.ServerID, entry.Key); err != nil || config.Generation != desired.Generation || config.Exit.Outgoing.Address != out.Address {
@@ -147,6 +151,26 @@ func TestExitServersLifecycle(t *testing.T) {
 	targetBeat.Exit = &agent.ExitReport{Ports: exitlink.EncodePorts([]int{20000, 20001}), Usage: &exitlink.Totals{Up: 20, Down: 30}}
 	_, err = client.SyncHeartbeat(ctx, target.Master.ServerID, target.Key, targetBeat)
 	require(err)
+	// The local entry's probe tag embeds its revision. Editing the local
+	// public IP through settings must regenerate the probe and roll back on error.
+	f.call(t, "PUT", "settings", `{"public_host":"9.9.9.10"}`, 200)
+	f.call(t, "PUT", "servers/1/exit-address", `{"use_server_ip":true}`, 204)
+	f.call(t, "PUT", "servers/1/exit", `{"exit_server_id":3,"mode":"all"}`, 204)
+	f.runner.failCheck = true
+	f.call(t, "PUT", "settings", `{"public_host":"9.9.9.11"}`, 422)
+	f.runner.failCheck = false
+	if current := decodeResult[exitServerView](t, f.call(t, "GET", "servers/1/exit", "", 200)); current.Address != "9.9.9.10" || current.ServerIP != current.Address {
+		t.Fatal("local address did not roll back")
+	}
+	f.call(t, "PUT", "settings", `{"public_host":"9.9.9.11"}`, 200)
+	localExit, err := db.ReadLocalExit(ctx, f.conn)
+	require(err)
+	configBytes, err := os.ReadFile(f.config)
+	require(err)
+	if localExit.Outgoing == nil || !bytes.Contains(configBytes, []byte(localExit.Outgoing.Revision.ProbeTag())) {
+		t.Fatal("local probe still targets the old revision")
+	}
+	f.call(t, "DELETE", "servers/1/exit", "", 204)
 	f.write(t, "PUT", entryPath, `{"exit_server_id":3,"mode":"all","failure":"direct"}`, 204)
 	if len(f.firewall.plan.ExitPorts) != 0 {
 		t.Fatal("switch did not close former local source rules")
@@ -161,6 +185,36 @@ func TestExitServersLifecycle(t *testing.T) {
 	out = desired.Exit.Outgoing
 	if out == nil || out.Password != newDesired.Exit.Incoming[0].Password || out.Mode != exitlink.All {
 		t.Fatal("new target and entry have mismatched settings")
+	}
+	// A numeric server edit moves the existing link. Domain edits, saved
+	// overrides, and selecting automatic mode again retain their own semantics.
+	rev := out.Version
+	for _, step := range []struct {
+		path, body, ip  string
+		custom, changed bool
+	}{
+		{"servers/3", `{"public_host":"8.8.4.5"}`, "8.8.4.5", false, true},
+		{"servers/3", `{"public_host":"cdn.example.org"}`, "8.8.4.5", false, false},
+		{"servers/3/exit-address", `{"address":"1.0.0.1"}`, "1.0.0.1", true, true},
+		{"servers/3", `{"public_host":"8.8.4.6"}`, "1.0.0.1", true, false},
+		{"servers/3/exit-address", `{"use_server_ip":true}`, "8.8.4.6", false, true},
+	} {
+		status := 200
+		if strings.HasSuffix(step.path, "/exit-address") {
+			status = 204
+		}
+		f.call(t, "PUT", step.path, step.body, status)
+		if step.changed {
+			rev++
+		}
+		view := decodeResult[exitServerView](t, f.call(t, "GET", targetPath, "", 200))
+		d, err := client.Desired(ctx, entry.Master.ServerID, entry.Key)
+		require(err)
+		next := d.Exit.Outgoing
+		if view.CustomAddress != step.custom || view.Address != step.ip || next.ID != out.ID || next.Version != rev || next.Password != out.Password || next.Port != out.Port || next.Address != step.ip {
+			t.Fatalf("incorrect address or link identity after %s", step.path)
+		}
+		out = next
 	}
 	// Even if a node reports protocol 2 after a link existed, it sees the
 	// old response shape and cannot be selected for new links.

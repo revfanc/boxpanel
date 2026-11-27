@@ -251,7 +251,7 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 远端协议低于主控最低要求时返回 `upgrade_required: true`，且 `sync_status` 为 `failed`，联系状态独立显示。
 接口要求登录，改名沿用 CSRF 校验。
 名称去首尾空白后须为 1–64 个字符，且原值中不得包含控制字符。无效名称返回 400，未知 ID 返回 404。
-名称和公网地址变更直接更新订阅元数据。远端 `public_host` 接受域名或裸 IPv4/IPv6。本机公网地址通过设置 API 修改。
+名称和公网地址变更会更新订阅元数据。处于自动模式的链路同时跟随有效的公网 IP；设置域名保留上次的链路地址。涉及本机对端配置或防火墙时，校验和生效失败会回滚本次编辑。远端 `public_host` 接受域名或裸 IPv4/IPv6。本机公网地址通过设置 API 修改。
 远端服务器还返回 `desired_generation`、`applied_generation`（0 表示尚未生效）、`sync_status`（`syncing`、`synced`、`failed`）
 及最近心跳记录的 `singbox_active`。有失败时返回固定的 `sync_error` 代码，面板根据代码展示原因和处理建议。
 `GET /servers` 的远端行还包含 `traffic_up`、`traffic_down`，单位为字节。两项汇总该服务器所有未删除用户已确认的用量，
@@ -382,10 +382,10 @@ T9.6 期望状态 `exit` 只发给已经报告协议 3+ 的参与节点。同一
 
 | 方法 | 路径 | 请求与成功响应 |
 |---|---|---|
-| GET | `/servers/{id}/exit` | 200 `{server_id,address,supported,link,candidates,forwarded}` |
+| GET | `/servers/{id}/exit` | 200 `{server_id,address,server_ip?,custom_address,supported,link,candidates,forwarded}` |
 | PUT | `/servers/{id}/exit` | `{exit_server_id,mode?,failure?,rules?}`，204 |
 | DELETE | `/servers/{id}/exit` | 空请求体，停用此入口的出口，204 |
-| PUT | `/servers/{id}/exit-address` | `{address}`，保存此服务器的链路公网 IP，204 |
+| PUT | `/servers/{id}/exit-address` | `{address}`，固定此服务器的链路公网 IP；`{use_server_ip:true}` 恢复跟随服务器公网 IP。成功返回 204 |
 
 - `id` 是入口服务器 ID。`link=null` 代表入口直连。非空记录返回保存的设置和内部端口 `port`，
   最近确认的探测时间 `checked_at`（可为 null）及 `status`。状态为 `syncing`、`checking`、`available`、

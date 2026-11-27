@@ -219,12 +219,26 @@ function ExitPolicyForm({ data }: { data: ServerExit }) {
 
 function NetworkSettings({ data }: { data: ServerExit }) {
   const [open, setOpen] = useState(!data.address)
+  const [editing, setEditing] = useState(!data.address)
+  const client = useQueryClient()
+  const operation = useOperation()
   return <details className="space-y-4 rounded-xl border px-5 py-4" open={open}
     onToggle={(event) => setOpen(event.currentTarget.open)}>
     <summary className="cursor-pointer font-medium">{ex.network}</summary>
     {!data.address && <Notice>{ex.addressRequired}</Notice>}
     {data.link && data.address && <p className="text-sm text-muted-foreground">{ex.cloudFirewall(data.link.port, data.address)}</p>}
-    <ExitAddressForm serverID={data.server_id} address={data.address} label={ex.address} />
+    {data.address && <p className="text-sm">{data.custom_address ? ex.customAddress(data.address)
+      : data.server_ip ? ex.followAddress(data.address) : ex.registeredAddress(data.address)}</p>}
+    <div className="flex flex-wrap gap-2">
+      {!editing && <Button variant="outline" onClick={() => setEditing(true)}>{ex.overrideAddress}</Button>}
+      {data.custom_address && data.server_ip && <Button variant="outline" disabled={operation.pending}
+        onClick={() => { void operation.run(() => api(`/servers/${data.server_id}/exit-address`, { method: 'PUT', body: { use_server_ip: true } }), async () => {
+          await client.invalidateQueries({ queryKey: queryKeys.servers })
+          setEditing(false)
+        }) }}>{ex.useServerIP(data.server_ip)}</Button>}
+    </div>
+    {operation.error != null && <ErrorNotice error={operation.error} />}
+    {(editing || !data.address) && <ExitAddressForm serverID={data.server_id} address={data.address} label={ex.address} />}
   </details>
 }
 

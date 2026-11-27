@@ -20,20 +20,21 @@ import (
 
 type exitServer struct {
 	inboundServer
-	name, address, ports string
-	protocol             int
-	portSampleAt         int64
-	syncPending          bool
-	usage                exitlink.Totals
+	name, address, ports, host string
+	custom                     bool
+	protocol                   int
+	portSampleAt               int64
+	syncPending                bool
+	usage                      exitlink.Totals
 }
 
-const exitServersSelect = `SELECT id,is_local,status,name,coalesce(nullif(exit_address,''),public_host),protocol,
+const exitServersSelect = `SELECT id,is_local,status,name,coalesce(nullif(exit_address,''),public_host),public_host,exit_address_custom,protocol,
 	coalesce(exit_ports,''),exit_ports_at,desired_generation<>applied_generation,exit_traffic_up,exit_traffic_down
 	FROM servers WHERE status<>'removed'`
 
 func scanExitServer(row rowScanner) (exitServer, error) {
 	var s exitServer
-	err := row.Scan(&s.id, &s.local, &s.status, &s.name, &s.address, &s.protocol,
+	err := row.Scan(&s.id, &s.local, &s.status, &s.name, &s.address, &s.host, &s.custom, &s.protocol,
 		&s.ports, &s.portSampleAt, &s.syncPending, &s.usage.Up, &s.usage.Down)
 	ip := exitIP(s.address)
 	s.address = ""
@@ -86,12 +87,14 @@ type exitServerChoice struct {
 }
 
 type exitServerView struct {
-	ServerID   int64              `json:"server_id"`
-	Address    string             `json:"address"`
-	Supported  bool               `json:"supported"`
-	Link       *exitLinkView      `json:"link"`
-	Candidates []exitServerChoice `json:"candidates"`
-	Forwarded  exitlink.Totals    `json:"forwarded"`
+	ServerIP      string             `json:"server_ip,omitempty"`
+	CustomAddress bool               `json:"custom_address"`
+	ServerID      int64              `json:"server_id"`
+	Address       string             `json:"address"`
+	Supported     bool               `json:"supported"`
+	Link          *exitLinkView      `json:"link"`
+	Candidates    []exitServerChoice `json:"candidates"`
+	Forwarded     exitlink.Totals    `json:"forwarded"`
 }
 
 func (a *api) serverExit(w http.ResponseWriter, r *http.Request) {
@@ -124,6 +127,10 @@ func (a *api) readExitServer(ctx context.Context, id int64) (exitServerView, err
 	if err != nil {
 		return out, fmt.Errorf("read entry server: %w", err)
 	}
+	if ip := exitIP(entry.host); ip.IsValid() {
+		out.ServerIP = ip.String()
+	}
+	out.CustomAddress = entry.custom
 	out.Address, out.Supported, out.Forwarded = entry.address, entry.supported(), entry.usage
 	var link exitLinkView
 	var rules string
@@ -358,14 +365,18 @@ func (a *api) saveExitAddress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Address string `json:"address"`
+		Address     *string `json:"address"`
+		UseServerIP bool    `json:"use_server_ip"`
 	}
 	if !decodeResource(w, r, &input) {
 		return
 	}
-	ip := exitIP(input.Address)
-	if !ip.IsValid() {
-		a.resourceError(w, invalid("address", "请填写入口和出口之间实际可用的公网 IPv4 或 IPv6 地址。"))
+	var ip netip.Addr
+	if input.Address != nil {
+		ip = exitIP(*input.Address)
+	}
+	if input.UseServerIP && input.Address != nil || !input.UseServerIP && !ip.IsValid() {
+		a.resourceError(w, invalid("address", "请选择使用服务器 IP，或填写实际可用的公网 IPv4 或 IPv6 地址。"))
 		return
 	}
 	if !a.writeExitChange(w, r, id, 0, true, func(ctx context.Context, tx *sql.Tx) error {
@@ -376,7 +387,17 @@ func (a *api) saveExitAddress(w http.ResponseWriter, r *http.Request) {
 		if !server.supported() {
 			return exitUnavailable("exit_upgrade_required", "请先升级节点并等待心跳，再修改链路公网 IP。")
 		}
-		return db.SetExitAddress(ctx, tx, id, ip.String())
+		if input.UseServerIP {
+			ip = exitIP(server.host)
+			if !ip.IsValid() {
+				return invalid("address", "服务器地址是域名或非公网 IP。请在服务器资料中填写公网 IP，或指定链路地址。")
+			}
+		}
+		_, err = tx.ExecContext(ctx, "UPDATE servers SET exit_address=?,exit_address_custom=? WHERE id=?", ip.String(), !input.UseServerIP, id)
+		if err != nil {
+			return fmt.Errorf("save link address preference: %w", err)
+		}
+		return nil
 	}) {
 		return
 	}
@@ -393,8 +414,8 @@ func (a *api) writeExitChange(w http.ResponseWriter, r *http.Request, id, target
 		err = transactInbound(r.Context(), conn, func(ctx context.Context, tx *sql.Tx) error {
 			var local bool
 			err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM servers s WHERE s.is_local=1 AND (
-				s.id IN (?,?) OR EXISTS(SELECT 1 FROM exit_links l WHERE
-				(l.entry_id=? AND l.exit_id=s.id) OR (? AND l.exit_id=? AND l.entry_id=s.id))))`,
+		s.id IN (?,?) OR EXISTS(SELECT 1 FROM exit_links l WHERE
+		(l.entry_id=? AND l.exit_id=s.id) OR (? AND l.exit_id=? AND l.entry_id=s.id))))`,
 				id, target, id, includeIncoming, id).Scan(&local)
 			if err != nil {
 				return fmt.Errorf("determine local impact of exit change: %w", err)
@@ -414,4 +435,45 @@ func (a *api) writeExitChange(w http.ResponseWriter, r *http.Request, id, target
 	}
 	w.Header().Set("X-Boxpanel-Apply", "queued")
 	return true
+}
+
+// Update the address and the referring links in the writer transaction.
+// The local kernel embeds both peer addresses and its outgoing probe revision.
+func followServerIP(ctx context.Context, tx *sql.Tx, id int64, host string, applying bool) error {
+	ip := exitIP(host)
+	if !ip.IsValid() {
+		return nil
+	}
+	res, err := tx.ExecContext(ctx, "UPDATE servers SET exit_address=? WHERE id=? AND exit_address_custom=0 AND exit_address<>?", ip.String(), id, ip.String())
+	if err != nil {
+		return fmt.Errorf("update automatic link address: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil || n == 0 || applying {
+		return err
+	}
+	var local bool
+	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM exit_links l JOIN servers s
+		ON s.is_local=1 AND s.id IN (l.entry_id,l.exit_id) WHERE ? IN (l.entry_id,l.exit_id))`, id).Scan(&local)
+	if err != nil {
+		return fmt.Errorf("check links affected by server IP: %w", err)
+	}
+	if local {
+		return errApplyLocalExit
+	}
+	return nil
+}
+
+func (a *api) writeServerSettings(w http.ResponseWriter, r *http.Request, conn *sql.DB, apply bool, mutate func(context.Context, *sql.Tx, bool) error) bool {
+	if !apply {
+		err := transactInbound(r.Context(), conn, func(ctx context.Context, tx *sql.Tx) error { return mutate(ctx, tx, false) })
+		if err == nil {
+			return true
+		}
+		if !errors.Is(err, errApplyLocalExit) {
+			a.resourceError(w, err)
+			return false
+		}
+	}
+	return a.applyResource(w, r, func(ctx context.Context, tx *sql.Tx) error { return mutate(ctx, tx, true) })
 }

@@ -236,14 +236,21 @@ func (a *api) serverRename(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// These are subscription metadata or node preferences delivered with the
-	// next heartbeat; neither affects a running kernel.
-	s, err := scanServer(conn.QueryRowContext(ctx, `UPDATE servers SET name=coalesce(?,name),
-		public_host=coalesce(?,public_host),auto_upgrade=coalesce(?,auto_upgrade),updated_at=unixepoch()
-		WHERE id=? AND status<>'removed' RETURNING `+
-		serverColumns, input.Name, input.PublicHost, input.AutoUpgrade, id), nil)
-	if err != nil {
-		a.resourceError(w, err)
+	var s serverRecord
+	mutate := func(ctx context.Context, tx *sql.Tx, applying bool) error {
+		if input.PublicHost != nil {
+			if err := followServerIP(ctx, tx, id, *input.PublicHost, applying); err != nil {
+				return err
+			}
+		}
+		var err error
+		s, err = scanServer(tx.QueryRowContext(ctx, `UPDATE servers SET name=coalesce(?,name),
+			public_host=coalesce(?,public_host),auto_upgrade=coalesce(?,auto_upgrade),updated_at=unixepoch()
+			WHERE id=? AND status<>'removed' RETURNING `+
+			serverColumns, input.Name, input.PublicHost, input.AutoUpgrade, id), nil)
+		return err
+	}
+	if !a.writeServerSettings(w, r, conn, false, mutate) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s)

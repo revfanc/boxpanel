@@ -41,7 +41,7 @@ function EditServerForm({ server, close }: { server: Server; close: () => void }
   ))}>
     <Field label={t.servers.name} hint={t.servers.renameHint} error={form.formState.errors.name?.message} disabled={operation.pending} {...form.register('name')} />
     {!server.is_local && <>
-      <Field label={t.servers.address} error={form.formState.errors.public_host?.message} disabled={operation.pending} {...form.register('public_host')} />
+      <Field label={t.servers.address} hint={t.exitServers.serverAddressHint} error={form.formState.errors.public_host?.message} disabled={operation.pending} {...form.register('public_host')} />
       <div className="space-y-1">
         <Label htmlFor={autoID} className="cursor-pointer gap-3 font-normal">
           <Controller name="auto_upgrade" control={form.control} render={({ field }) => (
