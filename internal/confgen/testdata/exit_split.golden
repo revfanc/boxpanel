@@ -114,18 +114,10 @@
         "action": "reject"
       },
       {
-        "action": "resolve",
-        "server": "dns-local"
-      },
-      {
         "ip_is_private": true,
-        "action": "reject"
-      },
-      {
-        "outbound": "bp-exit-forward",
-        "action": "route",
+        "action": "reject",
         "inbound": [
-          "bp.exit-in.34"
+          "vless-reality-443"
         ]
       },
       {
@@ -166,6 +158,21 @@
           "oaistatic.com",
           "oaiusercontent.com",
           "openai.com"
+        ]
+      },
+      {
+        "action": "resolve",
+        "server": "dns-local"
+      },
+      {
+        "ip_is_private": true,
+        "action": "reject"
+      },
+      {
+        "outbound": "bp-exit-forward",
+        "action": "route",
+        "inbound": [
+          "bp.exit-in.34"
         ]
       },
       {

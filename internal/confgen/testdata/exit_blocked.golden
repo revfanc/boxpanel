@@ -73,12 +73,11 @@
         "action": "reject"
       },
       {
-        "action": "resolve",
-        "server": "dns-local"
-      },
-      {
         "ip_is_private": true,
-        "action": "reject"
+        "action": "reject",
+        "inbound": [
+          "vless-reality-443"
+        ]
       },
       {
         "auth_user": [
@@ -118,6 +117,14 @@
           "oaiusercontent.com",
           "openai.com"
         ]
+      },
+      {
+        "action": "resolve",
+        "server": "dns-local"
+      },
+      {
+        "ip_is_private": true,
+        "action": "reject"
       },
       {
         "auth_user": [

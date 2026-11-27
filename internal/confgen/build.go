@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/revfanc/boxpanel/internal/exitlink"
 	"github.com/revfanc/boxpanel/internal/fwmark"
 	"github.com/revfanc/boxpanel/internal/reality"
 )
@@ -35,19 +36,11 @@ func Build(snapshot Snapshot, opts Options) ([]byte, error) {
 		DNS:       dnsConfig{Servers: []dnsServer{{Type: "local", Tag: "dns-local"}}, Final: "dns-local"},
 		Inbounds:  []inboundConfig{},
 		Outbounds: []outboundConfig{{Type: "direct", Tag: "direct"}},
-		Route:     routeConfig{Rules: []routeRule{{Action: "sniff"}}, Final: "direct", DefaultDomainResolver: "dns-local"},
+		Route:     routeConfig{Final: "direct", DefaultDomainResolver: "dns-local"},
 		Experimental: experimentalConfig{ClashAPI: clashAPIConfig{
 			ExternalController: "127.0.0.1:" + strconv.Itoa(opts.ClashAPIPort), Secret: opts.ClashAPISecret,
 		}},
 	}
-	if snapshot.BlockBittorrent {
-		cfg.Route.Rules = append(cfg.Route.Rules, routeRule{Protocol: "bittorrent", Action: "reject"})
-	}
-	// Resolve domain destinations before the IP rule so domains cannot bypass it.
-	cfg.Route.Rules = append(cfg.Route.Rules,
-		routeRule{Action: "resolve", Server: "dns-local"},
-		routeRule{IPIsPrivate: true, Action: "reject"},
-	)
 	inbounds := slices.Clone(snapshot.Inbounds)
 	slices.SortFunc(inbounds, func(a, b Inbound) int { return compareID(a.ID, b.ID) })
 	ids, tags, ports := map[int64]bool{}, map[string]bool{}, map[int]bool{}
@@ -70,12 +63,21 @@ func Build(snapshot Snapshot, opts Options) ([]byte, error) {
 		cfg.Inbounds = append(cfg.Inbounds, out)
 		userTags = append(userTags, out.Tag)
 	}
-	if err := addExitInbounds(&cfg, snapshot.Exit.Incoming, opts, tags, ports); err != nil {
+	forwardTags, err := addExitInbounds(&cfg, snapshot.Exit.Incoming, opts, tags, ports)
+	if err != nil {
 		return nil, fmt.Errorf("build config: %w", err)
 	}
 	exit, split, err := addExitProbe(&cfg, snapshot)
 	if err != nil {
 		return nil, fmt.Errorf("build config: %w", err)
+	}
+	cfg.Route.Rules = append(cfg.Route.Rules, routeRule{Action: "sniff"})
+	if snapshot.BlockBittorrent {
+		cfg.Route.Rules = append(cfg.Route.Rules, routeRule{Protocol: "bittorrent", Action: "reject"})
+	}
+	if exit != nil && len(userTags) > 0 {
+		// Reject literal private destinations even when all user traffic uses the exit.
+		cfg.Route.Rules = append(cfg.Route.Rules, routeRule{Inbound: userTags, IPIsPrivate: true, Action: "reject"})
 	}
 	for _, user := range users {
 		tag := UserOutboundTag(user.ID)
@@ -89,7 +91,18 @@ func Build(snapshot Snapshot, opts Options) ([]byte, error) {
 		}
 		cfg.Outbounds = append(cfg.Outbounds, outbound)
 		addUserExitRoute(&cfg, exit, split, snapshot.ExitProbe, outbound.RoutingMark, user, userTags)
-		cfg.Route.Rules = append(cfg.Route.Rules, routeRule{AuthUser: []string{user.Name}, Action: "route", Outbound: tag})
+	}
+	// Only locally dialed traffic reaches DNS, including incoming exit links
+	// and direct fallback. Check the resolved addresses before any direct route.
+	cfg.Route.Rules = append(cfg.Route.Rules,
+		routeRule{Action: "resolve", Server: "dns-local"},
+		routeRule{IPIsPrivate: true, Action: "reject"},
+	)
+	if len(forwardTags) > 0 {
+		cfg.Route.Rules = append(cfg.Route.Rules, routeRule{Inbound: forwardTags, Action: "route", Outbound: exitlink.ForwardTag})
+	}
+	for _, user := range users {
+		cfg.Route.Rules = append(cfg.Route.Rules, routeRule{AuthUser: []string{user.Name}, Action: "route", Outbound: UserOutboundTag(user.ID)})
 	}
 	encoded, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

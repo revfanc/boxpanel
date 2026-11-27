@@ -156,12 +156,18 @@ func newFixture(t *testing.T, handshake *httptest.Server, routingMarks ...bool) 
 		secrets:            []string{pair.PrivateKey, user.UUID, user.Password, token, secret, string(material.PrivateKey)}}
 }
 
-func loopbackServer(t *testing.T, raw []byte) object {
+func bindLoopbackServer(t *testing.T, raw []byte) object {
 	t.Helper()
 	cfg := decode(t, raw)
 	for _, raw := range cfg["inbounds"].([]any) {
 		raw.(object)["listen"] = "127.0.0.1"
 	}
+	return cfg
+}
+
+func loopbackServer(t *testing.T, raw []byte) object {
+	t.Helper()
+	cfg := bindLoopbackServer(t, raw)
 	route := cfg["route"].(object)
 	kept, removed := []any{}, 0
 	for _, raw := range route["rules"].([]any) {
