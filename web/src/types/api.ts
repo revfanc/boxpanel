@@ -158,6 +158,8 @@ export interface ExitSettings {
   rules: { presets: ExitPreset[]; domains: string[]; domain_suffixes: string[] }
 }
 export interface ServerExit {
+  server_ip?: string
+  custom_address: boolean
   server_id: number
   address: string
   supported: boolean

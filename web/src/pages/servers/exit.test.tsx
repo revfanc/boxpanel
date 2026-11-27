@@ -10,7 +10,7 @@ import type { ExitSettings, ServerExit } from '@/types/api'
 const ex = t.exitServers
 const destination = { id: 2, name: 'Exit machine', address: '8.8.4.4' }
 const legacy = { id: 3, name: 'Legacy machine', address: '8.8.8.8', unavailable_reason: 'upgrade_required' } as const
-const blank: ServerExit = { server_id: 1, supported: true, address: '9.9.9.9', candidates: [destination, legacy], link: null, forwarded: { up: 0, down: 0 } }
+const blank: ServerExit = { custom_address: false, server_id: 1, supported: true, address: '9.9.9.9', candidates: [destination, legacy], link: null, forwarded: { up: 0, down: 0 } }
 const initial: ExitSettings = { exit_server_id: 2, mode: 'split', failure: 'block', rules: { presets: ['ai'], domains: ['api.example.com'], domain_suffixes: ['example.org'] } }
 const noContent = () => new Response(null, { status: 204 })
 
@@ -29,7 +29,7 @@ it('edits server rules, persists failure policy and keeps rules when switching t
   await user.click(screen.getByRole('option', { name: destination.name }))
 
   expect(screen.getByRole('radio', { name: new RegExp(ex.split) })).toBeChecked()
-  expect(screen.getByLabelText(ex.address)).not.toBeVisible()
+  expect(screen.queryByLabelText(ex.address)).not.toBeInTheDocument()
   await user.click(screen.getByText(ex.customDomains))
   expect(screen.getByRole('combobox', { name: ex.failure })).toHaveTextContent(ex.failures.block)
   await user.click(screen.getByRole('checkbox', { name: ex.presets.streaming }))
@@ -132,4 +132,23 @@ it('shows exit forwarding in the server traffic tab', async () => {
   mountPage(<ServerDetailPage />, '/servers/2?tab=traffic', '/servers/:id')
   expect(await screen.findByText(ex.forwarded)).toBeVisible()
   expect(screen.getByText('5 KiB')).toBeVisible()
+})
+
+it('uses the server IP by default and lets a pinned origin return to following it', async () => {
+  const ip = '8.8.4.4'
+  let custom = true
+  mockAPI({
+    '/servers/1/exit': () => Response.json({ ...blank, server_ip: ip, custom_address: custom, address: custom ? blank.address : ip }),
+    'PUT /servers/1/exit-address': (init) => {
+      expect(JSON.parse(String(init.body))).toEqual({ use_server_ip: true })
+      custom = false
+      return noContent()
+    },
+  })
+  const { user } = mountPage(<ServerExitTab serverID={1} />)
+  await user.click(await screen.findByText(ex.network))
+  expect(screen.getByText(ex.customAddress(blank.address))).toBeVisible()
+  await user.click(screen.getByRole('button', { name: ex.useServerIP(ip) }))
+  expect(await screen.findByText(ex.followAddress(ip))).toBeVisible()
+  expect(screen.queryByRole('textbox', { name: ex.address })).not.toBeInTheDocument()
 })

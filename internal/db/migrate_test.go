@@ -263,3 +263,35 @@ func TestAlertsMigrationPreservesUserTrafficAndIdentity(t *testing.T) {
 		}
 	}
 }
+
+func TestExitAddressMigrationPreservesDistinctOrigins(t *testing.T) {
+	ctx := t.Context()
+	conn := legacyServersDB(t)
+	files, err := fs.Glob(migrations, "migrations/*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := fstest.MapFS{}
+	for _, path := range files[:14] {
+		data, err := migrations.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		old[path] = &fstest.MapFile{Data: data}
+	}
+	if err := migrate(ctx, conn, old); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, conn, `INSERT INTO servers (id,name,public_host,exit_address) VALUES
+		(2,'standard','8.8.8.8','8.8.8.8'),(3,'domain','cdn.example','8.8.4.4'),
+		(4,'custom','1.1.1.1','1.0.0.1'),(5,'empty','example.org','')`)
+	if err := Migrate(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[int]bool{2: false, 3: true, 4: true, 5: false} {
+		var got bool
+		if err := conn.QueryRow("SELECT exit_address_custom FROM servers WHERE id=?", id).Scan(&got); err != nil || got != want {
+			t.Fatalf("server %d custom=%v err=%v", id, got, err)
+		}
+	}
+}
