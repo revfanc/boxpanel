@@ -26,6 +26,8 @@ type object = map[string]any
 type fixture struct {
 	writer, reader                                  *sql.DB
 	server                                          object
+	snapshot                                        confgen.Snapshot
+	options                                         confgen.Options
 	client                                          []byte
 	realityAddress, hysteriaAddress, controlAddress string
 	releaseServerPorts                              func()
@@ -137,8 +139,9 @@ func newFixture(t *testing.T, handshake *httptest.Server, routingMarks ...bool) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := confgen.Build(snapshot, confgen.Options{UserRoutingMarks: len(routingMarks) > 0 && routingMarks[0], Now: now, ClashAPIPort: control.port(), ClashAPISecret: secret,
-		Hysteria2TLS: map[int64]confgen.CertificateFiles{2: files}})
+	opts := confgen.Options{UserRoutingMarks: len(routingMarks) > 0 && routingMarks[0], Now: now, ClashAPIPort: control.port(), ClashAPISecret: secret,
+		Hysteria2TLS: map[int64]confgen.CertificateFiles{2: files}}
+	server, err := confgen.Build(snapshot, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +150,7 @@ func newFixture(t *testing.T, handshake *httptest.Server, routingMarks ...bool) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { reader.Close() })
-	return fixture{writer: conn, reader: reader, server: loopbackServer(t, server), client: client,
+	return fixture{writer: conn, reader: reader, server: loopbackServer(t, server), client: client, snapshot: snapshot, options: opts,
 		realityAddress: vless.address(), hysteriaAddress: hy2.address(), controlAddress: control.address(),
 		releaseServerPorts: func() { vless.release(); hy2.release(); _ = udp.Close(); control.release() },
 		secrets:            []string{pair.PrivateKey, user.UUID, user.Password, token, secret, string(material.PrivateKey)}}

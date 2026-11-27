@@ -227,14 +227,14 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 | GET | `/reality/recommend` | `{targets: [{server, tls13, h2, latency_ms, ok}]}`，前 3 个推荐 |
 | POST | `/reality/check` | `{server, port?}` → 单个检测结果；目标解析到 Cloudflare 时 `ok:false` 并在 `hint` 说明中转风险 |
 
-## 服务器（T8.1–T9.5）
+## 服务器（T8.1–T9.6）
 
 | 方法 | 路径 | 请求与成功响应 |
 |---|---|---|
 | GET | `/servers` | 200，服务器数组，本机优先，其余按 ID 升序 |
 | GET | `/servers/{id}` | 200，指定服务器的元数据及入站计数 |
 | PUT | `/servers/{id}` | `{name?, public_host?, auto_upgrade?}`，至少提供一项，200 返回更新后的服务器 |
-| DELETE | `/servers/{id}` | 移除远程服务器并撤销它的公钥，204 |
+| DELETE | `/servers/{id}` | 移除远程服务器、撤销常规节点权限、解除关联出口链路，204 |
 | GET | `/servers/join-tokens` | 200，未过期且未使用令牌的元数据数组 |
 | POST | `/servers/join-tokens` | `{"name":"服务器名称"}`，201，返回元数据、`token`、`master_url` 和 `master_pin` |
 | GET | `/servers/join-tokens/{id}` | 200，指定未过期令牌的元数据，若已注册则附 `server_id` |
@@ -262,7 +262,7 @@ T9.3：远端行返回 `auto_upgrade`（布尔，默认 false），本机不返�
 无论主控当前使用自签或 ACME 证书，`master_pin` 都是固定回退公钥 SPKI DER 的 SHA-256（无填充 base64url）。
 签发要求 HTTPS，HTTP 面板返回 `409 agent_requires_https`。令牌管理和服务器移除沿用管理员会话与 CSRF 校验。
 
-### 节点 API（T8.2–T9.5）
+### 节点 API（T8.2–T9.6）
 
 前缀为 `/{web_path}/api/agent/v1`，只接受 HTTPS。带请求体的 POST 使用 `application/json`。节点使用签名认证。
 请求体限 8 KiB，`/traffic` 限 1 MiB，`/interface-samples` 限 256 KiB，`/logs` 限 2 MiB。
@@ -271,14 +271,14 @@ T9.3：远端行返回 `auto_upgrade`（布尔，默认 false），本机不返�
 | 方法 | 路径 | 请求与成功响应 |
 |---|---|---|
 | POST | `/join` | `{token, public_key, hostname, public_ip, version, protocol?}`，201 `{server_id}` |
-| POST | `/heartbeat` | `{version, protocol?, interfaces?, singbox_active, uptime, applied_generation?, sync_error?, metrics?, restart_result?}`。提供 `protocol` 或 `applied_generation` 时 200 `{desired_generation, protocol, version, interface, log_request?, restart_pending?}`。旧格式均省略时返回 204。顶层 uptime 为节点进程运行秒数 |
-| GET | `/desired` | 空请求体，200 `{generation, inbounds, users, route, restart_id?}` |
+| POST | `/heartbeat` | `{version, protocol?, interfaces?, singbox_active, uptime, applied_generation?, sync_error?, metrics?, restart_result?, exit?}`。提供 `protocol` 或 `applied_generation` 时 200 `{desired_generation, protocol, version, interface, log_request?, restart_pending?}`。旧格式均省略时返回 204。顶层 uptime 为节点进程运行秒数 |
+| GET | `/desired` | 空请求体，200 `{generation, inbounds, users, route, restart_id?, exit?}` |
 | POST | `/inbound-keys` | `{inbound_id, key_id, reality_public_key?, short_id?, hy2_cert_sha256?, hy2_cert_pem?}`，204 |
 | POST | `/traffic` | `{counters:[{user_id,epoch,up,down}]}`，204 |
 | POST | `/interface-samples` | `{samples:[{sampled_at,interface,rx,tx}]}`，204 |
 | POST | `/logs` | `{id,batch_id,snapshot,lines}`，204 确认该批日志 |
 
-当前协议为 2，主控和节点的最低要求均为 2。旧请求省略 `protocol` 时按 1 处理。旧节点仍可注册和发心跳，
+当前协议为 3，普通同步的最低协议仍为 2。旧请求省略 `protocol` 时按 1 处理。协议 1 节点仍可注册和发心跳，
 其签名认证通过的期望状态、流量、网卡样本及公开密钥请求返回 `426 agent_upgrade_required`。心跳回复的
 `version` / `protocol` 属于主控，`interface` 是该节点的网卡偏好，空字符串表示自动检测。
 `interfaces` 是最多 32 个互不重复的非回环 Linux 网卡名称。省略时保留上次选择列表，空数组会清空列表。
@@ -320,7 +320,7 @@ T9.3：远端行返回 `auto_upgrade`（布尔，默认 false），本机不返�
 T9.5 增补字段沿用协议 2。`metrics` 包含 `cpu`（0–100，保留一位小数）、`mem` 和 `disk`（`[已用,总量]`，十进制 MB）、
 `net`（`[下行,上行]`，字节/秒）、`uptime`（系统运行秒数）、可选 `unavailable`（采样不可用）和
 `core`（可选，含 `version`、`up` 内核运行秒数，省略内部字段时表示空字符串与 0）。
-缺少整个 `metrics` 表示旧节点。新节点遇严格校验的旧主控会去掉 T9.5 字段并保留协议 2 重试。
+缺少整个 `metrics` 表示旧节点。新节点遇严格校验的旧主控会去掉 T9.5 可选字段并保留基础同步字段重试。
 
 `log_request` 为 `{id,ttl_ms}`。节点仅在有请求时上报，使用同一 `id` 和每批唯一的 `batch_id`。
 首批 `snapshot=true`，可为空，之后仅传新增行。每批最多 200 行，每行不超过 1024 字节，主控只接受该签名服务器的当前请求。
@@ -328,6 +328,21 @@ T9.5 增补字段沿用协议 2。`metrics` 包含 `cpu`（0–100，保留一�
 `restart_pending=true` 提示节点拉取期望状态中的 `restart_id`。节点以 `restart_result:{id,error?}` 上报，省略 `error` 表示成功。
 失败使用配置同步中的适用错误码或 `interrupted`。主控只接受匹配当前待处理指令的结果，重放旧结果不影响新指令。
 冻结或退役的只读主控和验证候选地址的探测均不下发日志请求与重启指令。
+
+T9.6 期望状态 `exit` 只发给已经报告协议 3+ 的参与节点。同一个节点可以同时收到
+`outgoing:{id,revision,address,port,password,mode,failure,rules}` 和
+`incoming:[{id,source,port,password}]`。`address` 是出口公网 IP，`source` 是入口公网 IP。
+字段缺失表示没有相应方向的链路。节点将该字段与用户入站镜像一起生效。管理页面、公开订阅和预览均不传链路凭证。
+
+协议 3+ 节点识别主控支持后，心跳可添 `exit:{probe?,usage?,ports?}`。`probe` 包含
+`{id,revision,checked_at,failures,available,policy_down?}`。`checked_at` 为 UTC Unix 秒，
+`available` 是已经确认的探测结果，`policy_down` 表示入口已应用故障路由。主控只接收签名身份属于当前入口、
+版本匹配且时间更新的结果。`usage:{up,down}` 是作为出口的非负累计字节，重试保留各方向的最高值。
+`ports` 为 1250 字节位图，经 zlib 压缩后用无填充标准 Base64 编码，表示 20000–29999 中在 TCP 或 UDP 上监听的端口。
+位序从字节 0 最低位开始。与协议 2 主控联系时不发送该字段，收到严格解码 400 时会去掉它重试。
+
+曾参与出口链路的节点被移除后，原公钥只能用于验证心跳并回复 `410 exit_server_removed`。
+节点据此在本机生效空出口镜像并清理相应防火墙。该身份访问其他节点接口仍返回 401。
 
 ### T9.5 服务器详情与概览
 
@@ -357,6 +372,31 @@ T9.5 增补字段沿用协议 2。`metrics` 包含 `cpu`（0–100，保留一�
   全局 `user_traffic` 合计所有用户当前周期，服务器占比用上传和下载之和计算。三个用户列表均最多 5 项，字段同上。
   用量榜按当期用量排序，到期榜按截止时间排序且限未来 72 小时内的启用用户，超额榜仅含启用且已达限额的用户。
   `unread`、`unread_count` 和 `recent` 沿用 T7.9 结构。
+
+### T9.6 出口服务器
+
+| 方法 | 路径 | 请求与成功响应 |
+|---|---|---|
+| GET | `/servers/{id}/exit` | 200 `{server_id,address,supported,link,candidates,forwarded}` |
+| PUT | `/servers/{id}/exit` | `{exit_server_id,mode?,failure?,rules?}`，204 |
+| DELETE | `/servers/{id}/exit` | 空请求体，停用此入口的出口，204 |
+| PUT | `/servers/{id}/exit-address` | `{address}`，保存此服务器的链路公网 IP，204 |
+
+- `id` 是入口服务器 ID。`link=null` 代表入口直连。非空记录返回保存的设置和内部端口 `port`，
+  最近确认的探测时间 `checked_at`（可为 null）及 `status`。状态为 `syncing`、`checking`、`available`、
+  `unavailable`（已阻断）、`fallback`（已回退）、`policy_pending`、`stale` 或 `upgrade_required`。
+- `mode` 为 `split`（默认）或 `all`。`failure` 为 `block`（默认）或 `direct`。`rules` 有
+  `presets`（`ai`、`streaming`）、`domains` 和 `domain_suffixes`（各最多 128 条）。输入规范化为小写，
+  去掉末尾的点和重复项。PUT 整体替换设置。`all` 保留规则以便切回 `split`；分流规则为空时全部直连。
+- `candidates` 排除本服务器和已移除服务器。每项包含 `{id,name,address,unavailable_reason?}`，原因可能为
+  `upgrade_required`、`pending`、`address_required`、`address_family` 或 `ports_pending`。
+  新链路的远程出口需在最近两分钟内上报端口。保存时重新检查两端身份、能力、公网地址和端口。
+  不满足条件返回 422，参数无效返回 400，端口用尽返回 409。全部接口需管理员会话，写操作检查 CSRF。
+- `address` 独立于订阅使用的 `public_host`，默认沿用已有公网 IP。IPv4 与 IPv6 需两端一致。
+  修改地址、换出口和停用均重新调和受影响两端。`X-Boxpanel-Apply` 沿用 `applied`、`queued` 或 `dev-db-only`。
+- `forwarded` 和 `GET /servers/{id}/traffic` 的可选 `exit_traffic` 为 `{up,down}`，单位字节，
+  汇总该出口向目标发送和收到的累计流量。已有充当出口记录的服务器才返回 `exit_traffic`。
+  此值不加到 `user_traffic` 或网卡计费中。通知事件增加 `exit_down`、`exit_recovered`，按入口和故障去重。
 
 ## 入站
 

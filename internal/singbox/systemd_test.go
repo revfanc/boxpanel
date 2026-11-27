@@ -118,6 +118,9 @@ func TestGenerateUnitsPathsAndCapabilities(t *testing.T) {
 		}
 	}
 	core := string(units[SingboxUnit])
+	if !strings.Contains(core, `ExecStartPre="/usr/local/bin/boxpanel" system exit-guard --singbox-config "/etc/boxpanel/sing-box.json"`) {
+		t.Fatal("core can start before its exit port guard")
+	}
 	if !strings.Contains(core, `ExecStart="/usr/local/share/boxpanel/sing-box" run -c "/etc/boxpanel/sing-box.json"`) || !strings.Contains(core, "LimitNOFILE=1048576") || !strings.Contains(core, "AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW") {
 		t.Fatal(core)
 	}

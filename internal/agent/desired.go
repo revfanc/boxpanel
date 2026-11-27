@@ -74,6 +74,19 @@ func (m *Master) Desired(ctx context.Context, identity authenticated) (Desired, 
 	if err != nil {
 		return out, err
 	}
+	var protocol int
+	if err := tx.QueryRowContext(ctx, "SELECT protocol FROM servers WHERE id=?", identity.id).Scan(&protocol); err != nil {
+		return out, fmt.Errorf("read desired exit capability: %w", err)
+	}
+	if protocol >= ExitProtocol {
+		exits, err := db.ServerExitConfig(ctx, tx, identity.id)
+		if err != nil {
+			return out, err
+		}
+		if !exits.Empty() {
+			out.Exit = &exits
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return out, fmt.Errorf("commit desired snapshot: %w", err)
 	}

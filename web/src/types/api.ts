@@ -145,6 +145,25 @@ export interface ServerTraffic {
   billing: ServerBilling
   user_traffic: CycleBytes
   users: TrafficUser[]
+  exit_traffic?: CycleBytes
+}
+export type ExitPreset = 'ai' | 'streaming'
+export type ExitFailure = 'block' | 'direct'
+export type ExitLinkStatus = 'syncing' | 'checking' | 'available' | 'unavailable' | 'fallback' | 'stale' | 'upgrade_required' | 'policy_pending'
+export type ExitUnavailable = 'upgrade_required' | 'pending' | 'address_required' | 'address_family' | 'ports_pending'
+export interface ExitSettings {
+  exit_server_id: number
+  mode: 'split' | 'all'
+  failure: ExitFailure
+  rules: { presets: ExitPreset[]; domains: string[]; domain_suffixes: string[] }
+}
+export interface ServerExit {
+  server_id: number
+  address: string
+  supported: boolean
+  link: (ExitSettings & { status: ExitLinkStatus; checked_at: number | null; port: number }) | null
+  candidates: { id: number; name: string; address: string; unavailable_reason?: ExitUnavailable }[]
+  forwarded: CycleBytes
 }
 export interface OverviewServer extends Server {
   system: ServerStatus
@@ -255,7 +274,7 @@ export type BillingMode = 'out' | 'both' | 'max' | 'in'
 export type NotificationChannel = 'bark' | 'server_chan' | 'telegram'
 export type AlertKind = 'user_quota_80' | 'user_quota_100' | 'user_expiring' | 'user_expired' | 'user_stopped'
   | 'server_quota_80' | 'server_quota_90' | 'server_quota_100' | 'certificate_warning' | 'core_down' | 'core_recovered'
-  | 'server_offline' | 'server_recovered'
+  | 'server_offline' | 'server_recovered' | 'exit_down' | 'exit_recovered'
 
 export interface AlertConfig {
   interface: string

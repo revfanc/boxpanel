@@ -143,6 +143,9 @@ func (n *Node) replaceMirror(ctx context.Context, tx *sql.Tx, desired Desired) e
 	if err := db.SetSetting(ctx, tx, db.BlockBittorrent, desired.Route.BlockBittorrent); err != nil {
 		return err
 	}
+	if err := replaceExitMirror(ctx, tx, desired.Exit); err != nil {
+		return err
+	}
 	return db.SetSetting(ctx, tx, db.AgentAppliedGeneration, desired.Generation)
 }
 

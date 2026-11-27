@@ -14,15 +14,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/revfanc/boxpanel/internal/certs"
 	"github.com/revfanc/boxpanel/internal/db"
+	"github.com/revfanc/boxpanel/internal/exitlink"
 )
 
-func TestHeartbeatDropsOnlyOptionalMonitoringForOlderProtocolTwoMaster(t *testing.T) {
+func TestHeartbeatDropsOptionalReportsForOlderProtocolTwoMaster(t *testing.T) {
 	var attempts atomic.Int32
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]json.RawMessage
@@ -31,15 +33,18 @@ func TestHeartbeatDropsOnlyOptionalMonitoringForOlderProtocolTwoMaster(t *testin
 			w.WriteHeader(400)
 			return
 		}
-		attempts.Add(1)
-		if string(body["protocol"]) != "2" || string(body["interfaces"]) != `["eth0"]` || r.Header.Get(HeaderSignature) == "" {
+		attempt := attempts.Add(1)
+		if string(body["protocol"]) != strconv.Itoa(ProtocolVersion) || string(body["interfaces"]) != `["eth0"]` || r.Header.Get(HeaderSignature) == "" {
 			t.Error("fallback removed existing heartbeat fields or authentication")
 		}
-		if body["metrics"] != nil {
+		if attempt == 1 && (body["exit"] == nil || body["metrics"] == nil) || attempt == 2 && (body["exit"] != nil || body["metrics"] == nil) {
+			t.Error("client did not drop the exit report first")
+		}
+		if body["exit"] != nil || body["metrics"] != nil {
 			w.WriteHeader(400)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(HeartbeatReply{Protocol: ProtocolVersion, DesiredGeneration: 7})
+		_ = json.NewEncoder(w).Encode(HeartbeatReply{Protocol: MinMasterProtocol, DesiredGeneration: 7})
 	}))
 	defer server.Close()
 	client, err := NewClient(server.URL, certs.SPKIPin(server.Certificate().RawSubjectPublicKeyInfo))
@@ -54,8 +59,9 @@ func TestHeartbeatDropsOnlyOptionalMonitoringForOlderProtocolTwoMaster(t *testin
 	reply, err := client.SyncHeartbeat(t.Context(), 2, key, Heartbeat{
 		Version: "test", Protocol: ProtocolVersion, Interfaces: []string{"eth0"},
 		Metrics: &Metrics{},
+		Exit:    &ExitReport{Usage: &exitlink.Totals{Up: 7}},
 	})
-	if err != nil || reply.Protocol != ProtocolVersion || reply.DesiredGeneration != 7 || attempts.Load() != 2 {
+	if err != nil || reply.Protocol != MinMasterProtocol || reply.DesiredGeneration != 7 || attempts.Load() != 3 {
 		t.Fatalf("optional heartbeat fields interrupted compatible sync: %+v, %v", reply, err)
 	}
 }
@@ -71,7 +77,7 @@ func TestLegacyMasterAllowsFallbackHeartbeatWithoutApplying(t *testing.T) {
 		}
 		switch r.URL.Path {
 		case Prefix + "/join":
-			if string(body["protocol"]) == "2" {
+			if body["protocol"] != nil {
 				currentJoins.Add(1)
 				w.WriteHeader(http.StatusBadRequest)
 				return

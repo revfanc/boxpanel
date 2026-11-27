@@ -12,7 +12,7 @@ export function ServerTrafficTab({ server }: { server: Server }) {
   const query = useQuery(serverTrafficQuery(server.id))
   if (query.isPending) return <Loading />
   if (query.isError && !query.data) return <ErrorNotice error={query.error} retry={() => { void query.refetch() }} />
-  const { billing, user_traffic: usage, users } = query.data
+  const { billing, user_traffic: usage, users, exit_traffic: forwarded } = query.data
   return <>
     {query.isError && <ErrorNotice error={query.error} retry={() => { void query.refetch() }} />}
     <div className="grid min-w-0 gap-4 xl:grid-cols-2">
@@ -22,6 +22,10 @@ export function ServerTrafficTab({ server }: { server: Server }) {
         <p className="text-sm text-muted-foreground">{t.users.upload} {bytes(usage.up)} · {t.users.download} {bytes(usage.down)}</p>
         {server.is_local && <p className="text-sm text-muted-foreground">{t.users.trafficByServerHint}</p>}
       </Panel>
+      {forwarded && <Panel title={t.exitServers.forwarded} hint={t.exitServers.forwardedHint}>
+        <p className="text-2xl font-semibold tabular-nums">{bytes(forwarded.up + forwarded.down)}</p>
+        <p className="text-sm text-muted-foreground">{t.users.upload} {bytes(forwarded.up)} · {t.users.download} {bytes(forwarded.down)}</p>
+      </Panel>}
     </div>
     <Panel title={t.users.usageByUser}>
       {users.length === 0 ? <Empty>{t.servers.noTraffic}</Empty> :

@@ -255,14 +255,14 @@ type nftRuleset struct {
 func (r nftRuleset) inputs() []nftObject {
 	restricts := map[[3]string]bool{}
 	for _, obj := range r.NFTables {
-		if rule := obj.Rule; rule != nil && !strings.HasPrefix(rule.Comment, "boxpanel:") && dropsTraffic(rule.Expr) {
+		if rule := obj.Rule; rule != nil && rule.Table != exitTable && !strings.HasPrefix(rule.Comment, "boxpanel:") && dropsTraffic(rule.Expr) {
 			restricts[[3]string{rule.Family, rule.Table, rule.Chain}] = true
 		}
 	}
 	chains := []nftObject{}
 	for _, obj := range r.NFTables {
 		c := obj.Chain
-		if c != nil && c.Table != TrafficTable && c.Hook == "input" && c.Type == "filter" && (c.Family == "inet" || c.Family == "ip" || c.Family == "ip6") &&
+		if c != nil && c.Table != TrafficTable && c.Table != exitTable && c.Hook == "input" && c.Type == "filter" && (c.Family == "inet" || c.Family == "ip" || c.Family == "ip6") &&
 			(c.Policy == "drop" || restricts[[3]string{c.Family, c.Table, c.Name}]) {
 			chains = append(chains, *c)
 		}

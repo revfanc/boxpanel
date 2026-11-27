@@ -39,6 +39,9 @@ func (a *api) resourceError(w http.ResponseWriter, err error) {
 		if e.code == "reality_target_unavailable" {
 			message = "没有检测到合适的 Reality 目标"
 		}
+		if strings.HasPrefix(e.code, "exit_") {
+			message = "暂时无法配置出口服务器"
+		}
 		writeJSON(w, e.status, map[string]any{"error": map[string]string{"code": e.code, "message": message, "hint": e.hint, "detail": e.field}})
 	case errors.Is(err, sql.ErrNoRows):
 		writeError(w, 404, "not_found", "记录不存在", "请刷新列表并选择仍然存在的记录。")

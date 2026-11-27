@@ -31,13 +31,15 @@ type inboundConfig struct {
 	Tag                   string       `json:"tag"`
 	Listen                string       `json:"listen"`
 	ListenPort            int          `json:"listen_port"`
-	Users                 []serverUser `json:"users"`
+	Users                 []serverUser `json:"users,omitzero"`
 	UpMbps                int          `json:"up_mbps,omitempty"`
 	DownMbps              int          `json:"down_mbps,omitempty"`
 	IgnoreClientBandwidth bool         `json:"ignore_client_bandwidth,omitempty"`
 	Obfs                  *obfsConfig  `json:"obfs,omitempty"`
-	TLS                   tlsConfig    `json:"tls"`
+	TLS                   *tlsConfig   `json:"tls,omitempty"`
 	Masquerade            *masquerade  `json:"masquerade,omitempty"`
+	Method                string       `json:"method,omitempty"`
+	Password              string       `json:"password,omitempty"`
 }
 
 // masquerade is the sing-box 1.11+ object form (type proxy: url, rewrite_host).
@@ -81,9 +83,14 @@ type handshakeConfig struct {
 }
 
 type outboundConfig struct {
-	RoutingMark uint32 `json:"routing_mark,omitempty"`
-	Type        string `json:"type"`
-	Tag         string `json:"tag"`
+	RoutingMark    uint32 `json:"routing_mark,omitempty"`
+	Type           string `json:"type"`
+	Tag            string `json:"tag"`
+	Server         string `json:"server,omitempty"`
+	ServerPort     int    `json:"server_port,omitempty"`
+	Method         string `json:"method,omitempty"`
+	Password       string `json:"password,omitempty"`
+	ConnectTimeout string `json:"connect_timeout,omitempty"`
 }
 
 type routeConfig struct {
@@ -93,12 +100,20 @@ type routeConfig struct {
 }
 
 type routeRule struct {
-	AuthUser    []string `json:"auth_user,omitempty"`
-	Outbound    string   `json:"outbound,omitempty"`
-	Protocol    string   `json:"protocol,omitempty"`
-	IPIsPrivate bool     `json:"ip_is_private,omitempty"`
-	Action      string   `json:"action"`
-	Server      string   `json:"server,omitempty"`
+	AuthUser    []string    `json:"auth_user,omitempty"`
+	Outbound    string      `json:"outbound,omitempty"`
+	Protocol    string      `json:"protocol,omitempty"`
+	IPIsPrivate bool        `json:"ip_is_private,omitempty"`
+	Action      string      `json:"action,omitempty"`
+	Server      string      `json:"server,omitempty"`
+	Inbound     []string    `json:"inbound,omitempty"`
+	SourceIP    []string    `json:"source_ip_cidr,omitempty"`
+	Invert      bool        `json:"invert,omitempty"`
+	Type        string      `json:"type,omitempty"`
+	Mode        string      `json:"mode,omitempty"`
+	Rules       []routeRule `json:"rules,omitempty"`
+	Domain      []string    `json:"domain,omitempty"`
+	Suffix      []string    `json:"domain_suffix,omitempty"`
 }
 
 type experimentalConfig struct {

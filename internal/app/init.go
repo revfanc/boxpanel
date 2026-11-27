@@ -157,6 +157,15 @@ func Initialize(ctx context.Context, opts InitOptions) (InitResult, error) {
 	if err := db.SetSetting(ctx, tx, db.WebPort, port); err != nil {
 		return result, err
 	}
+	if !opts.Dev {
+		local, err := db.LocalServerID(ctx, tx)
+		if err != nil {
+			return result, err
+		}
+		if err := db.SetExitAddress(ctx, tx, local, ip.Unmap().String()); err != nil {
+			return result, err
+		}
+	}
 	if err := db.SetSetting(ctx, tx, db.SetupCompleted, false); err != nil {
 		return result, err
 	}

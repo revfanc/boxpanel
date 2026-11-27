@@ -15,9 +15,10 @@ import (
 // Plan contains service ports, UDP redirects and traffic user IDs, never credentials.
 // Previous is the last successful plan (plus any interrupted attempt).
 type Plan struct {
-	Ports        []Port  `json:"ports"`
-	Hops         []Hop   `json:"hops"`
-	TrafficUsers []int64 `json:"traffic_users,omitempty"`
+	Ports        []Port     `json:"ports"`
+	Hops         []Hop      `json:"hops"`
+	TrafficUsers []int64    `json:"traffic_users,omitempty"`
+	ExitPorts    []ExitPort `json:"exit_ports,omitempty"`
 }
 type Port struct {
 	Port  int    `json:"port"`
@@ -63,7 +64,32 @@ func (p Plan) Validate() error {
 			}
 		}
 	}
+	seenExit := map[int]bool{}
+	for _, exit := range p.ExitPorts {
+		if !exit.valid() || seenExit[exit.Port] {
+			return fmt.Errorf("invalid or duplicate restricted exit port; repair exit settings")
+		}
+		seenExit[exit.Port] = true
+		for _, port := range p.Ports {
+			if port.Port == exit.Port {
+				return fmt.Errorf("exit port overlaps a user service port")
+			}
+		}
+		for _, hop := range p.Hops {
+			if exit.Port >= hop.Start && exit.Port <= hop.End {
+				return fmt.Errorf("exit port overlaps a UDP hopping range")
+			}
+		}
+	}
 	return nil
+}
+
+func (p Plan) servicePorts() []Port {
+	ports := slices.Clone(p.Ports)
+	for _, exit := range p.ExitPorts {
+		ports = append(ports, Port{exit.Port, "tcp"}, Port{exit.Port, "udp"})
+	}
+	return ports
 }
 
 func (m *Manager) Sync(ctx context.Context, previous, desired Plan) error {
@@ -80,6 +106,12 @@ func (m *Manager) Sync(ctx context.Context, previous, desired Plan) error {
 	if m.noop {
 		return nil
 	}
+	exitChanged := len(previous.ExitPorts) > 0 || len(desired.ExitPorts) > 0
+	if len(desired.ExitPorts) > 0 {
+		if err := m.syncExit(ctx, MergeExitPorts(previous.ExitPorts, desired.ExitPorts), true); err != nil {
+			return err
+		}
+	}
 	if err := m.syncHops(ctx, previous, desired); err != nil {
 		return fmt.Errorf("synchronize UDP hopping (check nftables/iptables privileges, then retry): %w", err)
 	}
@@ -88,17 +120,21 @@ func (m *Manager) Sync(ctx context.Context, previous, desired Plan) error {
 			return fmt.Errorf("synchronize traffic counters (install nftables and check NET_ADMIN privileges, then retry): %w", err)
 		}
 	}
-	for _, port := range desired.Ports {
+	services := desired.servicePorts()
+	for _, port := range services {
 		if err := m.changeLocked(ctx, port.Port, port.Proto, true); err != nil {
 			return err
 		}
 	}
-	for _, port := range previous.Ports {
-		if !slices.Contains(desired.Ports, port) {
+	for _, port := range previous.servicePorts() {
+		if !slices.Contains(services, port) {
 			if err := m.changeLocked(ctx, port.Port, port.Proto, false); err != nil {
 				return err
 			}
 		}
+	}
+	if exitChanged && !slices.Equal(MergeExitPorts(previous.ExitPorts, desired.ExitPorts), desired.ExitPorts) {
+		return m.syncExit(ctx, desired.ExitPorts, true)
 	}
 	return nil
 }

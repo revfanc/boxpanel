@@ -5,6 +5,7 @@ import "fmt"
 
 const Base uint32 = 0xb7000000
 const MaxUserID int64 = 0x00ffffff
+const ExitForward uint32 = Base
 
 func User(id int64) (uint32, error) {
 	if id <= 0 || id > MaxUserID {

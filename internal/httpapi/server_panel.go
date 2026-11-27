@@ -10,6 +10,7 @@ import (
 
 	"github.com/revfanc/boxpanel/internal/agent"
 	"github.com/revfanc/boxpanel/internal/alerts"
+	"github.com/revfanc/boxpanel/internal/exitlink"
 	"github.com/revfanc/boxpanel/internal/singbox"
 	"github.com/revfanc/boxpanel/internal/sysinfo"
 )
@@ -17,6 +18,10 @@ import (
 func (a *api) registerServerPanel(register func(string, string, http.HandlerFunc, bool)) {
 	register("GET", "/api/v1/overview", a.panelOverview, true)
 	register("GET", "/api/v1/servers/{id}", a.serverGet, true)
+	register("GET", "/api/v1/servers/{id}/exit", a.serverExit, true)
+	register("PUT", "/api/v1/servers/{id}/exit", a.saveServerExit, true)
+	register("DELETE", "/api/v1/servers/{id}/exit", a.deleteServerExit, true)
+	register("PUT", "/api/v1/servers/{id}/exit-address", a.saveExitAddress, true)
 	register("GET", "/api/v1/servers/{id}/status", a.serverStatus, true)
 	register("GET", "/api/v1/servers/{id}/traffic", a.serverTraffic, true)
 	register("GET", "/api/v1/servers/{id}/alerts", a.serverAlertSettings, true)
@@ -217,12 +222,17 @@ func (a *api) serverTraffic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	var local bool
-	if err := tx.QueryRowContext(ctx, "SELECT is_local FROM servers WHERE id=? AND status<>'removed'", id).Scan(&local); err != nil {
+	var local, usedAsExit bool
+	var forwarded exitlink.Totals
+	if err := tx.QueryRowContext(ctx, `SELECT is_local,exit_served,exit_traffic_up,exit_traffic_down
+		FROM servers WHERE id=? AND status<>'removed'`, id).Scan(&local, &usedAsExit, &forwarded.Up, &forwarded.Down); err != nil {
 		a.resourceError(w, fmt.Errorf("read server traffic owner: %w", err))
 		return
 	}
 	result := serverTrafficView{ServerID: id, Users: []trafficUser{}}
+	if usedAsExit {
+		result.ExitTraffic = &forwarded
+	}
 	result.Billing, err = a.opts.Alerts.ReadBilling(ctx, tx, id)
 	if err != nil {
 		alertError(w, err)
@@ -248,8 +258,9 @@ func (a *api) serverTraffic(w http.ResponseWriter, r *http.Request) {
 }
 
 type serverTrafficView struct {
-	ServerID    int64          `json:"server_id"`
-	Billing     alerts.Billing `json:"billing"`
-	UserTraffic cycleBytes     `json:"user_traffic"`
-	Users       []trafficUser  `json:"users"`
+	ServerID    int64            `json:"server_id"`
+	Billing     alerts.Billing   `json:"billing"`
+	UserTraffic cycleBytes       `json:"user_traffic"`
+	Users       []trafficUser    `json:"users"`
+	ExitTraffic *exitlink.Totals `json:"exit_traffic,omitempty"`
 }

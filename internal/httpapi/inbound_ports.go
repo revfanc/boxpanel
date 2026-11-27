@@ -9,6 +9,7 @@ import (
 
 	"github.com/revfanc/boxpanel/internal/confgen"
 	"github.com/revfanc/boxpanel/internal/db"
+	"github.com/revfanc/boxpanel/internal/exitlink"
 	"github.com/revfanc/boxpanel/internal/sysinfo"
 )
 
@@ -23,6 +24,7 @@ type portReservations struct {
 	reserved    map[int]bool
 	controlPort int // Clash API is TCP; Hysteria2 UDP may share its number.
 	sockets     map[sysinfo.Socket]bool
+	exitPorts   []int
 }
 
 func (a *api) inboundReservations(ctx context.Context, q inboundQuery, sockets map[sysinfo.Socket]bool, server inboundServer) (portReservations, error) {
@@ -56,6 +58,21 @@ func (a *api) inboundReservations(ctx context.Context, q inboundQuery, sockets m
 	if err := rows.Err(); err != nil {
 		return p, fmt.Errorf("read port reservations: %w", err)
 	}
+	exits, err := q.QueryContext(ctx, "SELECT port FROM exit_links WHERE exit_id=? ORDER BY port", server.id)
+	if err != nil {
+		return p, fmt.Errorf("read exit port reservations: %w", err)
+	}
+	defer exits.Close()
+	for exits.Next() {
+		var port int
+		if err := exits.Scan(&port); err != nil {
+			return p, fmt.Errorf("scan exit port reservation: %w", err)
+		}
+		p.exitPorts = append(p.exitPorts, port)
+	}
+	if err := exits.Err(); err != nil {
+		return p, fmt.Errorf("read exit port reservations: %w", err)
+	}
 	return p, nil
 }
 func hopping(in inboundRecord) confgen.PortHopping {
@@ -72,7 +89,8 @@ func (p portReservations) check(in inboundRecord) error {
 	portErr := func() error {
 		return conflict("port_in_use", "port", "请更换服务端口或跳跃范围，避开面板、控制接口、已有入站及其他程序占用的端口。")
 	}
-	if p.reserved[in.Port] || in.Protocol == "vless_reality" && in.Port == p.controlPort {
+	internal := in.Protocol == "shadowsocks"
+	if p.reserved[in.Port] || in.Protocol != "hysteria2" && in.Port == p.controlPort {
 		return portErr()
 	}
 	proto := "tcp"
@@ -82,6 +100,11 @@ func (p portReservations) check(in inboundRecord) error {
 	owned := false
 	oldUDPPort := 0
 	h := hopping(in)
+	for _, port := range p.exitPorts {
+		if port == in.Port || containsPort(h, port) {
+			return portErr()
+		}
+	}
 	for _, old := range p.inbounds {
 		if old.ID == in.ID {
 			owned = old.Enabled && old.Port == in.Port && old.Protocol == in.Protocol
@@ -96,6 +119,9 @@ func (p portReservations) check(in inboundRecord) error {
 		if old.Port == in.Port {
 			return portErr()
 		}
+		if internal && containsPort(hopping(old), in.Port) {
+			return portErr()
+		}
 		if !in.Enabled || in.Protocol != "hysteria2" || !old.Enabled || old.Protocol != "hysteria2" {
 			continue
 		}
@@ -107,6 +133,9 @@ func (p portReservations) check(in inboundRecord) error {
 	if in.Enabled && !owned && p.sockets[sysinfo.Socket{Port: in.Port, Proto: proto}] {
 		return portErr()
 	}
+	if internal && p.sockets[sysinfo.Socket{Port: in.Port, Proto: "udp"}] {
+		return portErr()
+	}
 	if h.Enabled {
 		for socket := range p.sockets {
 			if socket.Proto == "udp" && socket.Port != in.Port && socket.Port != oldUDPPort && containsPort(h, socket.Port) {
@@ -115,6 +144,17 @@ func (p portReservations) check(in inboundRecord) error {
 		}
 	}
 	return nil
+}
+
+func (p portReservations) suggestExit() (int, error) {
+	in := inboundRecord{Protocol: "shadowsocks", Enabled: true}
+	for port := exitlink.PortFirst; port <= exitlink.PortLast; port++ {
+		in.Port = port
+		if p.check(in) == nil {
+			return port, nil
+		}
+	}
+	return 0, conflict("port_in_use", "port", "出口机没有可用的内部端口，请释放 20000–29999 范围内的端口或缩小端口跳跃范围后重试。")
 }
 func (p portReservations) suggest(protocol string) (int, error) {
 	preferred := 443

@@ -123,7 +123,8 @@ shellcheck scripts/*.sh
 | `boxpanel apply` | 重新生成并生效 sing-box 配置 |
 | `boxpanel version` | |
 | `boxpanel system firewall-open` | 读取 DB 面板端口并用既有防火墙适配器放行，记录可重放/清理的端口 |
-| `boxpanel system firewall-cleanup` | 两个服务已停止时清理受管端口和跳跃规则；保留 DB/配置/恢复记录 |
+| `boxpanel system firewall-cleanup` | 两个服务已停止时清理受管端口、跳跃规则和出口规则；保留 DB/配置/恢复记录 |
+| `boxpanel system exit-guard` | systemd 启动 sing-box 前，从当前配置恢复出口端口的 nftables 公网源地址保护 |
 | `boxpanel system bbr` | 复用 sysinfo.EnableBBR，不在 shell 写 sysctl |
 | `boxpanel system ready` | 验证本机 HTTPS 认证接口已就绪，用于安装/更新存活检查 |
 
@@ -587,3 +588,12 @@ boxpanel set-master 'https://<新主控地址>:2053/<原面板路径>/'
 不支持迁移的旧节点可先升级至包含 T9.4 的版本，再执行 `set-master`。
 若旧主控已经失效，在新机使用最近的异机备份 `install.sh --restore`，IP 地址改变时运行 `boxpanel set-host <新IP>`，再对节点执行 `set-master`。
 恢复的数据截至备份时刻，已保存的各节点计数按现有协议补报。
+
+## 11. T9.6 出口链路部署
+
+出口需要 Linux nftables 和 NET_ADMIN。安装或更新脚本生成含 `ExecStartPre` 的 core 单元，开机或单独重启也能先恢复出口源地址规则。
+面板会显示为链路选出的端口。若出口 VPS 使用云安全组，按面板提示仅向入口的公网 IP 放行该 TCP 和 UDP 端口。
+
+主控移除出口链路的节点后，可让节点重连收到清理指令。无法恢复连接、准备退役或重新加入时，在该节点停止
+`boxpanel` 和 `boxpanel-singbox`，执行 `boxpanel system firewall-cleanup`，然后执行 `boxpanel leave`。
+使用自定义数据目录或内核配置路径时，给清理命令传入相同路径参数。

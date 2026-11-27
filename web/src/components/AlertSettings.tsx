@@ -20,7 +20,7 @@ import type { AlertConfig, ServerAlertSettings, AlertKind, NotificationChannel, 
 const a = t.alerts
 const eventKinds = Object.keys(a.event) as AlertKind[]
 const billingEvents: AlertKind[] = ['server_quota_80', 'server_quota_90', 'server_quota_100']
-const globalEvents = eventKinds.filter((kind) => !billingEvents.includes(kind) && kind !== 'server_recovered')
+const globalEvents = eventKinds.filter((kind) => !billingEvents.includes(kind) && kind !== 'server_recovered' && kind !== 'exit_recovered')
 const channelKinds = ['bark', 'server_chan', 'telegram'] as const
 const billingModes = ['out', 'both', 'max', 'in'] as const
 const configSchema = z.object({
@@ -156,7 +156,7 @@ function NotificationEvents({ initial }: { initial: AlertConfig['events'] }) {
       })
     })}>
       <fieldset disabled={operation.pending} className="grid gap-2 sm:grid-cols-2">
-        {globalEvents.map((kind) => <Toggle key={kind} label={kind === 'server_offline' ? a.offlineNotifications : a.event[kind]}
+        {globalEvents.map((kind) => <Toggle key={kind} label={kind === 'server_offline' ? a.offlineNotifications : kind === 'exit_down' ? a.exitNotifications : a.event[kind]}
           checked={events[kind] ?? true} onChange={(checked) => form.setValue(`events.${kind}`, checked, { shouldDirty: true })} />)}
       </fieldset>
       <Submit pending={operation.pending} label={a.saveEvents} />

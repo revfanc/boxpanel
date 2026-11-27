@@ -12,6 +12,7 @@ import (
 
 	"github.com/revfanc/boxpanel/internal/db"
 	"github.com/revfanc/boxpanel/internal/singbox"
+	"github.com/revfanc/boxpanel/internal/sysinfo"
 	"github.com/revfanc/boxpanel/internal/traffic"
 )
 
@@ -33,7 +34,8 @@ type Node struct {
 	// automatic upgrade; it must return quickly and never stop the sync.
 	Upgrade func(context.Context, HeartbeatReply)
 	// ReadLogs provides redacted journal lines after an acknowledged cursor.
-	ReadLogs func(context.Context, string, int) ([]string, string, error)
+	ReadLogs  func(context.Context, string, int) ([]string, string, error)
+	ExitPorts func(context.Context) (map[sysinfo.Socket]bool, error)
 
 	syncError              string
 	published              map[int64]InboundKeys
@@ -41,6 +43,7 @@ type Node struct {
 	interfaceEndpointReady bool
 	interfacePreference    *string
 	logs                   nodeLogs
+	exitCapable            bool
 }
 
 // Sync is called serially by the heartbeat loop. An unreachable master leaves
@@ -51,10 +54,20 @@ func (n *Node) Sync(ctx context.Context, beat Heartbeat, coreActive func() bool)
 		return err
 	}
 	beat.Protocol, beat.AppliedGeneration, beat.SyncError = ProtocolVersion, &applied, n.syncError
+	if n.exitCapable {
+		beat.Exit = n.exitReport(ctx)
+	}
 	reply, err := n.connect(ctx, beat)
+	if errors.Is(err, ErrExitRemoved) {
+		if err := n.clearRemovedExit(ctx); err != nil {
+			return err
+		}
+		return ErrUnauthorized
+	}
 	if err != nil {
 		return err
 	}
+	n.exitCapable = reply.Protocol >= ExitProtocol
 	n.syncLogs(ctx, reply)
 	if reply.ReadOnly {
 		return nil

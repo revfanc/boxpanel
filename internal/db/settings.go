@@ -186,6 +186,16 @@ func SetSetting[T any](ctx context.Context, conn SettingsDB, key SettingKey[T], 
 	return nil
 }
 
+func DeleteSetting[T any](ctx context.Context, conn SettingsDB, key SettingKey[T]) error {
+	if key.name == "" {
+		return fmt.Errorf("delete setting: use a predefined setting key")
+	}
+	if _, err := conn.ExecContext(ctx, "DELETE FROM settings WHERE key=?", key.name); err != nil {
+		return fmt.Errorf("delete setting %q: %w", key.name, err)
+	}
+	return nil
+}
+
 // SetupChoices contains only onboarding preferences, never credentials.
 type SetupChoices struct {
 	Domain    string `json:"domain"`

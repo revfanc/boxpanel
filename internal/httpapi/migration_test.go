@@ -23,7 +23,9 @@ import (
 	"github.com/revfanc/boxpanel/internal/auth"
 	"github.com/revfanc/boxpanel/internal/backup"
 	"github.com/revfanc/boxpanel/internal/db"
+	"github.com/revfanc/boxpanel/internal/exitlink"
 	"github.com/revfanc/boxpanel/internal/migration"
+	"github.com/revfanc/boxpanel/internal/singbox"
 )
 
 func migrationTLS(t *testing.T, handler http.Handler, dir string) *httptest.Server {
@@ -85,6 +87,15 @@ func TestMasterMigrationLifecycleOverHTTPS(t *testing.T) {
 	defer edge.Close()
 	offline, _ := joinTestNode(t, oldMaster, oldClient, oldURL, pin, "offline", "8.8.4.4")
 	original := edge.Master
+	entryKey, err := exitlink.NewPassword()
+	must(err)
+	exitKey, err := exitlink.NewPassword()
+	must(err)
+	must(db.SetExitAddress(ctx, old, 1, "9.9.9.8"))
+	_, err = old.Exec(`INSERT INTO exit_links (entry_id,exit_id,port,password,mode,failure,rules)
+		VALUES (?,1,20010,?,'all','block','{}'),(1,?,20011,?,'split','direct','{"presets":["ai"]}')`,
+		original.ServerID, entryKey, original.ServerID, exitKey)
+	must(err)
 	const insertUser = `INSERT INTO users (id,name,uuid,password,sub_token,created_at,all_servers,traffic_epoch) VALUES
 		(1,'alice','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','node-password','test-subscription-token',0,0,1)`
 	_, err = old.Exec(insertUser)
@@ -181,6 +192,16 @@ func TestMasterMigrationLifecycleOverHTTPS(t *testing.T) {
 	if loadedID != original.ServerID || key != original.PublicKey || token != "test-subscription-token" {
 		t.Fatal("snapshot did not retain node identity and subscription access")
 	}
+	exits, err := db.ReadLocalExit(ctx, newReader)
+	must(err)
+	if exits.Outgoing == nil || exits.Outgoing.Password != exitKey || exits.Outgoing.Port != 20011 ||
+		len(exits.Incoming) != 1 || exits.Incoming[0].Password != entryKey || exits.Incoming[0].Port != 20010 {
+		t.Fatal("migration lost private exit credentials or port allocations")
+	}
+	var exitFirewall resourceFirewall
+	edge.Manager, err = singbox.NewManager(edge.Writer, singbox.ApplyOptions{OS: "linux", Config: filepath.Join(t.TempDir(), "edge.json"),
+		Runner: &resourceRunner{}, Firewall: &exitFirewall})
+	must(err)
 	receiver := &migration.Service{DB: next, ReadDB: newReader, DataDir: stage, Pin: pin, Version: grant.Version, Signer: certificates.FallbackSigner()}
 	authTarget, err := auth.New(next, nil)
 	must(err)
@@ -221,6 +242,13 @@ func TestMasterMigrationLifecycleOverHTTPS(t *testing.T) {
 	must(err)
 	if switched.MasterURL != newURL || !switched.SameIdentity(original) || len(switched.AlternateURLs) != 1 || switched.AlternateURLs[0] != oldURL {
 		t.Fatal("automatic migration did not persist priority and the previous master")
+	}
+	mirror, err := db.GetSetting(ctx, edge.Reader, db.AgentExit)
+	must(err)
+	if mirror.Outgoing == nil || mirror.Outgoing.Address != "9.9.9.9" || mirror.Outgoing.Password != entryKey || mirror.Outgoing.Version != 2 ||
+		len(mirror.Incoming) != 1 || mirror.Incoming[0].Source != "9.9.9.9" || mirror.Incoming[0].Password != exitKey ||
+		len(exitFirewall.plan.ExitPorts) != 1 || exitFirewall.plan.ExitPorts[0].Source != "9.9.9.9" {
+		t.Fatal("node did not reconcile both ends with the new primary address")
 	}
 	assertTotals := func(conn *sql.DB, up, down, samples int64) {
 		t.Helper()

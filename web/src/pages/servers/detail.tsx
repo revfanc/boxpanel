@@ -12,6 +12,7 @@ import { zhCN as t } from '@/i18n/zh-CN'
 import { ServerStatusTab } from './status'
 import { ServerTrafficTab } from './traffic'
 import { ServerLogsTab } from './logs'
+import { ServerExitTab } from './exit'
 
 function ServerDetail({ id }: { id: number }) {
   const query = useQuery(serverQuery(id))
@@ -22,6 +23,7 @@ function ServerDetail({ id }: { id: number }) {
       <PageTabs key={id} label={t.servers.detail} tabs={[
         { id: 'status', label: t.servers.tabs.status, content: <ServerStatusTab server={server} /> },
         { id: 'inbounds', label: t.servers.tabs.inbounds, content: <ServerInbounds server={server} /> },
+        { id: 'exit', label: t.servers.tabs.exit, content: <ServerExitTab serverID={id} /> },
         { id: 'traffic', label: t.servers.tabs.traffic, content: <ServerTrafficTab server={server} /> },
         { id: 'alerts', label: t.servers.tabs.alerts, content: <ServerAlertPanel serverID={id} /> },
         { id: 'logs', label: t.servers.tabs.logs, content: <ServerLogsTab server={server} /> },

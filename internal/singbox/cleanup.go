@@ -64,5 +64,10 @@ func (m *Manager) CleanupFirewall(ctx context.Context) error {
 	if err := m.firewall.Sync(ctx, previous, firewall.Plan{}); err != nil {
 		return fmt.Errorf("clean managed firewall rules (keep files and retry uninstall): %w", err)
 	}
+	if guard, ok := m.firewall.(exitFirewall); ok {
+		if err := guard.PurgeExit(ctx); err != nil {
+			return fmt.Errorf("clean exit counters: %w", err)
+		}
+	}
 	return nil
 }

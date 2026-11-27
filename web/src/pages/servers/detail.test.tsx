@@ -6,7 +6,7 @@ import { serverStatusQuery } from '@/lib/resources'
 import { zhCN as t } from '@/i18n/zh-CN'
 import type { RestartState } from '@/types/api'
 
-it.each([server, edge])('uses the same five tabs and server scope for $name', async (target) => {
+it.each([server, edge])('uses the same tabs and server scope for $name', async (target) => {
   const path = '/servers/' + target.id
   const local = target.is_local
   const scoped = { ...inbound, id: 9, server_id: target.id, remark: 'Scoped inbound' }
