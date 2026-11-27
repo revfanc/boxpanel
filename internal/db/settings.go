@@ -50,6 +50,7 @@ var (
 	AgentTrafficEpoch      = SettingKey[int64]{"agent_traffic_epoch"}
 	AgentTrafficCheckpoint = SettingKey[TrafficCheckpoint]{"agent_traffic_checkpoint"}
 	AgentInterfaceAck      = SettingKey[int64]{"agent_interface_ack"}
+	MasterUpgradeTarget    = SettingKey[string]{"master_upgrade_target"}
 	AgentUpgradeAttempt    = SettingKey[UpgradeAttempt]{"agent_upgrade_attempt"}
 )
 

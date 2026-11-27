@@ -232,7 +232,7 @@ func (a *api) serverRename(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if local && input.AutoUpgrade != nil {
-			a.resourceError(w, invalid("auto_upgrade", "主控请用 install.sh update 升级；自动升级只用于远端服务器。"))
+			a.resourceError(w, invalid("auto_upgrade", "请在主控的「状态」页点击「升级主控」。自动跟随升级仅用于远端服务器。"))
 			return
 		}
 	}
