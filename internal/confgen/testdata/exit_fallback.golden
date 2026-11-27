@@ -73,6 +73,13 @@
         "action": "reject"
       },
       {
+        "ip_is_private": true,
+        "action": "reject",
+        "inbound": [
+          "vless-reality-443"
+        ]
+      },
+      {
         "action": "resolve",
         "server": "dns-local"
       },

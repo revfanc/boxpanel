@@ -623,13 +623,14 @@ Linux root+nft+ip+unshare 在私有 network namespace 做真实双栈 TCP/UDP �
 
 1. 对每个内部入站使用逻辑 AND 规则。第一项匹配 `inbound` 标签，第二项反匹配入口公网 IP 的 `source_ip_cidr`
    （IPv4 用 /32，IPv6 用 /128）。命中即 `reject`。
-2. 依次执行既有 `sniff`、可选 BitTorrent `reject`、`resolve` 和 `ip_is_private` 拒绝。出口重复执行这些保护。
-3. 通过保护的内部入站只走带出口统计标记的 `direct`。它不参与用户分流，也不会走另一条出口链路。
-4. 入口对用户入站按 `auth_user` 匹配，每个用户的出口 Shadowsocks 出站和直连出站使用同一个 `routing_mark`。
-   分流模式用 `domain` / `domain_suffix` 匹配管理员设置的精确域名、自定义后缀及内置预设。
-   全部模式省略域名字段。未匹配的用户从自己的标记出站直连，最终路由仍为 `direct`。
-5. 确认故障后，阻断策略把第 4 步的匹配项切换至 `reject`，回退策略让匹配项使用原用户直连。
-   只有已匹配出口规则的用户流量受故障策略影响。每次切换继续使用完整的生效和回滚流程。
+2. 两端都执行 `sniff` 和可选的 BitTorrent `reject`。配置了出口的入口还会拒绝用户直接指定的私有 IP。
+3. 入口在本机 `resolve` 之前按用户入站及 `auth_user` 匹配出口规则。分流用 `domain` / `domain_suffix`
+   匹配精确域名和后缀，全部模式省略域名条件。命中的域名原样通过 Shadowsocks 交给出口。
+   出口故障且策略为阻断时，入口在这一步拒绝匹配的请求。
+4. 本机出网前执行 `resolve`，再用 `ip_is_private` 拒绝私有目标。出口用自己的 DNS 解析内部入站交来的域名，
+   检查通过后走带出口统计标记的 `direct`。内部入站始终只转发一跳。
+5. 分流未命中或故障后回退直连的请求由入口解析、检查，再走该用户的直连出站。
+   用户直连及 Shadowsocks 出站使用同一个 `routing_mark`，最终路由仍为 `direct`。
 
 [sing-box 路由规则](https://sing-box.sagernet.org/configuration/route/rule/) ·
 [路由动作](https://sing-box.sagernet.org/configuration/route/rule_action/) ·
@@ -643,3 +644,4 @@ Linux root+nft+ip+unshare 在私有 network namespace 做真实双栈 TCP/UDP �
 AI 预设含 OpenAI、Anthropic 和 Gemini 等服务，流媒体预设含 Netflix 和 Disney+。内置域名通过 `domain_suffix` 展开，
 没有远程规则集下载。只有入口可取得的目标域名（请求地址或嗅探结果）参与匹配。
 `exit_split`、`exit_all`、`exit_blocked`、`exit_fallback` golden 覆盖规则顺序和标记，用锁定版 `sing-box check` 校验。
+`TestExitLoopback` 为同一域名在入口和出口配置不同的 DNS 答案，在回环网络验证 TCP 和 UDP 使用哪一端的解析结果，并检查私有目标拦截。

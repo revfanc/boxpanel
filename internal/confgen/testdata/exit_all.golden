@@ -83,12 +83,11 @@
         "action": "reject"
       },
       {
-        "action": "resolve",
-        "server": "dns-local"
-      },
-      {
         "ip_is_private": true,
-        "action": "reject"
+        "action": "reject",
+        "inbound": [
+          "vless-reality-443"
+        ]
       },
       {
         "auth_user": [
@@ -99,6 +98,14 @@
         "inbound": [
           "vless-reality-443"
         ]
+      },
+      {
+        "action": "resolve",
+        "server": "dns-local"
+      },
+      {
+        "ip_is_private": true,
+        "action": "reject"
       },
       {
         "auth_user": [

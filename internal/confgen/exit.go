@@ -10,21 +10,20 @@ import (
 	"github.com/revfanc/boxpanel/internal/fwmark"
 )
 
-func addExitInbounds(cfg *config, incoming []exitlink.Inbound, opts Options, tags map[string]bool, ports map[int]bool) error {
+func addExitInbounds(cfg *config, incoming []exitlink.Inbound, opts Options, tags map[string]bool, ports map[int]bool) ([]string, error) {
 	if len(incoming) == 0 {
-		return nil
+		return nil, nil
 	}
 	incoming = slices.Clone(incoming)
 	slices.SortFunc(incoming, func(a, b exitlink.Inbound) int { return compareID(a.ID, b.ID) })
-	guards := make([]routeRule, 0, len(incoming)+len(cfg.Route.Rules)+1)
 	forwardTags := make([]string, 0, len(incoming))
 	for _, in := range incoming {
 		if err := in.Validate(); err != nil {
-			return err
+			return nil, err
 		}
 		tag := exitlink.InboundPrefix + strconv.FormatInt(in.ID, 10)
 		if tags[tag] || ports[in.Port] || in.Port == opts.ClashAPIPort {
-			return fmt.Errorf("exit inbound needs a unique tag and a port distinct from the Clash API and user inbounds")
+			return nil, fmt.Errorf("exit inbound needs a unique tag and a port distinct from the Clash API and user inbounds")
 		}
 		tags[tag], ports[in.Port] = true, true
 		cfg.Inbounds = append(cfg.Inbounds, inboundConfig{
@@ -32,18 +31,17 @@ func addExitInbounds(cfg *config, incoming []exitlink.Inbound, opts Options, tag
 			Method: exitlink.Method, Password: in.Password,
 		})
 		ip := netip.MustParseAddr(in.Source)
-		guards = append(guards, routeRule{Type: "logical", Mode: "and", Action: "reject", Rules: []routeRule{
+		cfg.Route.Rules = append(cfg.Route.Rules, routeRule{Type: "logical", Mode: "and", Action: "reject", Rules: []routeRule{
 			{Inbound: []string{tag}}, {SourceIP: []string{netip.PrefixFrom(ip, ip.BitLen()).String()}, Invert: true},
 		}})
 		forwardTags = append(forwardTags, tag)
 	}
-	cfg.Route.Rules = append(append(guards, cfg.Route.Rules...), routeRule{Inbound: forwardTags, Action: "route", Outbound: exitlink.ForwardTag})
 	forward := outboundConfig{Type: "direct", Tag: exitlink.ForwardTag}
 	if opts.UserRoutingMarks {
 		forward.RoutingMark = fwmark.ExitForward
 	}
 	cfg.Outbounds = append(cfg.Outbounds, forward)
-	return nil
+	return forwardTags, nil
 }
 
 func addExitProbe(cfg *config, snapshot Snapshot) (*exitlink.Outbound, routeRule, error) {
