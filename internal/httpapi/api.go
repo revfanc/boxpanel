@@ -31,21 +31,22 @@ import (
 const CookieName = "boxpanel_session"
 
 type Options struct {
-	Agents       *agent.Master
-	AgentPin     func() (string, error)
-	Alerts       *alerts.Service
-	Backups      Backups
-	Migration    *migration.Service
-	Certificates Certificates
-	WebPath      string
-	Dev          bool
-	Logger       *slog.Logger
-	System       System
-	Singbox      Singbox
-	DB           *sql.DB
-	ReadDB       *sql.DB // independent read-only WAL pool
-	Applier      Applier
-	RealityProbe reality.Probe
+	MasterUpgrade MasterUpgrade
+	Agents        *agent.Master
+	AgentPin      func() (string, error)
+	Alerts        *alerts.Service
+	Backups       Backups
+	Migration     *migration.Service
+	Certificates  Certificates
+	WebPath       string
+	Dev           bool
+	Logger        *slog.Logger
+	System        System
+	Singbox       Singbox
+	DB            *sql.DB
+	ReadDB        *sql.DB // independent read-only WAL pool
+	Applier       Applier
+	RealityProbe  reality.Probe
 	// RealityLookup resolves Reality targets on save to refuse Cloudflare-hosted
 	// ones. Nil skips the check (tests without network).
 	RealityLookup  func(context.Context, string) ([]netip.Addr, error)
@@ -149,6 +150,8 @@ func New(service *auth.Service, opts Options) http.Handler {
 	register("GET", "/api/v1/system/check", a.systemCheck, true)
 	register("GET", "/api/v1/system/status", a.systemStatus, true)
 	register("GET", "/api/v1/system/public-ip", a.systemPublicIP, true)
+	register("GET", "/api/v1/system/upgrade", a.masterUpgrade, true)
+	register("POST", "/api/v1/system/upgrade", a.masterUpgrade, true)
 	register("POST", "/api/v1/system/bbr", a.systemBBR, true)
 	register("POST", "/api/v1/singbox/restart", a.singboxRestart, true)
 	register("GET", "/api/v1/singbox/logs", a.singboxLogs, true)

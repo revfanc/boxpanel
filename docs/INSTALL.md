@@ -536,6 +536,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/revfanc/boxpanel/main/script
 
 ### T8.7 节点升级
 
+- 官方脚本标准安装的主控可在「服务器 → 主控 → 状态」点击「升级主控」。确认后检查最新正式版，独立的 systemd 任务使用该 tag 的安装脚本升级。页面展示当前版本与结果，启动检查失败时脚本尝试恢复原二进制。
 - 先升级主控，再在远端服务器的「状态」标签复制升级命令，以 root 在节点执行。主控为发布版时，命令从相同 tag 取脚本并显式指定该版本。
   主控为开发构建时，命令从 `main` 取脚本，使用默认的最新发布版。旧节点心跳可继续联系主控，协议恢复兼容后自动继续同步。
 - `install.sh update` 在 `agent` 角色下校验并原子替换 boxpanel，重启 `boxpanel.service`，用节点的 `system ready` 检查本机内核。

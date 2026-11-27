@@ -57,7 +57,7 @@ func (u *autoUpgrader) Handle(ctx context.Context, reply agent.HeartbeatReply) {
 	}
 }
 
-func (u *autoUpgrader) start(ctx context.Context, tag string) error {
+func (u *autoUpgrader) checkInstalled() error {
 	exe, err := u.executable()
 	if err != nil {
 		return fmt.Errorf("locate boxpanel binary: %w", err)
@@ -67,6 +67,13 @@ func (u *autoUpgrader) start(ctx context.Context, tag string) error {
 	}
 	if exe != installedBinary {
 		return fmt.Errorf("binary is not at %s; this node was not installed by install.sh", installedBinary)
+	}
+	return nil
+}
+
+func (u *autoUpgrader) start(ctx context.Context, tag string) error {
+	if err := u.checkInstalled(); err != nil {
+		return err
 	}
 	last, err := db.GetSetting(ctx, u.conn, db.AgentUpgradeAttempt)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -80,6 +87,15 @@ func (u *autoUpgrader) start(ctx context.Context, tag string) error {
 	if err := db.SetSetting(ctx, u.conn, db.AgentUpgradeAttempt, db.UpgradeAttempt{Tag: tag, At: now.Unix()}); err != nil {
 		return err
 	}
+	if err := u.queue(ctx, tag); err != nil {
+		return err
+	}
+	u.warned = false
+	u.logger.Info("已开始自动升级到主控版本。", "target", tag)
+	return nil
+}
+
+func (u *autoUpgrader) queue(ctx context.Context, tag string) error {
 	fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	script, err := u.fetch(fetchCtx, installScriptURL(tag))
 	cancel()
@@ -90,7 +106,7 @@ func (u *autoUpgrader) start(ctx context.Context, tag string) error {
 		return fmt.Errorf("downloaded installer is not the boxpanel script")
 	}
 	path := filepath.Join(u.scriptDir, "boxpanel-upgrade-"+tag+".sh")
-	if err := os.WriteFile(path, script, 0700); err != nil {
+	if err := (host.Native{}).WriteFile(path, script, 0700); err != nil {
 		return fmt.Errorf("save installer: %w", err)
 	}
 	// The tag matches agent.ReleaseTag, so it holds no shell or systemd specials.
@@ -98,8 +114,6 @@ func (u *autoUpgrader) start(ctx context.Context, tag string) error {
 		"--property=Type=exec", "--", "/bin/bash", path, "update", "--version", tag, "--non-interactive"); err != nil {
 		return fmt.Errorf("queue upgrade worker: %w", err)
 	}
-	u.warned = false
-	u.logger.Info("已开始自动升级到主控版本，完成后 boxpanel 服务会自动重启。可用 journalctl -u 'boxpanel-upgrade-*' 查看进度。", "target", tag)
 	return nil
 }
 

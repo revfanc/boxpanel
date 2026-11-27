@@ -17,6 +17,7 @@ import { queryKeys } from '@/lib/query'
 import { serverSchema } from '@/schemas/server'
 import type { RestartState, Server, ServerStatus } from '@/types/api'
 import { zhCN as t } from '@/i18n/zh-CN'
+import { MasterUpgrade } from './master-upgrade'
 import { installCommand } from './install-command'
 import { ServerBadges } from './status-badges'
 
@@ -146,10 +147,8 @@ function ServerManagement({ server, status, now }: { server: Server; status?: Se
     {versionDiffers && <p className="text-sm text-muted-foreground">{t.servers.versionDifference(masterVersion)}</p>}
     {versionDiffers && server.auto_upgrade && <Notice>{t.servers.autoUpgradePending}</Notice>}
     {server.upgrade_required && <Notice>{t.servers.nodeOutdated}</Notice>}
-    {server.is_local && <p className="text-sm text-muted-foreground">{t.servers.localUpgrade}</p>}
-    {(server.is_local || server.upgrade_required || versionDiffers || oldMetrics) && <CopyField
-      label={server.is_local ? t.servers.localUpgradeCommand : t.servers.upgradeCommand}
-      value={installCommand(server.is_local ? '' : masterVersion ?? '', 'update')} />}
+    {server.is_local ? <MasterUpgrade /> : (server.upgrade_required || versionDiffers || oldMetrics) && <CopyField
+      label={t.servers.upgradeCommand} value={installCommand(masterVersion ?? '', 'update')} />}
     {server.sync_error && <Notice>{syncErrors[server.sync_error] ?? t.servers.syncErrors.apply_failed}</Notice>}
     {editing ? <EditServerForm server={server} close={() => setEditing(false)} /> : <div className="flex flex-wrap gap-2">
       <Button variant="outline" onClick={() => setEditing(true)}>{server.is_local ? t.servers.rename : t.common.edit}</Button>

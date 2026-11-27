@@ -96,3 +96,80 @@ func TestAutoUpgraderFollowsNewerMasterRelease(t *testing.T) {
 		t.Fatalf("unsafe upgrade started: %v", runner.calls)
 	}
 }
+
+type workerNotRunning struct{}
+
+func (workerNotRunning) Error() string { return "unit inactive" }
+func (workerNotRunning) ExitCode() int { return 3 }
+
+type panelUpgradeRunner struct {
+	running  bool
+	launches int
+}
+
+func (*panelUpgradeRunner) LookPath(name string) (string, error) { return name, nil }
+func (r *panelUpgradeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	if name == "systemctl" && !r.running {
+		return nil, workerNotRunning{}
+	}
+	if name == "systemd-run" {
+		r.running = true
+		r.launches++
+	}
+	return nil, nil
+}
+
+func TestPanelUpgrade(t *testing.T) {
+	ctx := context.Background()
+	conn, err := db.Open(ctx, filepath.Join(t.TempDir(), "master.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	runner := &panelUpgradeRunner{}
+	u := newAutoUpgrader(conn, "v0.6.0", slog.Default())
+	u.runner, u.scriptDir = runner, t.TempDir()
+	u.fetch = func(ctx context.Context, url string) ([]byte, error) {
+		if url != installScriptURL("v0.6.1") {
+			t.Fatal(url)
+		}
+		return []byte("#!/usr/bin/env bash\n"), nil
+	}
+	latest := "v0.6.0"
+	p := &panelUpgrader{worker: u, latest: func(context.Context) (string, error) { return latest, nil }}
+	for _, tag := range []string{"v0.6.1-rc.1", "invalid"} {
+		latest = tag
+		if _, err := p.Start(ctx); err == nil {
+			t.Fatalf("accepted %s", tag)
+		}
+	}
+	for _, tag := range []string{"v0.6.0", "v0.5.9"} {
+		latest = tag
+		if s, err := p.Start(ctx); err != nil || s.State != "current" || runner.launches != 0 {
+			t.Fatal(s, err)
+		}
+	}
+	latest = "v0.6.1"
+	for range 2 {
+		if s, err := p.Start(ctx); err != nil || s.State != "running" || runner.launches != 1 {
+			t.Fatal(s, err)
+		}
+	}
+	// A newly started panel must still see the independent worker and rollback.
+	restarted := &panelUpgrader{worker: u, latest: p.latest}
+	runner.running = false
+	if s, err := restarted.Status(ctx); err != nil || s.State != "failed" || s.Target != latest {
+		t.Fatal(s, err)
+	}
+	if s, err := restarted.Start(ctx); err != nil || s.State != "running" || runner.launches != 2 {
+		t.Fatal(s, err)
+	}
+	u.version = latest
+	if s, err := restarted.Status(ctx); err != nil || s.State != "running" {
+		t.Fatal(s, err)
+	}
+	runner.running = false
+	if s, err := restarted.Status(ctx); err != nil || s.State != "succeeded" || s.Current != latest {
+		t.Fatal(s, err)
+	}
+}

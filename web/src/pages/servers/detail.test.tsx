@@ -90,3 +90,23 @@ it('shows remote restart progress and the result reported by the heartbeat', asy
   await act(() => client.invalidateQueries({ queryKey: serverStatusQuery(2).queryKey }))
   expect(await screen.findByText(t.servers.restarted)).toBeVisible()
 })
+
+it('starts the master upgrade only after confirmation and reports the installed version', async () => {
+  const result = { state: 'running', current: 'v0.6.0', target: 'v0.6.1' }
+  const fetch = mockAPI({
+    'POST /system/upgrade': () => Response.json(result, { status: 202 }),
+    '/system/upgrade': () => Response.json(result.state === 'running' ? { state: 'idle' } : result),
+  })
+  const { user, client } = mountPage(<ServerDetailPage />, '/servers/1', '/servers/:id')
+  await user.click(await screen.findByRole('button', { name: t.servers.localUpgrade }))
+  const writes = () => fetch.mock.calls.filter(([url, init]) => url.endsWith('/system/upgrade') && init?.method === 'POST')
+  expect(writes()).toHaveLength(0)
+  await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: t.common.confirm }))
+  expect(await screen.findByText(t.servers.upgradeRunning(result.target))).toBeVisible()
+  expect(screen.getByRole('button', { name: t.servers.localUpgrade })).toBeDisabled()
+  expect(writes()).toHaveLength(1)
+  result.state = 'succeeded'
+  result.current = result.target
+  await act(async () => { await client.invalidateQueries({ queryKey: ['system', 'upgrade'] }) })
+  expect(await screen.findByText(t.servers.upgradeSucceeded(result.target))).toBeVisible()
+})

@@ -49,6 +49,7 @@ export function deferred<T>() { let resolve!: (value: T) => void; const promise 
 type Responder = (init: RequestInit) => Response | Promise<Response>
 export function mockAPI(overrides: Record<string, Responder> = {}) {
   const defaults: Record<string, unknown> = {
+    '/system/upgrade': { state: 'idle', current: 'v0.6.0' },
     '/overview': overview, '/alerts/settings': alertSettings, '/backup/status': { last_attempt: 0, last_success: 0, result: '' },
     '/cert': certificate, '/settings': settings, '/auth/me': { username: 'admin' },
     '/inbounds': [], '/servers': [server], '/servers/1': server, '/servers/2': edge,

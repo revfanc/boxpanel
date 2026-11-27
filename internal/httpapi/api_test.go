@@ -240,3 +240,16 @@ func TestPanicRecoveryDiscardsPartialResponse(t *testing.T) {
 		t.Fatal("panic not logged as failure")
 	}
 }
+
+func TestMasterUpgradeAccess(t *testing.T) {
+	h, _, _ := testAPI(t, true)
+	const base = "http://example.test/api/v1/"
+	requireStatus(t, request(t, h, "POST", base+"system/upgrade", "", nil, nil), 401)
+	login := request(t, h, "POST", base+"auth/login", `{"username":"admin","password":"test-password"}`, nil, nil)
+	requireStatus(t, login, 200)
+	cookie := login.Result().Cookies()[0]
+	requireStatus(t, request(t, h, "POST", base+"system/upgrade", "", cookie, map[string]string{"Origin": "https://other.test"}), 403)
+	requireStatus(t, request(t, h, "POST", base+"system/upgrade", `{"tag":"v99.0.0"}`, cookie, nil), 400)
+	requireStatus(t, request(t, h, "POST", base+"system/upgrade", "", cookie, nil), 422)
+	requireStatus(t, request(t, h, "GET", base+"system/upgrade", "", cookie, nil), 200)
+}

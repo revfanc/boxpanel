@@ -56,6 +56,8 @@ T1.2 边界：
 | GET | `/setup/status` | `{completed, step, domain, hysteria2}`，见 T5.1 约定 |
 | PUT | `/setup/status` | `{completed?, step?, domain?, hysteria2?}` 保存进度及场景选择 |
 | GET | `/system/check` | 环境自检，见下 |
+| GET | `/system/upgrade` | 读取主控升级状态，返回 `{state,current?,target?}` |
+| POST | `/system/upgrade` | 空请求体。检查最新正式版，有更新时启动安装并返回 202，当前已是同版或更高时返回 200 |
 | POST | `/system/bbr` | 开启 BBR（写 sysctl.d 并立即生效） |
 | GET | `/system/status` | `{cpu, mem:{used,total}, disk, uptime, net:{rx_rate,tx_rate}, singbox:{running, version, uptime}}` |
 | GET | `/system/public-ip` | 重新探测 `{ipv4, ipv6}` |
@@ -133,6 +135,9 @@ CSRF、8 KiB 严格 JSON 和统一错误契约。GET 支持 HEAD。前端不再�
 
 本任务仅实现 `/system/check`、`/system/status`、`/system/public-ip`、`/system/bbr`。
 四个接口均需登录，BBR 写操作沿用 CSRF 检查；GET 支持 HEAD，响应禁止缓存。
+主控升级接口需要管理员会话。GET 读取本机任务状态，不访问发布服务。POST 由服务端选择官方仓库的最新稳定 tag，重复提交运行中的任务返回同一目标。
+`state` 取 `idle`、`running`、`succeeded`、`failed`、`current` 或 `unsupported`。失败后可重试。开发模式或自定义布局下提交返回 422。
+
 `POST /system/bbr` 无请求参数，成功返回 `200 {"enabled":true,"available":true}`。
 不接入 `/setup/status`、端口公网连通性探测或任何 sing-box 管理接口。
 
