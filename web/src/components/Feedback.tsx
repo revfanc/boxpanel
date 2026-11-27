@@ -1,6 +1,7 @@
-import { AlertCircle, LoaderCircle } from 'lucide-react'
+import { AlertCircle } from 'lucide-react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { APIError } from '@/lib/api'
 import { zhCN } from '@/i18n/zh-CN'
 
@@ -25,5 +26,11 @@ export function ErrorNotice({ error, retry }: { error: unknown; retry?: () => vo
 }
 
 export function Loading({ label = zhCN.common.loading }: { label?: string }) {
-  return <div role="status" className="flex items-center justify-center gap-2 p-8 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />{label}</div>
+  return <div role="status" className="w-full min-w-0 space-y-3 px-4 py-5">
+    <p className="text-sm text-muted-foreground">{label}</p>
+    <div aria-hidden="true" className="max-w-xl space-y-2">
+      <Skeleton className="h-3 w-full motion-reduce:animate-none" />
+      <Skeleton className="h-3 w-2/3 motion-reduce:animate-none" />
+    </div>
+  </div>
 }

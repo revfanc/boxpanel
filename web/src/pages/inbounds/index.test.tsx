@@ -9,9 +9,12 @@ it('loads, renders an empty state, and recovers from a read error', async () => 
   let first = true
   mockAPI({ '/inbounds': () => first ? response.promise : Response.json([]) })
   const { user } = mountPage(<InboundsPage />)
-  expect(screen.getByText(t.common.loading)).toBeVisible()
+  const loading = screen.getByRole('status')
+  expect(loading).toHaveTextContent(t.common.loading)
+  expect(loading.querySelector('[data-slot="skeleton"]')).toBeVisible()
   await act(async () => response.resolve(failure()))
   await screen.findByText('Try again')
+  expect(loading).not.toBeInTheDocument()
   first = false
   await user.click(screen.getByRole('button', { name: t.common.retry }))
   expect(await screen.findByText(t.inbounds.empty)).toBeVisible()
@@ -42,7 +45,7 @@ it('confirms disable/delete, retains failures, prevents duplicate writes, and re
 it('shows the server assignment without a selector', async () => {
   mockAPI({ '/inbounds': () => Response.json([inbound]) })
   mountPage(<InboundsPage />)
-  expect(await screen.findByText(t.servers.owner('本机'))).toBeVisible()
+  expect(await screen.findByRole('link', { name: '本机' })).toBeVisible()
   expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
 })
 
@@ -51,6 +54,15 @@ it('shows the server warning for a Reality target that would relay strangers', a
   mockAPI({ '/inbounds': () => Response.json([{ ...inbound, warning }]) })
   mountPage(<InboundsPage />)
   expect(await screen.findByText(warning)).toBeVisible()
+})
+
+it('keeps a missing server filter from opening the global list', async () => {
+  mockAPI()
+  mountPage(<InboundsPage />, '/inbounds?filter=99', '/inbounds')
+  expect(await screen.findByText(t.inbounds.filterUnavailable)).toBeVisible()
+  expect(screen.queryByRole('link', { name: t.pages.newInbound })).not.toBeInTheDocument()
+  expect(screen.queryByText(inbound.remark)).not.toBeInTheDocument()
+  expect(screen.getByRole('link', { name: t.inbounds.allServers })).toHaveAttribute('href', '/inbounds')
 })
 
 it('filters inbounds from the URL, updates it on selection and follows browser history', async () => {
@@ -67,7 +79,7 @@ it('filters inbounds from the URL, updates it on selection and follows browser h
   expect(filter.querySelector('svg.lucide-chevron-down')).toHaveAttribute('aria-hidden', 'true')
   expect(await screen.findByText('Remote node')).toBeVisible()
   expect(screen.queryByText(inbound.remark)).not.toBeInTheDocument()
-  expect(screen.getByRole('link', { name: t.pages.newInbound })).toHaveAttribute('href', '/inbounds/new?server=2')
+  expect(screen.getByRole('link', { name: t.pages.newInbound })).toHaveAttribute('href', '/inbounds/new?filter=2')
   await user.click(filter)
   await user.click(await screen.findByRole('option', { name: 'Pending' }))
   expect(screen.getByText(t.inbounds.serverEmpty)).toBeVisible()

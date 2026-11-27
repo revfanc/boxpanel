@@ -6,10 +6,11 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { ChoiceSelect } from '@/components/ChoiceSelect'
 import { ErrorNotice, Loading } from '@/components/Feedback'
-import { Confirm, Field, Notice, Panel, Submit, Toggle } from '@/components/ResourceUI'
+import { Confirm, Field, Notice, Panel, RadioCard, Submit } from '@/components/ResourceUI'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { RadioGroup } from '@/components/ui/radio-group'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useOperation } from '@/hooks/use-operation'
@@ -65,7 +66,7 @@ export function ServerExitTab({ serverID }: { serverID: number }) {
 
   return <>
     {query.error && <ErrorNotice error={query.error} retry={() => { void query.refetch() }} />}
-    <Panel title={ex.state} hint={hint}>
+    <Panel title={ex.title}>
       <div className="flex flex-wrap items-center gap-3">
         <Badge variant={state === 'unavailable' || state === 'fallback' ? 'destructive' : state === 'available' ? 'default' : 'secondary'}>
           {state ? ex.states[state] : ex.direct}
@@ -73,11 +74,11 @@ export function ServerExitTab({ serverID }: { serverID: number }) {
         {target && <Link to={`/servers/${target.id}?tab=exit`} className="text-sm font-medium underline underline-offset-4">{target.name}</Link>}
         {!!data.link?.checked_at && <span className="text-sm text-muted-foreground">{ex.checked(expiry(data.link.checked_at))}</span>}
       </div>
-      {data.link && data.address && <p className="text-sm text-muted-foreground">{ex.cloudFirewall(data.link.port, data.address)}</p>}
+      {hint && <p className="text-sm text-muted-foreground">{hint}</p>}
+      {!data.supported && <Notice>{ex.needsUpgrade}</Notice>}
+      {(data.supported || data.link) && <ExitPolicyForm data={data} />}
     </Panel>
-    {!data.supported && <Notice>{ex.needsUpgrade}</Notice>}
-    {(data.supported || data.link) && <ExitPolicyForm data={data} />}
-    {data.supported && <ExitAddressForm data={data} />}
+    {data.supported && <NetworkSettings data={data} />}
   </>
 }
 
@@ -86,10 +87,14 @@ function ExitPolicyForm({ data }: { data: ServerExit }) {
     resolver: zodResolver(policySchema), values: policyValues(data.link),
     resetOptions: { keepDirtyValues: true },
   })
+  const target = useWatch({ control: form.control, name: 'target' })
+  const selected = data.candidates.find((candidate) => String(candidate.id) === target)
   const mode = useWatch({ control: form.control, name: 'mode' })
   const failure = useWatch({ control: form.control, name: 'failure' })
   const { errors } = form.formState
   const targetID = useId()
+  const modeID = useId()
+  const [customOpen, setCustomOpen] = useState(Boolean(data.link?.rules.domains.length || data.link?.rules.domain_suffixes.length))
   const failureID = useId()
   const domainsID = useId()
   const suffixesID = useId()
@@ -114,33 +119,41 @@ function ExitPolicyForm({ data }: { data: ServerExit }) {
       form.reset({ ...value, domains: body.rules.domains.join('\n'), suffixes: body.rules.domain_suffixes.join('\n') })
       await refresh()
     })
+  }, (issues) => {
+    if (issues.domains || issues.suffixes) {
+      form.setValue('mode', 'split', { shouldDirty: true })
+      setCustomOpen(true)
+    }
   })
 
-  const available = data.candidates.some((candidate) => !candidate.unavailable_reason)
-  return <Panel title={ex.title} hint={ex.description}>
+  return <>
     <form onSubmit={save} className="space-y-4" noValidate>
-      {!data.address && <Notice>{ex.addressRequired}</Notice>}
-      {!available && !data.link && <p className="text-sm text-muted-foreground">{ex.noCandidates}</p>}
-      <fieldset className="min-w-0 space-y-4" disabled={operation.pending || removal.pending || !data.supported}>
-        <div className="space-y-2">
-          <Label htmlFor={targetID}>{ex.target}</Label>
-          <Controller name="target" control={form.control} render={({ field }) => <ChoiceSelect
-            id={targetID} className="w-full" value={field.value} onChange={field.onChange} ref={field.ref}
-            disabled={operation.pending || removal.pending || !data.supported} aria-invalid={!!errors.target}
-            options={[{ value: '', label: ex.choose, disabled: true }, ...data.candidates.map((candidate) => ({
-              value: String(candidate.id), disabled: !!candidate.unavailable_reason,
-              label: candidate.unavailable_reason ? ex.optionUnavailable(candidate.name, ex.reasons[candidate.unavailable_reason]) : candidate.name,
-            }))]} />} />
-          {errors.target && <p className="text-sm text-destructive" role="alert">{errors.target.message}</p>}
-        </div>
+      {data.candidates.length === 0 && !data.link && <p className="text-sm text-muted-foreground">{ex.noCandidates}</p>}
+      <div className="space-y-2">
+        <Label htmlFor={targetID}>{ex.target}</Label>
+        <Controller name="target" control={form.control} render={({ field }) => <ChoiceSelect
+          id={targetID} className="w-full" value={field.value} onChange={field.onChange} ref={field.ref}
+          disabled={operation.pending || removal.pending || !data.supported} aria-invalid={!!errors.target}
+          options={[{ value: '', label: ex.choose, disabled: true }, ...data.candidates.map((candidate) => ({
+            value: String(candidate.id), disabled: !!candidate.unavailable_reason && candidate.unavailable_reason !== 'address_required',
+            label: candidate.unavailable_reason ? ex.optionUnavailable(candidate.name, ex.reasons[candidate.unavailable_reason]) : candidate.name,
+          }))]} />} />
+        {errors.target && <p className="text-sm text-destructive" role="alert">{errors.target.message}</p>}
+      </div>
 
-        <Toggle label={ex.split} hint={mode === 'split' ? ex.splitHint : ex.allHint} checked={mode === 'split'}
-          onChange={(checked) => form.setValue('mode', checked ? 'split' : 'all', { shouldDirty: true })}
-          disabled={operation.pending || removal.pending || !data.supported} />
+      <fieldset hidden={!selected || selected.unavailable_reason === 'address_required'}
+        className="min-w-0 space-y-4" disabled={operation.pending || removal.pending || !data.supported}>
+        <div className="space-y-2">
+          <Label id={modeID}>{ex.mode}</Label>
+          <Controller name="mode" control={form.control} render={({ field }) => <RadioGroup aria-labelledby={modeID} value={field.value}
+            onValueChange={field.onChange} disabled={operation.pending || removal.pending || !data.supported} className="sm:grid-cols-2">
+            <RadioCard value="split" label={ex.split} hint={ex.splitHint} />
+            <RadioCard value="all" label={ex.all} hint={ex.allHint} />
+          </RadioGroup>} />
+        </div>
 
         {mode === 'split' && <fieldset className="space-y-3 rounded-md border p-4">
           <legend className="px-1 text-sm font-medium">{ex.rules}</legend>
-          <p className="text-sm text-muted-foreground">{ex.rulesHint}</p>
           <Controller name="presets" control={form.control} render={({ field }) => <div className="flex flex-wrap gap-4">
             {presets.map((preset: ExitPreset) => <Label key={preset} className="cursor-pointer">
               <Checkbox checked={field.value.includes(preset)} onCheckedChange={(checked) =>
@@ -149,19 +162,22 @@ function ExitPolicyForm({ data }: { data: ServerExit }) {
               {ex.presets[preset]}
             </Label>)}
           </div>} />
-          <p className="text-xs text-muted-foreground">{ex.domainsHint}</p>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor={domainsID}>{ex.domains}</Label>
-              <Textarea id={domainsID} rows={3} aria-invalid={!!errors.domains} {...form.register('domains')} />
-              {errors.domains && <p className="text-sm text-destructive" role="alert">{errors.domains.message}</p>}
+          <details open={customOpen} onToggle={(event) => setCustomOpen(event.currentTarget.open)} className="space-y-3">
+            <summary className="cursor-pointer text-sm font-medium">{ex.customDomains}</summary>
+            <p className="text-xs text-muted-foreground">{ex.domainsHint}</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor={domainsID}>{ex.domains}</Label>
+                <Textarea id={domainsID} rows={3} aria-invalid={!!errors.domains} {...form.register('domains')} />
+                {errors.domains && <p className="text-sm text-destructive" role="alert">{errors.domains.message}</p>}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor={suffixesID}>{ex.suffixes}</Label>
+                <Textarea id={suffixesID} rows={3} aria-invalid={!!errors.suffixes} {...form.register('suffixes')} />
+                {errors.suffixes && <p className="text-sm text-destructive" role="alert">{errors.suffixes.message}</p>}
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor={suffixesID}>{ex.suffixes}</Label>
-              <Textarea id={suffixesID} rows={3} aria-invalid={!!errors.suffixes} {...form.register('suffixes')} />
-              {errors.suffixes && <p className="text-sm text-destructive" role="alert">{errors.suffixes.message}</p>}
-            </div>
-          </div>
+          </details>
         </fieldset>}
 
         <div className="space-y-2">
@@ -178,7 +194,7 @@ function ExitPolicyForm({ data }: { data: ServerExit }) {
       {operation.success && <Notice>{ex.saved}</Notice>}
       {removal.success && <Notice>{ex.disabled}</Notice>}
       <div className="flex flex-wrap gap-2">
-        <Button type="submit" disabled={!data.address || !data.supported || !available || operation.pending || removal.pending}>
+        <Button type="submit" disabled={!data.address || !data.supported || !selected || !!selected.unavailable_reason || operation.pending || removal.pending}>
           {operation.pending ? t.common.saving : t.common.save}
         </Button>
         {data.link && <Confirm open={confirm} onOpenChange={setConfirm}
@@ -194,24 +210,37 @@ function ExitPolicyForm({ data }: { data: ServerExit }) {
           }} />}
       </div>
     </form>
-  </Panel>
+    {selected?.unavailable_reason === 'address_required' && data.supported && <div className="space-y-3 border-t pt-4">
+      <p className="text-sm">{ex.targetAddressRequired(selected.name)}</p>
+      <ExitAddressForm key={selected.id} serverID={selected.id} address="" label={ex.targetAddress(selected.name)} />
+    </div>}
+  </>
 }
 
-function ExitAddressForm({ data }: { data: ServerExit }) {
-  const form = useForm({ resolver: zodResolver(addressSchema), values: { address: data.address } })
+function NetworkSettings({ data }: { data: ServerExit }) {
+  const [open, setOpen] = useState(!data.address)
+  return <details className="space-y-4 rounded-xl border px-5 py-4" open={open}
+    onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <summary className="cursor-pointer font-medium">{ex.network}</summary>
+    {!data.address && <Notice>{ex.addressRequired}</Notice>}
+    {data.link && data.address && <p className="text-sm text-muted-foreground">{ex.cloudFirewall(data.link.port, data.address)}</p>}
+    <ExitAddressForm serverID={data.server_id} address={data.address} label={ex.address} />
+  </details>
+}
+
+function ExitAddressForm({ serverID, address, label }: { serverID: number; address: string; label: string }) {
+  const form = useForm({ resolver: zodResolver(addressSchema), values: { address } })
   const operation = useOperation()
   const client = useQueryClient()
-  return <Panel title={ex.address} hint={ex.addressHint}>
-    <form className="space-y-4" noValidate onSubmit={form.handleSubmit((body) => {
-      void operation.run(() => api(`/servers/${data.server_id}/exit-address`, { method: 'PUT', body }), async () => {
-        await client.invalidateQueries({ queryKey: queryKeys.servers })
-      })
-    })}>
-      <Field label={ex.address} error={form.formState.errors.address?.message}
-        autoComplete="off" spellCheck={false} disabled={operation.pending} {...form.register('address')} />
-      {operation.error != null && <ErrorNotice error={operation.error} />}
-      {operation.success && <Notice>{ex.addressSaved}</Notice>}
-      <Submit pending={operation.pending} label={ex.saveAddress} />
-    </form>
-  </Panel>
+  return <form className="space-y-4" noValidate onSubmit={form.handleSubmit((body) => {
+    void operation.run(() => api(`/servers/${serverID}/exit-address`, { method: 'PUT', body }), async () => {
+      await client.invalidateQueries({ queryKey: queryKeys.servers })
+    })
+  })}>
+    <Field label={label} hint={ex.addressHint} error={form.formState.errors.address?.message}
+      autoComplete="off" spellCheck={false} disabled={operation.pending} {...form.register('address')} />
+    {operation.error != null && <ErrorNotice error={operation.error} />}
+    {operation.success && <Notice>{ex.addressSaved}</Notice>}
+    <Submit pending={operation.pending} label={ex.saveAddress} />
+  </form>
 }

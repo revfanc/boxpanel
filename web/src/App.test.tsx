@@ -107,8 +107,20 @@ describe('session and history routes', () => {
     await screen.findByRole('heading', { name: zhCN.pages.users })
     const nav = await screen.findByRole('navigation', { name: zhCN.app.navigation })
     expect(within(nav).getAllByRole('link').map((link) => link.textContent)).toEqual([
-      zhCN.pages.home, zhCN.pages.servers, zhCN.pages.users, zhCN.pages.rules, zhCN.pages.settings,
+      zhCN.pages.home, zhCN.pages.servers, zhCN.pages.inbounds, zhCN.pages.users, zhCN.pages.rules, zhCN.pages.settings,
     ])
+  })
+
+  it.each([
+    ['/inbounds', zhCN.pages.inbounds],
+    ['/inbounds/new?filter=2', zhCN.pages.inbounds],
+    ['/inbounds/new?server=2', zhCN.pages.servers],
+  ])('keeps the navigation scope on %s', async (path, label) => {
+    signedIn = true
+    setupResponse = completedSetup
+    mount(path)
+    const nav = await screen.findByRole('navigation', { name: zhCN.app.navigation })
+    expect(within(nav).getByRole('link', { current: 'page' })).toHaveTextContent(label)
   })
 
   it.each([500, 403, 404])('does not bypass a real setup error (%s), and can retry', async (code) => {

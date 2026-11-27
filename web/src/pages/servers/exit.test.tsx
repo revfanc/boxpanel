@@ -28,7 +28,9 @@ it('edits server rules, persists failure policy and keeps rules when switching t
   expect(await screen.findByRole('option', { name: ex.optionUnavailable(legacy.name, ex.reasons.upgrade_required) })).toHaveAttribute('aria-disabled', 'true')
   await user.click(screen.getByRole('option', { name: destination.name }))
 
-  expect(screen.getByRole('switch', { name: ex.split })).toBeChecked()
+  expect(screen.getByRole('radio', { name: new RegExp(ex.split) })).toBeChecked()
+  expect(screen.getByLabelText(ex.address)).not.toBeVisible()
+  await user.click(screen.getByText(ex.customDomains))
   expect(screen.getByRole('combobox', { name: ex.failure })).toHaveTextContent(ex.failures.block)
   await user.click(screen.getByRole('checkbox', { name: ex.presets.streaming }))
   await user.type(screen.getByLabelText(ex.domains), 'https://api.example.com')
@@ -45,12 +47,13 @@ it('edits server rules, persists failure policy and keeps rules when switching t
   expect(saved).toEqual({ ...initial, failure: 'direct' })
   expect(screen.getByText(ex.states.checking)).toBeVisible()
 
-  await user.click(screen.getByRole('switch', { name: ex.split }))
+  await user.click(screen.getByRole('radio', { name: new RegExp(ex.all) }))
   expect(screen.queryByLabelText(ex.domains)).not.toBeInTheDocument()
   expect(screen.getByText(ex.allHint)).toBeVisible()
   await user.click(screen.getByRole('button', { name: t.common.save }))
   expect(await screen.findByText(ex.saved)).toBeVisible()
   expect(saved).toEqual({ ...initial, mode: 'all', failure: 'direct' })
+  expect(fetch.mock.calls.some(([url]) => url.endsWith('/exit-address'))).toBe(false)
 })
 
 it('displays checked, fallback, stale and recovered status and confirms disable', async () => {
@@ -63,6 +66,7 @@ it('displays checked, fallback, stale and recovered status and confirms disable'
   expect(await screen.findByText(ex.states.unavailable)).toBeVisible()
   expect(screen.getByText(ex.blockedHint)).toBeVisible()
   expect(screen.getByText(/^最近探测/)).toBeVisible()
+  await user.click(screen.getByText(ex.network))
   expect(screen.getByText(ex.cloudFirewall(20000, blank.address))).toBeVisible()
   for (const status of ['fallback', 'policy_pending', 'stale', 'available'] as const) {
     link = { ...initial, status, checked_at: 1735689610, port: 20000 }
@@ -97,6 +101,28 @@ it('allows an explicit link address and hides entry editing for an outdated node
   await act(() => router.navigate('/servers/2?tab=exit'))
   expect(await screen.findByText(ex.needsUpgrade)).toBeVisible()
   expect(screen.queryByRole('combobox', { name: ex.target })).not.toBeInTheDocument()
+})
+
+it('repairs a missing destination address without replacing the entry address', async () => {
+  let address = ''
+  let saved: ExitSettings | undefined
+  const fetch = mockAPI({
+    '/servers/1/exit': () => Response.json({ ...blank, candidates: [address ? { ...destination, address } :
+      { ...destination, address: '', unavailable_reason: 'address_required' }] }),
+    'PUT /servers/2/exit-address': (init) => { ({ address } = JSON.parse(String(init.body))); return noContent() },
+    'PUT /servers/1/exit': (init) => { saved = JSON.parse(String(init.body)); return noContent() },
+  })
+  const { user } = mountPage(<ServerExitTab serverID={1} />)
+  await user.click(await screen.findByRole('combobox', { name: ex.target }))
+  await user.click(await screen.findByRole('option', { name: ex.optionUnavailable(destination.name, ex.reasons.address_required) }))
+  expect(screen.getByRole('button', { name: t.common.save })).toBeDisabled()
+  const missing = screen.getByRole('textbox', { name: ex.targetAddress(destination.name) })
+  await user.type(missing, destination.address)
+  await user.click(within(missing.closest('form')!).getByRole('button', { name: ex.saveAddress }))
+  await user.click(screen.getByRole('button', { name: t.common.save }))
+  expect(await screen.findByText(ex.saved)).toBeVisible()
+  expect(saved?.exit_server_id).toBe(destination.id)
+  expect(fetch.mock.calls.some(([url]) => url.endsWith('/1/exit-address'))).toBe(false)
 })
 
 it('shows exit forwarding in the server traffic tab', async () => {

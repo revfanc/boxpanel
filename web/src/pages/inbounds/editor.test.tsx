@@ -104,8 +104,8 @@ it('selects a reachable or offline server for creation and bypasses local Realit
   expect(screen.queryByRole('button', { name: t.inbounds.check })).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: t.inbounds.recommend })).not.toBeInTheDocument()
   await user.click(screen.getByRole('button', { name: t.common.create }))
-  await waitFor(() => expect(router.state.location.pathname).toBe('/servers/2'))
-  expect(router.state.location.search).toBe('?tab=inbounds')
+  await waitFor(() => expect(router.state.location.pathname).toBe('/inbounds'))
+  expect(router.state.location.search).toBe('')
   for (const route of ['/inbounds/suggest', '/inbounds']) {
     const request = fetch.mock.calls.find(([url, init]) => url.endsWith(route) && init?.method === 'POST')
     expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ server_id: 2 })
@@ -123,6 +123,14 @@ it('uses the server from the join wizard URL for a newly suggested node', async 
   await screen.findByText(t.inbounds.remoteCheck)
   const request = fetch.mock.calls.find(([url]) => url.endsWith('/inbounds/suggest'))
   expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ server_id: 2 })
+})
+
+it('returns to the same global server filter after editing', async () => {
+  mockAPI({ 'PUT /inbounds/1': () => Response.json(inbound) })
+  const { user, router } = mountPage(<EditInboundPage />, '/inbounds/1?filter=1', '/inbounds/:id')
+  expect(await screen.findByRole('link', { name: t.common.back })).toHaveAttribute('href', '/inbounds?filter=1')
+  await user.click(await screen.findByRole('button', { name: t.common.save }))
+  await waitFor(() => expect(router.state.location).toMatchObject({ pathname: '/inbounds', search: '?filter=1' }))
 })
 
 it('moves an inbound without sending its old Short IDs', async () => {

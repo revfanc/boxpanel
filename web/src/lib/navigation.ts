@@ -24,6 +24,13 @@ export function serverID(value: string | null | undefined) {
   return Number.isSafeInteger(id) && id > 0 ? id : undefined
 }
 
-export function serverPath(id: number, tab?: 'inbounds' | 'traffic' | 'alerts' | 'logs') {
+export function serverPath(id: number, tab?: 'exit' | 'inbounds' | 'traffic' | 'alerts' | 'logs') {
   return `/servers/${id}${tab ? `?tab=${tab}` : ''}` as const
+}
+
+export function inboundListPath(params: URLSearchParams) {
+  const owner = serverID(params.get('server'))
+  const filter = serverID(params.get('filter'))
+  if (owner) return serverPath(owner, 'inbounds')
+  return filter ? `/inbounds?filter=${filter}` : '/inbounds'
 }
