@@ -268,6 +268,7 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	}
 	nodes.OnStopped, nodes.Logger = alertService.UserStopped, logger
 	nodes.OnAvailability = alertService.ServerAvailability
+	nodes.OnExitAvailability = alertService.ExitAvailability
 	panel.build = func(settings httpapi.PanelSettings) (http.Handler, error) {
 		api := httpapi.New(service, httpapi.Options{WebPath: settings.WebPath, Dev: opts.dev, Logger: logger, System: system, Singbox: manager, DB: conn, ReadDB: reader, Applier: manager, PanelPort: settings.WebPort, Subscriptions: store, PreparePanel: panel.prepare, Certificates: certificates, Backups: backupAPI, Migration: migrations, Alerts: alertService, Agents: nodes, AgentPin: certificates.FallbackPin,
 			RealityLookup: func(ctx context.Context, name string) ([]netip.Addr, error) {
@@ -331,6 +332,7 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 	alertsDone := make(chan struct{})
 	go func() { defer close(alertsDone); alertService.Run(workerCtx) }()
 	trafficDone := make(chan struct{})
+	exitDone := make(chan struct{})
 	if monitorHost {
 		scheduler := traffic.NewScheduler(traffic.NewCollector(conn, reader, nil), manager, nil, logger)
 		scheduler.OnStopped = alertService.UserStopped
@@ -338,13 +340,19 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 			scheduler.Maintenance = migrations.Maintenance
 		}
 		go func() { defer close(trafficDone); scheduler.Run(workerCtx) }()
+		bootID, _ := os.ReadFile("/proc/sys/kernel/random/boot_id")
+		exitMonitor := agent.ExitMonitor{Writer: conn, Reader: reader, Manager: manager, BootID: strings.TrimSpace(string(bootID)),
+			Logger: logger, OnTransition: alertService.ExitAvailability, Maintenance: alertOptions.Maintenance}
+		go func() { defer close(exitDone); exitMonitor.Run(workerCtx) }()
 	} else {
 		close(trafficDone)
+		close(exitDone)
 	}
 	defer func() {
 		cancelWorker()
 		<-workerDone
 		<-trafficDone
+		<-exitDone
 		<-backupDone
 		<-alertsDone
 		<-nodesDone

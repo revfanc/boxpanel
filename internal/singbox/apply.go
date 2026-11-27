@@ -43,6 +43,11 @@ type FirewallSync interface {
 	Sync(context.Context, firewall.Plan, firewall.Plan) error
 }
 
+type exitFirewall interface {
+	PrepareExit(context.Context, firewall.Plan, firewall.Plan) error
+	PurgeExit(context.Context) error
+}
+
 type ApplyOptions struct {
 	ReadDB *sql.DB // independent WAL reader for diagnostics
 	// ApplyTimeout and RecoveryTimeout can only shorten the production budgets.
@@ -340,6 +345,11 @@ func (m *Manager) Apply(ctx context.Context, mutate Mutation) (result error) {
 		}
 		return &ApplyError{Code: code, Detail: redactText(lines, secrets), RollbackFailed: recovery != nil, cause: errors.Join(cause, recovery)}
 	}
+	if guard, ok := m.firewall.(exitFirewall); ok {
+		if err := guard.PrepareExit(ctx, previous, desired); err != nil {
+			return fail("singbox_firewall_failed", err)
+		}
+	}
 	if err := m.files.Rename(m.config+".tmp", m.config); err != nil {
 		return fail("singbox_apply_failed", err)
 	}
@@ -423,6 +433,11 @@ func (m *Manager) commitUnchanged(ctx, recoveryBase context.Context, connection 
 }
 
 func (m *Manager) recordApplied(ctx context.Context, tx *sql.Tx, current confgen.Snapshot, opts confgen.Options, desired firewall.Plan) error {
+	if len(desired.ExitPorts) > 0 {
+		if err := db.SetSetting(ctx, tx, db.ExitEver, true); err != nil {
+			return err
+		}
+	}
 	raw, _ := json.Marshal(desired)
 	if err := db.SetSetting(ctx, tx, db.AppliedFirewall, json.RawMessage(raw)); err != nil {
 		return err
@@ -470,7 +485,14 @@ func (m *Manager) restore(ctx context.Context, p pendingApply) error {
 		}
 		fileErr = err
 		if err == nil {
-			serviceErr = m.restartHealthy(ctx)
+			if guard, ok := m.firewall.(exitFirewall); ok && len(p.Previous.ExitPorts) > 0 {
+				serviceErr = guard.PrepareExit(ctx, p.Next, p.Previous)
+			}
+			if serviceErr == nil {
+				serviceErr = m.restartHealthy(ctx)
+			} else {
+				serviceErr = errors.Join(serviceErr, m.controller.Stop(ctx, SingboxUnit))
+			}
 		} else {
 			serviceErr = m.controller.Stop(ctx, SingboxUnit)
 		}
@@ -517,7 +539,7 @@ func (m *Manager) removePending() error {
 	return err
 }
 func unionPlan(a, b firewall.Plan) firewall.Plan {
-	p := firewall.Plan{Ports: slices.Clone(a.Ports), Hops: slices.Clone(a.Hops), TrafficUsers: slices.Clone(a.TrafficUsers)}
+	p := firewall.Plan{Ports: slices.Clone(a.Ports), Hops: slices.Clone(a.Hops), TrafficUsers: slices.Clone(a.TrafficUsers), ExitPorts: firewall.MergeExitPorts(a.ExitPorts, b.ExitPorts)}
 	for _, port := range b.Ports {
 		if !slices.Contains(p.Ports, port) {
 			p.Ports = append(p.Ports, port)

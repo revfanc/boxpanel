@@ -28,6 +28,8 @@ const (
 	coreRecovered   = "core_recovered"
 	serverOffline   = "server_offline"
 	serverRecovered = "server_recovered"
+	exitDown        = "exit_down"
+	exitRecovered   = "exit_recovered"
 )
 
 var eventTitles = map[string]string{
@@ -44,6 +46,8 @@ var eventTitles = map[string]string{
 	coreRecovered:   "sing-box 已恢复",
 	serverOffline:   "服务器离线",
 	serverRecovered: "服务器已恢复连接",
+	exitDown:        "出口链路不可用",
+	exitRecovered:   "出口链路已恢复",
 }
 
 type Event struct {
@@ -71,6 +75,9 @@ func (event Event) message() message {
 	}
 	var text strings.Builder
 	fmt.Fprintf(&text, "服务器：%s\n", address)
+	if event.Kind == exitDown {
+		text.WriteString("请在入口服务器的「出口」标签查看当前故障策略，检查两台服务器、云安全组和公网 IP。\n")
+	}
 	if event.Username != "" {
 		fmt.Fprintf(&text, "用户：%s\n", event.Username)
 	}
@@ -304,6 +311,30 @@ func (r eventRecorder) coreEvent(ctx context.Context, running bool) error {
 		return nil
 	}
 	return db.SetSetting(ctx, r.tx, db.AlertCore, state)
+}
+
+// ExitAvailability uses the alert outbox for a confirmed fault and recovery.
+// Address identifies the exit, and ServerID identifies the affected entry.
+func (s *Service) ExitAvailability(ctx context.Context, tx *sql.Tx, entryID int64, address string, incident, now time.Time, recovered bool) error {
+	r, err := recorder(ctx, tx, now)
+	if err != nil || !r.cfg.Events[exitDown] {
+		return err
+	}
+	r.serverID, r.address = entryID, address
+	key := r.serverKey(exitDown, incident.Unix())
+	event := Event{Key: key, Kind: exitDown}
+	if recovered {
+		var alerted bool
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM alert_events WHERE event_key=?)", eventDigest(key)).Scan(&alerted); err != nil {
+			return fmt.Errorf("find matching exit fault alert: %w", err)
+		}
+		if !alerted {
+			return nil
+		}
+		event = Event{Key: r.serverKey(exitRecovered, incident.Unix()), Kind: exitRecovered}
+	}
+	_, err = r.record(ctx, event)
+	return err
 }
 
 func (s *Service) evaluate(ctx context.Context, now time.Time) error {

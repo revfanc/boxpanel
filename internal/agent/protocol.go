@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/revfanc/boxpanel/internal/auth"
+	"github.com/revfanc/boxpanel/internal/exitlink"
 )
 
 const (
@@ -29,7 +30,8 @@ const (
 	TrafficPath             = Prefix + "/traffic"
 	MaxTrafficBody          = 1 << 20
 	MaxTrafficUsers         = 10_000
-	ProtocolVersion         = 2
+	ExitProtocol            = 3
+	ProtocolVersion         = ExitProtocol
 	MinNodeProtocol         = 2
 	MinMasterProtocol       = 2
 	InterfaceSamplesPath    = Prefix + "/interface-samples"
@@ -61,6 +63,7 @@ type Heartbeat struct {
 	AppliedGeneration *int64         `json:"applied_generation,omitempty"`
 	SyncError         string         `json:"sync_error,omitempty"`
 	RestartResult     *RestartResult `json:"restart_result,omitempty"`
+	Exit              *ExitReport    `json:"exit,omitempty"`
 }
 
 var encoding = base64.RawURLEncoding.Strict()
@@ -95,11 +98,12 @@ func sign(r *http.Request, id int64, key ed25519.PrivateKey, now time.Time, body
 
 // Desired contains credentials and is only sent over the authenticated node channel.
 type Desired struct {
-	Generation int64            `json:"generation"`
-	Inbounds   []DesiredInbound `json:"inbounds"`
-	Users      []DesiredUser    `json:"users"`
-	Route      DesiredRoute     `json:"route"`
-	RestartID  string           `json:"restart_id,omitempty"`
+	Generation int64                   `json:"generation"`
+	Inbounds   []DesiredInbound        `json:"inbounds"`
+	Users      []DesiredUser           `json:"users"`
+	Route      DesiredRoute            `json:"route"`
+	RestartID  string                  `json:"restart_id,omitempty"`
+	Exit       *exitlink.Configuration `json:"exit,omitempty"`
 }
 
 type DesiredInbound struct {

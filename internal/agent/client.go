@@ -210,6 +210,14 @@ func (c *Client) syncHeartbeat(ctx context.Context, id int64, key ed25519.Privat
 	if err != nil {
 		return reply, err
 	}
+	if resp.StatusCode == http.StatusBadRequest && in.Exit != nil {
+		resp.Body.Close()
+		in.Exit = nil
+		resp, err = send()
+		if err != nil {
+			return reply, err
+		}
+	}
 	if resp.StatusCode == http.StatusBadRequest && (in.Metrics != nil || in.RestartResult != nil) {
 		// T9.4 and earlier use strict JSON, including masters on protocol 2.
 		// Drop only the new fields first so existing sync can continue.
@@ -234,6 +242,9 @@ func (c *Client) syncHeartbeat(ctx context.Context, id int64, key ed25519.Privat
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNoContent {
 		return reply, nil
+	}
+	if resp.StatusCode == http.StatusGone {
+		return reply, ErrExitRemoved
 	}
 	if err := nodeResponse(resp, http.StatusOK); err != nil {
 		return reply, err

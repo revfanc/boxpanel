@@ -609,3 +609,37 @@ Linux 对带 mark 的原始 golden/check/apply 配置直接校验。生产 stage
 Linux root+nft+ip+unshare 在私有 network namespace 做真实双栈 TCP/UDP 计数；
 `TestTrafficLoopback` 在同样条件下验证两协议传输结束后 Poll+Flush 的用量，
 缺条件时只跳过其计数子断言、保留连通性；原 `TestLoopback` 不改。
+
+## 8. T9.6 服务端出口
+
+内部链路使用 sing-box 1.14 的单密钥 Shadowsocks-2022 `2022-blake3-aes-256-gcm`。每条链路生成独立 32 字节密钥，
+按标准 Base64（含填充）存放。公网出口使用数字 IP，入站和出站均省略 `network` 以支持 TCP 和 UDP。
+内部入站为 `type: "shadowsocks"`，使用 `listen`、`listen_port`、`method` 和 `password`。
+出口的内部入站不使用 `users`，也不参与任何订阅。
+[Shadowsocks 入站文档](https://sing-box.sagernet.org/configuration/inbound/shadowsocks/) ·
+[Shadowsocks 出站文档](https://sing-box.sagernet.org/configuration/outbound/shadowsocks/)
+
+配置顺序如下。
+
+1. 对每个内部入站使用逻辑 AND 规则。第一项匹配 `inbound` 标签，第二项反匹配入口公网 IP 的 `source_ip_cidr`
+   （IPv4 用 /32，IPv6 用 /128）。命中即 `reject`。
+2. 依次执行既有 `sniff`、可选 BitTorrent `reject`、`resolve` 和 `ip_is_private` 拒绝。出口重复执行这些保护。
+3. 通过保护的内部入站只走带出口统计标记的 `direct`。它不参与用户分流，也不会走另一条出口链路。
+4. 入口对用户入站按 `auth_user` 匹配，每个用户的出口 Shadowsocks 出站和直连出站使用同一个 `routing_mark`。
+   分流模式用 `domain` / `domain_suffix` 匹配管理员设置的精确域名、自定义后缀及内置预设。
+   全部模式省略域名字段。未匹配的用户从自己的标记出站直连，最终路由仍为 `direct`。
+5. 确认故障后，阻断策略把第 4 步的匹配项切换至 `reject`，回退策略让匹配项使用原用户直连。
+   只有已匹配出口规则的用户流量受故障策略影响。每次切换继续使用完整的生效和回滚流程。
+
+[sing-box 路由规则](https://sing-box.sagernet.org/configuration/route/rule/) ·
+[路由动作](https://sing-box.sagernet.org/configuration/route/rule_action/) ·
+[Linux 套接字标记](https://sing-box.sagernet.org/configuration/shared/dial/#routing_mark)
+
+探测专用出站使用同一个链路密钥，不使用入口用户 mark。入口通过带鉴权的本机 Clash API 访问
+`/proxies/<探测出站>/delay`，先尝试 Cloudflare 的 HTTPS 204 目标，再尝试 gstatic。两次连续链路探测失败才切换故障策略，
+探测恢复后切回出口。控制接口不可用时保留上次生效策略，面板会将过期状态标出。
+[锁定版 Clash API 实现](https://github.com/SagerNet/sing-box/blob/v1.14.4/experimental/clashapi/proxies.go)
+
+AI 预设含 OpenAI、Anthropic 和 Gemini 等服务，流媒体预设含 Netflix 和 Disney+。内置域名通过 `domain_suffix` 展开，
+没有远程规则集下载。只有入口可取得的目标域名（请求地址或嗅探结果）参与匹配。
+`exit_split`、`exit_all`、`exit_blocked`、`exit_fallback` golden 覆盖规则顺序和标记，用锁定版 `sing-box check` 校验。

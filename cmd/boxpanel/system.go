@@ -42,11 +42,11 @@ func runSystem(args []string, stdout, stderr io.Writer) int {
 
 func systemCommand(ctx context.Context, args []string, deps systemDependencies, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(stdout, "Usage: boxpanel system firewall-open|firewall-cleanup|bbr|ready [path options]\nfirewall-cleanup requires both managed services to be stopped; ready probes local HTTPS using the installed certificate.")
+		fmt.Fprintln(stdout, "Usage: boxpanel system firewall-open|firewall-cleanup|exit-guard|bbr|ready [path options]\nfirewall-cleanup requires both managed services to be stopped. exit-guard is used by systemd before starting sing-box. ready probes local HTTPS using the installed certificate.")
 		return 0
 	}
 	command := args[0]
-	if command != "firewall-open" && command != "firewall-cleanup" && command != "bbr" && command != "ready" {
+	if command != "firewall-open" && command != "firewall-cleanup" && command != "bbr" && command != "ready" && command != "exit-guard" {
 		fmt.Fprintln(stderr, "未知系统命令；请运行 boxpanel system --help。")
 		return 2
 	}
@@ -72,6 +72,14 @@ func systemCommand(ctx context.Context, args []string, deps systemDependencies, 
 	if deps.os != "linux" {
 		fmt.Fprintln(stderr, "系统操作需要 Linux/systemd；请在 VPS 上重试。")
 		return 1
+	}
+	if command == "exit-guard" {
+		fw := firewall.New(firewall.Options{OS: deps.os, Runner: deps.apply.Runner})
+		if err := singbox.PrepareExitGuard(ctx, core.resolve(paths, false).config, fw); err != nil {
+			fmt.Fprintln(stderr, "无法保护出口端口。请检查 sing-box 配置、nftables 和服务权限，再运行 boxpanel apply。")
+			return 1
+		}
+		return 0
 	}
 	if command == "bbr" {
 		if deps.bbr == nil {

@@ -122,6 +122,13 @@ func PrepareTarget(ctx context.Context, stage, source, target, secret, pin strin
 			return db.MasterMigration{}, err
 		}
 	}
+	local, err := db.LocalServerID(ctx, tx)
+	if err != nil {
+		return db.MasterMigration{}, err
+	}
+	if err := db.SetExitAddress(ctx, tx, local, u.Hostname()); err != nil {
+		return db.MasterMigration{}, err
+	}
 	port, err := strconv.Atoi(u.Port())
 	if err != nil {
 		return db.MasterMigration{}, ErrAddress

@@ -81,6 +81,23 @@ func snapshot(ctx context.Context, tx *sql.Tx) (confgen.Snapshot, []string, erro
 		return s, nil, fmt.Errorf("read users: %w", err)
 	}
 	s.BlockBittorrent, err = db.GetSetting(ctx, tx, db.BlockBittorrent)
+	if err != nil {
+		return s, secrets, err
+	}
+	s.Exit, err = db.LocalExitConfig(ctx, tx, s.ServerID)
+	if err != nil {
+		return s, secrets, err
+	}
+	for _, in := range s.Exit.Incoming {
+		secrets = append(secrets, in.Password)
+	}
+	if s.Exit.Outgoing != nil {
+		secrets = append(secrets, s.Exit.Outgoing.Password)
+		s.ExitProbe, err = db.GetSetting(ctx, tx, db.ExitProbe)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = nil
+		}
+	}
 	return s, secrets, err
 }
 
@@ -102,6 +119,9 @@ func planFor(s confgen.Snapshot) (firewall.Plan, error) {
 			}
 		}
 		p.Ports = append(p.Ports, firewall.Port{Port: in.Port, Proto: proto})
+	}
+	for _, in := range s.Exit.Incoming {
+		p.ExitPorts = append(p.ExitPorts, firewall.ExitPort{Port: in.Port, Source: in.Source})
 	}
 	return p, p.Validate()
 }
@@ -137,6 +157,11 @@ func (m *Manager) runtimeOptions(ctx context.Context, tx *sql.Tx, s confgen.Snap
 			conflict := false
 			for _, in := range s.Inbounds {
 				if in.Enabled && in.Protocol == "vless_reality" && in.Port == candidate {
+					conflict = true
+				}
+			}
+			for _, in := range s.Exit.Incoming {
+				if in.Port == candidate {
 					conflict = true
 				}
 			}

@@ -217,9 +217,10 @@ func GenerateUnits(paths UnitPaths) (map[string][]byte, error) {
 		panel += " --acme-directory \"" + value + "\""
 	}
 	core := fmt.Sprintf("%s run -c %s", values[1], values[2])
+	guard := fmt.Sprintf("ExecStartPre=%s system exit-guard --singbox-config %s\n", values[0], values[2])
 	template := "[Unit]\nDescription=%s\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nExecStart=%s\nRestart=on-failure\nRestartSec=3\nLimitNOFILE=%d\n%s\n[Install]\nWantedBy=multi-user.target\n"
 	return map[string][]byte{
 		PanelUnit:   []byte(fmt.Sprintf(template, "boxpanel web panel", panel, 65535, "")),
-		SingboxUnit: []byte(fmt.Sprintf(template, "sing-box managed by boxpanel", core, 1048576, "CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW\nAmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW\n")),
+		SingboxUnit: []byte(fmt.Sprintf(template, "sing-box managed by boxpanel", core, 1048576, guard+"CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW\nAmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW\n")),
 	}, nil
 }

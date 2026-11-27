@@ -19,6 +19,7 @@ import (
 	"unicode"
 
 	"github.com/revfanc/boxpanel/internal/auth"
+	"github.com/revfanc/boxpanel/internal/db"
 	"github.com/revfanc/boxpanel/internal/reality"
 	"github.com/revfanc/boxpanel/internal/sysinfo"
 )
@@ -47,18 +48,19 @@ type Master struct {
 	Maintenance func(context.Context) (func(), bool)
 	// OnStopped records a quota stop for a user with no local configuration
 	// to apply. It shares the transaction and deduplication with local stops.
-	OnStopped      func(context.Context, *sql.Tx, int64, string, time.Time) error
-	OnAvailability func(ctx context.Context, tx *sql.Tx, id int64, address string, lastSeen, now time.Time, recovered bool) error
-	Logger         *slog.Logger
-	writer, reader *sql.DB
-	now            func() time.Time
-	mu             sync.Mutex
-	joinWindow     time.Time
-	joins          map[string][]time.Time
-	nonces         map[nonceKey]struct{}
-	nonceOrder     list.List
-	logMu          sync.Mutex
-	logs           map[int64]*logStream
+	OnStopped          func(context.Context, *sql.Tx, int64, string, time.Time) error
+	OnAvailability     func(ctx context.Context, tx *sql.Tx, id int64, address string, lastSeen, now time.Time, recovered bool) error
+	OnExitAvailability func(ctx context.Context, tx *sql.Tx, id int64, address string, incident, now time.Time, recovered bool) error
+	Logger             *slog.Logger
+	writer, reader     *sql.DB
+	now                func() time.Time
+	mu                 sync.Mutex
+	joinWindow         time.Time
+	joins              map[string][]time.Time
+	nonces             map[nonceKey]struct{}
+	nonceOrder         list.List
+	logMu              sync.Mutex
+	logs               map[int64]*logStream
 }
 
 func NewMaster(writer, reader *sql.DB, now func() time.Time) *Master {
@@ -239,9 +241,9 @@ func (m *Master) Register(ctx context.Context, in Registration, peer string) (Id
 		return Identity{}, ErrPublicIP
 	}
 	var result Identity
-	if err := tx.QueryRowContext(ctx, `INSERT INTO servers (name, public_host, version, agent_public_key, created_at, updated_at, protocol)
-		SELECT ?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM servers WHERE agent_public_key=?)
-		RETURNING id`, name, ip.Unmap().String(), in.Version, in.PublicKey, now, now, max(1, in.Protocol), in.PublicKey).Scan(&result.ServerID); err != nil {
+	if err := tx.QueryRowContext(ctx, `INSERT INTO servers (name, public_host, exit_address, version, agent_public_key, created_at, updated_at, protocol)
+		SELECT ?,?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM servers WHERE agent_public_key=?)
+		RETURNING id`, name, ip.Unmap().String(), ip.Unmap().String(), in.Version, in.PublicKey, now, now, max(1, in.Protocol), in.PublicKey).Scan(&result.ServerID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Identity{}, ErrUnauthorized
 		}
@@ -293,8 +295,10 @@ func (m *Master) Authenticate(ctx context.Context, method, path string, header h
 		return authenticated{}, ErrUnauthorized
 	}
 	var identity authenticated
-	err := m.reader.QueryRowContext(ctx, "SELECT id,agent_public_key FROM servers WHERE id=? AND is_local=0 AND status<>'removed' AND agent_public_key IS NOT NULL", id).
-		Scan(&identity.id, &identity.publicKey)
+	var removed bool
+	err := m.reader.QueryRowContext(ctx, `SELECT id,coalesce(agent_public_key,exit_cleanup_key),status='removed'
+		FROM servers WHERE id=? AND is_local=0 AND (agent_public_key IS NOT NULL OR exit_cleanup_key IS NOT NULL)`, id).
+		Scan(&identity.id, &identity.publicKey, &removed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return authenticated{}, ErrUnauthorized
 	}
@@ -307,6 +311,9 @@ func (m *Master) Authenticate(ctx context.Context, method, path string, header h
 	}
 	if !m.acceptNonce(nonceKey{id, nonce}, sent) {
 		return authenticated{}, ErrUnauthorized
+	}
+	if removed {
+		return authenticated{}, ErrExitRemoved
 	}
 	return identity, nil
 }
@@ -416,10 +423,12 @@ func (m *Master) RecordHeartbeat(ctx context.Context, identity authenticated, in
 		}
 		monitoring = new(string(encoded))
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE servers SET status='online',last_seen_at=?,updated_at=?,version=?,singbox_active=?,uptime=?,
+	err = tx.QueryRowContext(ctx, `UPDATE servers SET status='online',last_seen_at=?,updated_at=?,version=?,singbox_active=?,uptime=?,
+		desired_generation=desired_generation+CASE WHEN protocol<? AND ? AND exit_used=1 THEN 1 ELSE 0 END,
 		protocol=?,interfaces=coalesce(?,interfaces),monitoring=?,applied_generation=coalesce(?,applied_generation),sync_error=CASE WHEN ? IS NULL THEN sync_error ELSE ? END
-		WHERE id=?`, now.Unix(), now.Unix(), in.Version, in.SingboxActive, in.Uptime, max(1, in.Protocol), names, monitoring,
-		in.AppliedGeneration, in.AppliedGeneration, in.SyncError, identity.id)
+		WHERE id=? RETURNING desired_generation`, now.Unix(), now.Unix(), in.Version, in.SingboxActive, in.Uptime,
+		ExitProtocol, in.Protocol >= ExitProtocol, max(1, in.Protocol), names, monitoring,
+		in.AppliedGeneration, in.AppliedGeneration, in.SyncError, identity.id).Scan(&reply.DesiredGeneration)
 	if err != nil {
 		return reply, fmt.Errorf("record agent heartbeat: %w", err)
 	}
@@ -428,6 +437,11 @@ func (m *Master) RecordHeartbeat(ctx context.Context, identity authenticated, in
 	}
 	if err := recordRestartResult(ctx, tx, identity.id, in.RestartResult); err != nil {
 		return reply, err
+	}
+	if in.Protocol >= ExitProtocol {
+		if err := m.recordExitReport(ctx, tx, identity.id, in.Exit, now); err != nil {
+			return reply, err
+		}
 	}
 	if monitoring != nil && in.Protocol >= MinNodeProtocol {
 		if err := tx.QueryRowContext(ctx, "SELECT restart_status='pending' FROM servers WHERE id=?", identity.id).Scan(&reply.RestartPending); err != nil {
@@ -444,8 +458,17 @@ func (m *Master) RecordHeartbeat(ctx context.Context, identity authenticated, in
 }
 
 func (m *Master) Remove(ctx context.Context, id int64) error {
-	result, err := m.writer.ExecContext(ctx, `UPDATE servers SET status='removed',agent_public_key=NULL,updated_at=?
-		WHERE id=? AND is_local=0 AND status<>'removed'`, m.now().Unix(), id)
+	if err := m.RemoveServer(ctx, m.writer, id); err != nil {
+		return err
+	}
+	m.ForgetRemovedLogs(id)
+	return nil
+}
+
+func (m *Master) RemoveServer(ctx context.Context, q db.SettingsDB, id int64) error {
+	result, err := q.ExecContext(ctx, `UPDATE servers SET status='removed',
+		exit_cleanup_key=CASE WHEN exit_used=1 THEN agent_public_key ELSE NULL END,
+		agent_public_key=NULL,updated_at=? WHERE id=? AND is_local=0 AND status<>'removed'`, m.now().Unix(), id)
 	if err != nil {
 		return fmt.Errorf("remove server identity: %w", err)
 	}
@@ -456,10 +479,13 @@ func (m *Master) Remove(ctx context.Context, id int64) error {
 	if n == 0 {
 		return sql.ErrNoRows
 	}
+	return nil
+}
+
+func (m *Master) ForgetRemovedLogs(id int64) {
 	m.logMu.Lock()
 	delete(m.logs, id)
 	m.logMu.Unlock()
-	return nil
 }
 
 func (m *Master) MarkOffline(ctx context.Context) error {

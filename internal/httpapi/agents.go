@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -108,6 +110,14 @@ func (a *api) agentAuthenticated(w http.ResponseWriter, r *http.Request) {
 		a.rejectAgent(w, false)
 		return
 	}
+	if err == agent.ErrExitRemoved {
+		if r.URL.Path == agent.Prefix+"/heartbeat" {
+			writeError(w, http.StatusGone, "exit_server_removed", "服务器已移除", "节点会清除旧链路。要重新加入，请先执行 boxpanel leave，再在主控生成加入命令。")
+		} else {
+			a.rejectAgent(w, false)
+		}
+		return
+	}
 	if err != nil {
 		a.resourceError(w, err)
 		return
@@ -195,7 +205,7 @@ func (a *api) agentAuthenticated(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !agent.ValidMetadata(in.Version, 128) || in.Uptime < 0 || in.Protocol < 0 || !agent.ValidInterfaces(in.Interfaces) || !agent.ValidSyncError(in.SyncError) ||
-			!in.Metrics.Valid() || !in.RestartResult.Valid() ||
+			!in.Metrics.Valid() || !in.RestartResult.Valid() || !in.Exit.Valid(in.Protocol) ||
 			in.AppliedGeneration != nil && *in.AppliedGeneration < 0 || in.AppliedGeneration == nil && in.SyncError != "" {
 			writeError(w, 400, "invalid_argument", "节点心跳内容无效", "请检查节点 boxpanel 版本后重试。")
 			return
@@ -339,12 +349,25 @@ func (a *api) joinTokenRevoke(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) serverRemove(w http.ResponseWriter, r *http.Request) {
 	id, err := resourceID(r)
-	if err == nil {
-		err = a.opts.Agents.Remove(r.Context(), id)
-	}
 	if err != nil {
 		a.resourceError(w, err)
 		return
 	}
+	conn, err := a.readDB()
+	if err != nil {
+		a.resourceError(w, err)
+		return
+	}
+	var remote int64
+	if err := conn.QueryRowContext(r.Context(), "SELECT id FROM servers WHERE id=? AND is_local=0 AND status<>'removed'", id).Scan(&remote); err != nil {
+		a.resourceError(w, fmt.Errorf("read remote server for removal: %w", err))
+		return
+	}
+	if !a.writeExitChange(w, r, id, 0, true, func(ctx context.Context, tx *sql.Tx) error {
+		return a.opts.Agents.RemoveServer(ctx, tx, id)
+	}) {
+		return
+	}
+	a.opts.Agents.ForgetRemovedLogs(id)
 	w.WriteHeader(http.StatusNoContent)
 }

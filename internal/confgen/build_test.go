@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/revfanc/boxpanel/internal/exitlink"
 	"github.com/revfanc/boxpanel/internal/reality"
 )
 
@@ -87,6 +88,13 @@ func TestServerGolden(t *testing.T) {
 				UpMbps: 100, DownMbps: 200, ObfsPassword: "test-only-obfs-password", PortHopping: PortHopping{Enabled: true, Start: 20000, End: 30000}})
 		}},
 		{"no_inbounds", func(s *Snapshot, _ *Options) { s.Inbounds = nil }},
+		{"exit_split", func(s *Snapshot, _ *Options) {
+			configureExit(s, exitlink.Split, exitlink.Block, false)
+			s.Exit.Incoming = []exitlink.Inbound{{ID: 34, Source: "2001:db8::2", Port: 20001, Password: s.Exit.Outgoing.Password}}
+		}},
+		{"exit_all", func(s *Snapshot, _ *Options) { configureExit(s, exitlink.All, exitlink.Block, false) }},
+		{"exit_blocked", func(s *Snapshot, _ *Options) { configureExit(s, exitlink.Split, exitlink.Block, true) }},
+		{"exit_fallback", func(s *Snapshot, _ *Options) { configureExit(s, exitlink.All, exitlink.Fallback, true) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -125,6 +133,20 @@ func TestServerGolden(t *testing.T) {
 				t.Fatal("golden mismatch; review change before running go test ./internal/confgen -update")
 			}
 		})
+	}
+}
+
+func configureExit(s *Snapshot, mode, failure string, down bool) {
+	s.Inbounds, s.Users = s.Inbounds[1:2], s.Users[1:2]
+	revision := exitlink.Revision{ID: 32, Version: 1}
+	s.Exit.Outgoing = &exitlink.Outbound{Revision: revision, Address: "198.51.100.2", Port: 20000,
+		Password: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x6a}, 32)),
+		Policy: exitlink.Policy{Mode: mode, Failure: failure, Rules: exitlink.Rules{
+			Presets: []string{"streaming", "ai"}, Domains: []string{"api.example.com"}, DomainSuffixes: []string{"example.net"},
+		}},
+	}
+	if down {
+		s.ExitProbe = exitlink.Probe{Revision: revision, Available: new(false), PolicyDown: true}
 	}
 }
 

@@ -4,6 +4,8 @@ package confgen
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/revfanc/boxpanel/internal/exitlink"
 )
 
 // Snapshot contains only the database fields needed for server generation.
@@ -13,6 +15,8 @@ type Snapshot struct {
 	Inbounds        []Inbound
 	Users           []User
 	BlockBittorrent bool
+	Exit            exitlink.Configuration
+	ExitProbe       exitlink.Probe
 }
 
 type Inbound struct {

@@ -1,7 +1,7 @@
 import { queryOptions, type QueryClient } from '@tanstack/react-query'
 import { api, APIError } from '@/lib/api'
 import { queryKeys } from '@/lib/query'
-import type { Inbound, PanelOverview, Server, ServerStatus, ServerTraffic, User, RulesSettings, SystemCheck } from '@/types/api'
+import type { Inbound, PanelOverview, Server, ServerExit, ServerStatus, ServerTraffic, User, RulesSettings, SystemCheck } from '@/types/api'
 
 export const serversQuery = queryOptions({ queryKey: queryKeys.servers, queryFn: ({ signal }) => api<Server[]>('/servers', { signal }) })
 export const serverQuery = (id: number) => queryOptions({ queryKey: [...queryKeys.servers, id], queryFn: ({ signal }) => api<Server>(`/servers/${id}`, { signal }), refetchInterval: 15_000 })
@@ -11,6 +11,9 @@ export const serverStatusQuery = (id: number) => queryOptions({
 })
 export const serverTrafficQuery = (id: number) => queryOptions({
   queryKey: [...queryKeys.servers, id, 'traffic'], queryFn: ({ signal }) => api<ServerTraffic>(`/servers/${id}/traffic`, { signal }), refetchInterval: 30_000,
+})
+export const serverExitQuery = (id: number) => queryOptions({
+  queryKey: [...queryKeys.servers, id, 'exit'], queryFn: ({ signal }) => api<ServerExit>(`/servers/${id}/exit`, { signal }), refetchInterval: 10_000,
 })
 export const overviewQuery = queryOptions({
   queryKey: queryKeys.overview, queryFn: ({ signal }) => api<PanelOverview>('/overview', { signal }), refetchInterval: 15_000,

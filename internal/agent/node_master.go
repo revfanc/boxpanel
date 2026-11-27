@@ -135,7 +135,7 @@ func (n *Node) connect(ctx context.Context, beat Heartbeat) (HeartbeatReply, err
 			// Honor a primary that can still reject this identity or require an
 			// upgrade. An old backup may retain a former authorization.
 			var skew *ClockSkewError
-			if errors.Is(err, ErrUnauthorized) || errors.Is(err, ErrAgentUpgradeRequired) || errors.As(err, &skew) {
+			if errors.Is(err, ErrUnauthorized) || errors.Is(err, ErrExitRemoved) || errors.Is(err, ErrAgentUpgradeRequired) || errors.As(err, &skew) {
 				return reply, err
 			}
 		}

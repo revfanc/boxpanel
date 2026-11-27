@@ -56,7 +56,7 @@ func TestMasterURLSignatureAndLegacyHeartbeat(t *testing.T) {
 		Generation int64 `json:"desired_generation"`
 		Protocol   int   `json:"protocol"`
 	}
-	if err := json.Unmarshal(blob, &legacy); err != nil || legacy.Generation != 7 || legacy.Protocol != 2 {
+	if err := json.Unmarshal(blob, &legacy); err != nil || legacy.Generation != 7 || legacy.Protocol != ProtocolVersion {
 		t.Fatal("old heartbeat decoder cannot read the response", err)
 	}
 }

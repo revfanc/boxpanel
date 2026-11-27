@@ -1,0 +1,139 @@
+{
+  "log": {
+    "level": "warn",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "local",
+        "tag": "dns-local"
+      }
+    ],
+    "final": "dns-local"
+  },
+  "inbounds": [
+    {
+      "type": "vless",
+      "tag": "vless-reality-443",
+      "listen": "::",
+      "listen_port": 443,
+      "users": [
+        {
+          "name": "alice",
+          "uuid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "flow": "xtls-rprx-vision"
+        }
+      ],
+      "tls": {
+        "enabled": true,
+        "server_name": "www.example.com",
+        "reality": {
+          "enabled": true,
+          "handshake": {
+            "server": "www.example.com",
+            "server_port": 443
+          },
+          "private_key": "EBEREREREREREREREREREREREREREREREREREREREVE",
+          "short_id": [
+            "0123456789abcdef",
+            "12345678"
+          ]
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "shadowsocks",
+      "tag": "bp-exit-probe-32-1",
+      "server": "198.51.100.2",
+      "server_port": 20000,
+      "method": "2022-blake3-aes-256-gcm",
+      "password": "ampqampqampqampqampqampqampqampqampqampqamo=",
+      "connect_timeout": "4s"
+    },
+    {
+      "routing_mark": 3070230529,
+      "type": "direct",
+      "tag": "direct-u1"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "action": "sniff"
+      },
+      {
+        "protocol": "bittorrent",
+        "action": "reject"
+      },
+      {
+        "action": "resolve",
+        "server": "dns-local"
+      },
+      {
+        "ip_is_private": true,
+        "action": "reject"
+      },
+      {
+        "auth_user": [
+          "alice"
+        ],
+        "action": "reject",
+        "inbound": [
+          "vless-reality-443"
+        ],
+        "domain": [
+          "api.example.com"
+        ],
+        "domain_suffix": [
+          "ai.google.dev",
+          "aistudio.google.com",
+          "anthropic.com",
+          "bamgrid.com",
+          "chatgpt.com",
+          "claude.ai",
+          "claude.com",
+          "disney-plus.net",
+          "disneyplus.com",
+          "dssott.com",
+          "example.net",
+          "fast.com",
+          "gemini.google.com",
+          "generativelanguage.googleapis.com",
+          "netflix.com",
+          "netflix.net",
+          "nflxext.com",
+          "nflximg.com",
+          "nflximg.net",
+          "nflxso.net",
+          "nflxvideo.net",
+          "notebooklm.google.com",
+          "oaistatic.com",
+          "oaiusercontent.com",
+          "openai.com"
+        ]
+      },
+      {
+        "auth_user": [
+          "alice"
+        ],
+        "outbound": "direct-u1",
+        "action": "route"
+      }
+    ],
+    "final": "direct",
+    "default_domain_resolver": "dns-local"
+  },
+  "experimental": {
+    "clash_api": {
+      "external_controller": "127.0.0.1:19090",
+      "secret": "test-only-clash-secret"
+    }
+  }
+}

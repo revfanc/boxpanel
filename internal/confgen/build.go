@@ -48,22 +48,10 @@ func Build(snapshot Snapshot, opts Options) ([]byte, error) {
 		routeRule{Action: "resolve", Server: "dns-local"},
 		routeRule{IPIsPrivate: true, Action: "reject"},
 	)
-	for _, user := range users {
-		tag := UserOutboundTag(user.ID)
-		outbound := outboundConfig{Type: "direct", Tag: tag}
-		if opts.UserRoutingMarks {
-			mark, err := fwmark.User(user.ID)
-			if err != nil {
-				return nil, fmt.Errorf("build config: user %d: %w", user.ID, err)
-			}
-			outbound.RoutingMark = mark
-		}
-		cfg.Outbounds = append(cfg.Outbounds, outbound)
-		cfg.Route.Rules = append(cfg.Route.Rules, routeRule{AuthUser: []string{user.Name}, Action: "route", Outbound: tag})
-	}
 	inbounds := slices.Clone(snapshot.Inbounds)
 	slices.SortFunc(inbounds, func(a, b Inbound) int { return compareID(a.ID, b.ID) })
 	ids, tags, ports := map[int64]bool{}, map[string]bool{}, map[int]bool{}
+	var userTags []string
 	for _, in := range inbounds {
 		if !in.Enabled || in.ServerID != snapshot.ServerID {
 			continue
@@ -80,6 +68,28 @@ func Build(snapshot Snapshot, opts Options) ([]byte, error) {
 			return nil, fmt.Errorf("build config: inbound %d: %w", in.ID, err)
 		}
 		cfg.Inbounds = append(cfg.Inbounds, out)
+		userTags = append(userTags, out.Tag)
+	}
+	if err := addExitInbounds(&cfg, snapshot.Exit.Incoming, opts, tags, ports); err != nil {
+		return nil, fmt.Errorf("build config: %w", err)
+	}
+	exit, split, err := addExitProbe(&cfg, snapshot)
+	if err != nil {
+		return nil, fmt.Errorf("build config: %w", err)
+	}
+	for _, user := range users {
+		tag := UserOutboundTag(user.ID)
+		outbound := outboundConfig{Type: "direct", Tag: tag}
+		if opts.UserRoutingMarks {
+			mark, err := fwmark.User(user.ID)
+			if err != nil {
+				return nil, fmt.Errorf("build config: user %d: %w", user.ID, err)
+			}
+			outbound.RoutingMark = mark
+		}
+		cfg.Outbounds = append(cfg.Outbounds, outbound)
+		addUserExitRoute(&cfg, exit, split, snapshot.ExitProbe, outbound.RoutingMark, user, userTags)
+		cfg.Route.Rules = append(cfg.Route.Rules, routeRule{AuthUser: []string{user.Name}, Action: "route", Outbound: tag})
 	}
 	encoded, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -113,7 +123,7 @@ func eligibleUsers(input []User, now int64) ([]User, error) {
 }
 
 func buildInbound(in Inbound, users []User, opts Options) (inboundConfig, error) {
-	out := inboundConfig{Tag: in.Tag, Listen: "::", ListenPort: in.Port, Users: []serverUser{}, TLS: tlsConfig{Enabled: true}}
+	out := inboundConfig{Tag: in.Tag, Listen: "::", ListenPort: in.Port, Users: []serverUser{}, TLS: &tlsConfig{Enabled: true}}
 	switch in.Protocol {
 	case "vless_reality":
 		var options RealityOptions
