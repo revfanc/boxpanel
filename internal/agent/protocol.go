@@ -31,7 +31,8 @@ const (
 	MaxTrafficBody          = 1 << 20
 	MaxTrafficUsers         = 10_000
 	ExitProtocol            = 3
-	ProtocolVersion         = ExitProtocol
+	ExternalProxyProtocol   = 4
+	ProtocolVersion         = ExternalProxyProtocol
 	MinNodeProtocol         = 2
 	MinMasterProtocol       = 2
 	InterfaceSamplesPath    = Prefix + "/interface-samples"
@@ -139,11 +140,12 @@ type InboundKeys struct {
 }
 
 type HeartbeatReply struct {
-	ReportPublicIP    bool   `json:"report_public_ip,omitempty"`
-	DesiredGeneration int64  `json:"desired_generation"`
-	Protocol          int    `json:"protocol"`
-	Version           string `json:"version"`
-	Interface         string `json:"interface"`
+	ProxyTest         *ProxyTestCommand `json:"proxy_test,omitempty"`
+	ReportPublicIP    bool              `json:"report_public_ip,omitempty"`
+	DesiredGeneration int64             `json:"desired_generation"`
+	Protocol          int               `json:"protocol"`
+	Version           string            `json:"version"`
+	Interface         string            `json:"interface"`
 	// AutoUpgrade asks the node to follow Version when it is a newer release.
 	// Older nodes ignore the field, so the protocol version is unchanged.
 	AutoUpgrade         bool        `json:"auto_upgrade,omitempty"`

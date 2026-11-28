@@ -80,6 +80,17 @@ func addUserExitRoute(cfg *config, exit *exitlink.Outbound, match routeRule, pro
 }
 
 func exitOutbound(exit exitlink.Outbound, tag string, mark uint32) outboundConfig {
+	if proxy := exit.External; proxy != nil {
+		out := outboundConfig{Type: "http", Tag: tag, RoutingMark: mark, ConnectTimeout: "4s",
+			Server: proxy.Host, ServerPort: proxy.Port, Username: proxy.Username, Password: proxy.Password}
+		switch proxy.Type {
+		case "socks5":
+			out.Type, out.Version = "socks", "5"
+		case "https":
+			out.TLS = &tlsConfig{Enabled: true, ServerName: proxy.Host}
+		}
+		return out
+	}
 	return outboundConfig{
 		Type: "shadowsocks", Tag: tag, RoutingMark: mark, Server: exit.Address,
 		ServerPort: exit.Port, Method: exitlink.Method, Password: exit.Password, ConnectTimeout: "4s",

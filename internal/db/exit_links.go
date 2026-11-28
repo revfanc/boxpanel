@@ -50,8 +50,8 @@ func LocalExitConfig(ctx context.Context, q *sql.Tx, local int64) (exitlink.Conf
 func ServerExitConfig(ctx context.Context, q *sql.Tx, id int64) (exitlink.Configuration, error) {
 	var config exitlink.Configuration
 	rows, err := q.QueryContext(ctx, `SELECT l.id,l.revision,l.entry_id,l.port,l.password,l.mode,l.failure,l.rules,
-		entry.exit_address,target.exit_address FROM exit_links l
-		JOIN servers entry ON entry.id=l.entry_id JOIN servers target ON target.id=l.exit_id
+		entry.exit_address,coalesce(target.exit_address,''),l.external_proxy FROM exit_links l
+		JOIN servers entry ON entry.id=l.entry_id LEFT JOIN servers target ON target.id=l.exit_id
 		WHERE l.entry_id=? OR l.exit_id=? ORDER BY l.id`, id, id)
 	if err != nil {
 		return config, fmt.Errorf("read server exit links: %w", err)
@@ -61,10 +61,17 @@ func ServerExitConfig(ctx context.Context, q *sql.Tx, id int64) (exitlink.Config
 		var out exitlink.Outbound
 		var entryID int64
 		var source, rules string
-		if err := rows.Scan(&out.ID, &out.Version, &entryID, &out.Port, &out.Password, &out.Mode, &out.Failure, &rules, &source, &out.Address); err != nil {
+		var external sql.NullString
+		if err := rows.Scan(&out.ID, &out.Version, &entryID, &out.Port, &out.Password, &out.Mode, &out.Failure, &rules, &source, &out.Address, &external); err != nil {
 			return config, fmt.Errorf("scan server exit link: %w", err)
 		}
 		if entryID == id {
+			if external.Valid {
+				out.External = new(exitlink.Proxy)
+				if err := json.Unmarshal([]byte(external.String), out.External); err != nil {
+					return config, fmt.Errorf("decode external exit settings")
+				}
+			}
 			if err := json.Unmarshal([]byte(rules), &out.Rules); err != nil {
 				return config, fmt.Errorf("decode exit rules; repair server exit settings")
 			}
@@ -98,8 +105,8 @@ func RecordExitProbe(ctx context.Context, tx *sql.Tx, entryID int64, probe exitl
 	var checkedAt, incident int64
 	var available *bool
 	var targetIP string
-	err := tx.QueryRowContext(ctx, `SELECT l.checked_at,l.available,l.incident_at,s.exit_address FROM exit_links l
-		JOIN servers s ON s.id=l.exit_id WHERE l.entry_id=? AND l.id=? AND l.revision=?`, entryID, probe.ID, probe.Version).
+	err := tx.QueryRowContext(ctx, `SELECT l.checked_at,l.available,l.incident_at,coalesce(s.exit_address,json_extract(l.external_proxy,'$.host')) FROM exit_links l
+		LEFT JOIN servers s ON s.id=l.exit_id WHERE l.entry_id=? AND l.id=? AND l.revision=?`, entryID, probe.ID, probe.Version).
 		Scan(&checkedAt, &available, &incident, &targetIP)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil

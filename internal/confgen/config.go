@@ -83,14 +83,17 @@ type handshakeConfig struct {
 }
 
 type outboundConfig struct {
-	RoutingMark    uint32 `json:"routing_mark,omitempty"`
-	Type           string `json:"type"`
-	Tag            string `json:"tag"`
-	Server         string `json:"server,omitempty"`
-	ServerPort     int    `json:"server_port,omitempty"`
-	Method         string `json:"method,omitempty"`
-	Password       string `json:"password,omitempty"`
-	ConnectTimeout string `json:"connect_timeout,omitempty"`
+	Username       string     `json:"username,omitempty"`
+	Version        string     `json:"version,omitempty"`
+	TLS            *tlsConfig `json:"tls,omitempty"`
+	RoutingMark    uint32     `json:"routing_mark,omitempty"`
+	Type           string     `json:"type"`
+	Tag            string     `json:"tag"`
+	Server         string     `json:"server,omitempty"`
+	ServerPort     int        `json:"server_port,omitempty"`
+	Method         string     `json:"method,omitempty"`
+	Password       string     `json:"password,omitempty"`
+	ConnectTimeout string     `json:"connect_timeout,omitempty"`
 }
 
 type routeConfig struct {

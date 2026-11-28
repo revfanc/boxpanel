@@ -267,21 +267,7 @@ func TestAlertsMigrationPreservesUserTrafficAndIdentity(t *testing.T) {
 func TestExitAddressMigrationPreservesDistinctOrigins(t *testing.T) {
 	ctx := t.Context()
 	conn := legacyServersDB(t)
-	files, err := fs.Glob(migrations, "migrations/*.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	old := fstest.MapFS{}
-	for _, path := range files[:14] {
-		data, err := migrations.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		old[path] = &fstest.MapFile{Data: data}
-	}
-	if err := migrate(ctx, conn, old); err != nil {
-		t.Fatal(err)
-	}
+	migrateToVersion(t, conn, 14)
 	mustExec(t, conn, `INSERT INTO servers (id,name,public_host,exit_address) VALUES
 		(2,'standard','8.8.8.8','8.8.8.8'),(3,'domain','cdn.example','8.8.4.4'),
 		(4,'custom','1.1.1.1','1.0.0.1'),(5,'empty','example.org',''),
@@ -294,5 +280,49 @@ func TestExitAddressMigrationPreservesDistinctOrigins(t *testing.T) {
 		if err := conn.QueryRow("SELECT exit_address,public_ip FROM servers WHERE id=?", id).Scan(&address, &detected); err != nil || address != want || detected != "" {
 			t.Fatalf("server %d address=%s detected=%s err=%v", id, address, detected, err)
 		}
+	}
+}
+
+func migrateToVersion(t *testing.T, conn *sql.DB, version int) {
+	t.Helper()
+	files, err := fs.Glob(migrations, "migrations/*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := fstest.MapFS{}
+	for _, path := range files[:version] {
+		data, err := migrations.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		old[path] = &fstest.MapFile{Data: data}
+	}
+	if err := migrate(t.Context(), conn, old); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExternalExitMigrationPreservesExistingLinks(t *testing.T) {
+	conn := legacyServersDB(t)
+	migrateToVersion(t, conn, 16)
+	mustExec(t, conn, `INSERT INTO servers(id,name,public_host) VALUES(2,'edge','edge.example.org'),(3,'other','other.example.org');
+        INSERT INTO exit_links(id,entry_id,exit_id,revision,port,password,mode,failure,rules,checked_at,available,policy_down,incident_at)
+        VALUES(17,1,2,4,20301,printf('%044d',1),'split','direct','{"presets":["ai"]}',123,0,1,117),
+        (42,3,2,1,20302,printf('%044d',2),'all','block','{}',0,NULL,0,0);
+        DELETE FROM exit_links WHERE id=42;`)
+	if err := Migrate(t.Context(), conn); err != nil {
+		t.Fatal(err)
+	}
+	var preserved bool
+	if err := conn.QueryRow(`SELECT id=17 AND exit_id=2 AND revision=4 AND port=20301 AND password=printf('%044d',1)
+        AND mode='split' AND failure='direct' AND rules='{"presets":["ai"]}' AND checked_at=123 AND available=0
+        AND policy_down=1 AND incident_at=117 AND external_proxy IS NULL FROM exit_links WHERE entry_id=1`).Scan(&preserved); err != nil || !preserved {
+		t.Fatal("migration changed a managed link or its health history", err)
+	}
+	mustExec(t, conn, `INSERT INTO exit_links(entry_id,external_proxy,port,password,mode,failure,rules)
+        VALUES(3,'{"type":"http","host":"proxy.example.org","port":443}',443,'','all','block','{}')`)
+	var id int64
+	if err := conn.QueryRow("SELECT id FROM exit_links WHERE entry_id=3").Scan(&id); err != nil || id <= 42 {
+		t.Fatal("migration reused a retired link identity", err)
 	}
 }

@@ -60,10 +60,11 @@ func fixture(t *testing.T) (Snapshot, Options) {
 }
 
 func TestServerGolden(t *testing.T) {
-	cases := []struct {
+	type goldenCase struct {
 		name   string
 		change func(*Snapshot, *Options)
-	}{
+	}
+	cases := []goldenCase{
 		{"vless", func(s *Snapshot, _ *Options) { s.Inbounds = s.Inbounds[1:2] }},
 		{"hysteria2", func(s *Snapshot, _ *Options) { s.Inbounds = s.Inbounds[:1] }},
 		{"dual", func(_ *Snapshot, _ *Options) {}},
@@ -95,6 +96,12 @@ func TestServerGolden(t *testing.T) {
 		{"exit_all", func(s *Snapshot, _ *Options) { configureExit(s, exitlink.All, exitlink.Block, false) }},
 		{"exit_blocked", func(s *Snapshot, _ *Options) { configureExit(s, exitlink.Split, exitlink.Block, true) }},
 		{"exit_fallback", func(s *Snapshot, _ *Options) { configureExit(s, exitlink.All, exitlink.Fallback, true) }},
+	}
+	for _, protocol := range []string{"socks5", "http", "https"} {
+		cases = append(cases, goldenCase{"external_" + protocol, func(s *Snapshot, _ *Options) {
+			configureExit(s, exitlink.All, exitlink.Block, false)
+			s.Exit.Outgoing.External = &exitlink.Proxy{Type: protocol, Host: "proxy.example.org", Port: 8080, Username: "fixture", Password: "fixture-proxy-pass"}
+		}})
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

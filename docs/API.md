@@ -276,14 +276,15 @@ T9.3：远端行返回 `auto_upgrade`（布尔，默认 false），本机不返�
 | 方法 | 路径 | 请求与成功响应 |
 |---|---|---|
 | POST | `/join` | `{token, public_key, hostname, public_ip, version, protocol?}`，201 `{server_id}` |
-| POST | `/heartbeat` | `{version, protocol?, interfaces?, singbox_active, uptime, applied_generation?, sync_error?, metrics?, restart_result?, exit?, public_ip?}`。提供 `protocol` 或 `applied_generation` 时 200 `{desired_generation, protocol, version, interface, log_request?, restart_pending?, report_public_ip?}`。旧格式均省略时返回 204。顶层 uptime 为节点进程运行秒数 |
+| POST | `/heartbeat` | `{version, protocol?, interfaces?, singbox_active, uptime, applied_generation?, sync_error?, metrics?, restart_result?, exit?, public_ip?}`。提供 `protocol` 或 `applied_generation` 时 200 `{desired_generation, protocol, version, interface, log_request?, restart_pending?, report_public_ip?, proxy_test?}`。旧格式均省略时返回 204。顶层 uptime 为节点进程运行秒数 |
 | GET | `/desired` | 空请求体，200 `{generation, inbounds, users, route, restart_id?, exit?}` |
 | POST | `/inbound-keys` | `{inbound_id, key_id, reality_public_key?, short_id?, hy2_cert_sha256?, hy2_cert_pem?}`，204 |
 | POST | `/traffic` | `{counters:[{user_id,epoch,up,down}]}`，204 |
 | POST | `/interface-samples` | `{samples:[{sampled_at,interface,rx,tx}]}`，204 |
 | POST | `/logs` | `{id,batch_id,snapshot,lines}`，204 确认该批日志 |
+| POST | `/proxy-test-result` | `{id,ip?}`，204，失败时省略 `ip` |
 
-当前协议为 3，普通同步的最低协议仍为 2。旧请求省略 `protocol` 时按 1 处理。协议 1 节点仍可注册和发心跳，
+当前协议为 4，普通同步的最低协议仍为 2。旧请求省略 `protocol` 时按 1 处理。协议 1 节点仍可注册和发心跳，
 其签名认证通过的期望状态、流量、网卡样本及公开密钥请求返回 `426 agent_upgrade_required`。心跳回复的
 `version` / `protocol` 属于主控，`interface` 是该节点的网卡偏好，空字符串表示自动检测。
 `interfaces` 是最多 32 个互不重复的非回环 Linux 网卡名称。省略时保留上次选择列表，空数组会清空列表。
@@ -384,9 +385,15 @@ T9.6 期望状态 `exit` 只发给已经报告协议 3+ 的参与节点。同一
 
 | 方法 | 路径 | 请求与成功响应 |
 |---|---|---|
-| GET | `/servers/{id}/exit` | 200 `{server_id,address,supported,link,candidates,forwarded}` |
-| PUT | `/servers/{id}/exit` | `{exit_server_id,mode?,failure?,rules?}`，204 |
+| GET | `/servers/{id}/exit` | 200 `{server_id,address,supported,external_supported,link,candidates,forwarded}` |
+| PUT | `/servers/{id}/exit` | `{exit_server_id,mode?,failure?,rules?}` 或 `{external_proxy,mode?,failure?,rules?}`，204 |
 | DELETE | `/servers/{id}/exit` | 空请求体，停用此入口的出口，204 |
+| POST | `/servers/{id}/exit/test` | 请求体为代理参数，200 `{"ip":"…"}`，可在保存前调用 |
+
+- `external_proxy` 与 `exit_server_id` 二选一。代理参数有 `type`（`socks5`、`http`、`https`）、`host`（公网 IP 或域名）、`port`（1–65535）。需要认证时同时填写 `username`、`password`，免认证时两者留空。
+- GET 对外部出口返回 `link.exit_server_id=0` 与 `link.external_proxy={type,host,port,username,has_password}`。编辑、测试已保存的代理时，提交 `use_saved_password:true` 可沿用原密码，要求协议、地址、端口、账号相同且请求未填写密码。
+- POST 测试直接接收上述代理参数。入口通过代理访问固定 HTTPS 服务取得来源 IP。测试独立于已保存链路、健康状态与分流规则。同一远程入口测试中返回 409，测试失败或等待节点超时返回 422。远程入口的 `external_supported` 要求协议 4，已管理服务器链路仍支持协议 3。
+- 远程测试指令 `proxy_test={id,proxy}` 随所选入口的心跳响应传递，节点向 `POST /api/agent/v1/proxy-test-result` 签名提交 `{id,ip?}`。指令随测试请求结束而释放。
 
 - `id` 是入口服务器 ID。`link=null` 代表入口直连。非空记录返回保存的设置和内部端口 `port`，
   最近确认的探测时间 `checked_at`（可为 null）及 `status`。状态为 `syncing`、`checking`、`available`、

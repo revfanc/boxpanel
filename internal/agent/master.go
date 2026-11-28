@@ -59,6 +59,8 @@ type Master struct {
 	joins              map[string][]time.Time
 	nonces             map[nonceKey]struct{}
 	nonceOrder         list.List
+	proxyMu            sync.Mutex
+	proxyTests         map[int64]*pendingProxyTest
 	logMu              sync.Mutex
 	logs               map[int64]*logStream
 }
@@ -71,7 +73,7 @@ func NewMaster(writer, reader *sql.DB, now func() time.Time) *Master {
 		now = time.Now
 	}
 	return &Master{writer: writer, reader: reader, now: now, Logger: slog.Default(), joins: make(map[string][]time.Time),
-		nonces: make(map[nonceKey]struct{}), logs: make(map[int64]*logStream)}
+		nonces: make(map[nonceKey]struct{}), proxyTests: make(map[int64]*pendingProxyTest), logs: make(map[int64]*logStream)}
 }
 
 func (m *Master) AllowJoin(peer string) (bool, int) {
@@ -463,6 +465,9 @@ func (m *Master) RecordHeartbeat(ctx context.Context, identity authenticated, in
 	}
 	if monitoring != nil && in.Protocol >= MinNodeProtocol {
 		reply.LogRequest = m.logRequest(identity.id)
+	}
+	if in.Protocol >= ExternalProxyProtocol {
+		reply.ProxyTest = m.proxyCommand(identity.id)
 	}
 	return reply, nil
 }

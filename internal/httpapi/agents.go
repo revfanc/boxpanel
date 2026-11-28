@@ -22,7 +22,7 @@ func (a *api) agentEndpoints() http.Handler {
 		agent.Prefix + "/join": http.MethodPost, agent.Prefix + "/heartbeat": http.MethodPost,
 		agent.Prefix + "/desired": http.MethodGet, agent.Prefix + "/inbound-keys": http.MethodPost,
 		agent.TrafficPath: http.MethodPost, agent.InterfaceSamplesPath: http.MethodPost,
-		agent.LogsPath: http.MethodPost,
+		agent.LogsPath: http.MethodPost, agent.Prefix + "/proxy-test-result": http.MethodPost,
 	}
 	return middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method, ok := routes[r.URL.Path]
@@ -142,6 +142,13 @@ func (a *api) agentAuthenticated(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	switch r.URL.Path {
+	case agent.Prefix + "/proxy-test-result":
+		var result agent.ProxyTestResult
+		if !decodeResource(w, r, &result) {
+			return
+		}
+		a.opts.Agents.FinishProxyTest(identity, result)
+		w.WriteHeader(http.StatusNoContent)
 	case agent.LogsPath:
 		media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 		var report agent.LogReport

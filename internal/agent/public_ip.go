@@ -33,7 +33,7 @@ func (m ExitMonitor) ReconcilePublicIPs(ctx context.Context) error {
 			WITH RECURSIVE peers(id) AS (
 				SELECT s.id UNION
 				SELECT CASE WHEN l.entry_id=p.id THEN l.exit_id ELSE l.entry_id END
-				FROM peers p JOIN exit_links l ON p.id IN (l.entry_id,l.exit_id)
+				FROM peers p JOIN exit_links l ON l.exit_id IS NOT NULL AND p.id IN (l.entry_id,l.exit_id)
 			)
 			SELECT 1 FROM peers JOIN servers peer ON peer.id=peers.id
 			WHERE (instr(coalesce(nullif(peer.public_ip,''),peer.exit_address),':')>0)
@@ -53,7 +53,7 @@ func (m ExitMonitor) ReconcilePublicIPs(ctx context.Context) error {
 		var local bool
 		err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM servers s WHERE "+pending+`
 			AND EXISTS (SELECT 1 FROM exit_links l JOIN servers home ON home.is_local=1
-			WHERE home.id IN (l.entry_id,l.exit_id) AND s.id IN (l.entry_id,l.exit_id)))`).Scan(&local)
+			WHERE l.exit_id IS NOT NULL AND home.id IN (l.entry_id,l.exit_id) AND s.id IN (l.entry_id,l.exit_id)))`).Scan(&local)
 		if err != nil {
 			return fmt.Errorf("check local link address changes: %w", err)
 		}

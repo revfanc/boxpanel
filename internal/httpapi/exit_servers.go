@@ -53,6 +53,10 @@ func exitIP(value string) netip.Addr {
 
 func (s exitServer) supported() bool { return s.local || s.protocol >= agent.ExitProtocol }
 
+func (s exitServer) externalSupported() bool {
+	return s.local || s.protocol >= agent.ExternalProxyProtocol
+}
+
 func (s exitServer) candidateReason(entry exitServer, alreadyLinked bool, now int64) string {
 	switch {
 	case !s.supported():
@@ -71,8 +75,9 @@ func (s exitServer) candidateReason(entry exitServer, alreadyLinked bool, now in
 }
 
 type exitLinkView struct {
-	ExitServerID int64 `json:"exit_server_id"`
-	Port         int   `json:"port"`
+	External     *proxyView `json:"external_proxy,omitempty"`
+	ExitServerID int64      `json:"exit_server_id"`
+	Port         int        `json:"port"`
 	exitlink.Policy
 	Status    string `json:"status"`
 	CheckedAt *int64 `json:"checked_at"`
@@ -86,12 +91,13 @@ type exitServerChoice struct {
 }
 
 type exitServerView struct {
-	ServerID   int64              `json:"server_id"`
-	Address    string             `json:"address"`
-	Supported  bool               `json:"supported"`
-	Link       *exitLinkView      `json:"link"`
-	Candidates []exitServerChoice `json:"candidates"`
-	Forwarded  exitlink.Totals    `json:"forwarded"`
+	ExternalSupported bool               `json:"external_supported"`
+	ServerID          int64              `json:"server_id"`
+	Address           string             `json:"address"`
+	Supported         bool               `json:"supported"`
+	Link              *exitLinkView      `json:"link"`
+	Candidates        []exitServerChoice `json:"candidates"`
+	Forwarded         exitlink.Totals    `json:"forwarded"`
 }
 
 func (a *api) serverExit(w http.ResponseWriter, r *http.Request) {
@@ -125,16 +131,26 @@ func (a *api) readExitServer(ctx context.Context, id int64) (exitServerView, err
 		return out, fmt.Errorf("read entry server: %w", err)
 	}
 	out.Address, out.Supported, out.Forwarded = entry.address, entry.supported(), entry.usage
+	out.ExternalSupported = entry.externalSupported()
+	var external sql.NullString
 	var link exitLinkView
+	var target *exitServer
 	var rules string
 	var checked int64
 	var available *bool
 	var policyDown bool
-	err = tx.QueryRowContext(ctx, "SELECT exit_id,port,mode,failure,rules,checked_at,available,policy_down FROM exit_links WHERE entry_id=?", id).
-		Scan(&link.ExitServerID, &link.Port, &link.Mode, &link.Failure, &rules, &checked, &available, &policyDown)
+	err = tx.QueryRowContext(ctx, "SELECT coalesce(exit_id,0),port,mode,failure,rules,checked_at,available,policy_down,external_proxy FROM exit_links WHERE entry_id=?", id).
+		Scan(&link.ExitServerID, &link.Port, &link.Mode, &link.Failure, &rules, &checked, &available, &policyDown, &external)
 	if err == nil {
 		if err := json.Unmarshal([]byte(rules), &link.Rules); err != nil {
 			return out, fmt.Errorf("read saved exit rules; restore or reenter the rules")
+		}
+		if external.Valid {
+			var proxy exitlink.Proxy
+			if err := json.Unmarshal([]byte(external.String), &proxy); err != nil {
+				return out, fmt.Errorf("decode stored proxy endpoint")
+			}
+			link.External = &proxyView{proxy.Type, proxy.Host, proxy.Port, proxy.Username, proxy.Password != ""}
 		}
 		out.Link = &link
 	} else if !errors.Is(err, sql.ErrNoRows) {
@@ -155,25 +171,30 @@ func (a *api) readExitServer(ctx context.Context, id int64) (exitServerView, err
 		reason := candidate.candidateReason(entry, selected, now)
 		out.Candidates = append(out.Candidates, exitServerChoice{candidate.id, candidate.name, candidate.address, reason})
 		if selected {
-			link.Status = exitStatus(entry, candidate, available, policyDown, checked, now, link.Failure)
-			if checked > 0 {
-				link.CheckedAt = &checked
-			}
+			target = &candidate
+		}
+	}
+	if out.Link != nil {
+		link.Status = exitStatus(entry, target, available, policyDown, checked, now, link.Failure)
+		if checked > 0 {
+			link.CheckedAt = &checked
 		}
 	}
 	return out, rows.Err()
 }
 
-func exitStatus(entry, target exitServer, available *bool, policyDown bool, checked, now int64, failure string) string {
+func exitStatus(entry exitServer, target *exitServer, available *bool, policyDown bool, checked, now int64, failure string) string {
 	switch {
-	case !entry.supported() || !target.supported():
+	case !entry.supported() || target != nil && !target.supported():
+		return "upgrade_required"
+	case target == nil && !entry.externalSupported():
 		return "upgrade_required"
 	case !entry.local && entry.syncPending:
 		// A saved policy can differ from the entry's running policy until
 		// the node acknowledges this generation, even if the probe is fresh.
 		return "syncing"
 	case available == nil:
-		if !target.local && target.syncPending {
+		if target != nil && !target.local && target.syncPending {
 			return "syncing"
 		}
 		return "checking"
@@ -191,6 +212,7 @@ func exitStatus(entry, target exitServer, available *bool, policyDown bool, chec
 }
 
 type exitInput struct {
+	External     *proxyInput     `json:"external_proxy"`
 	ExitServerID int64           `json:"exit_server_id"`
 	Mode         string          `json:"mode"`
 	Failure      string          `json:"failure"`
@@ -207,8 +229,8 @@ func (a *api) saveServerExit(w http.ResponseWriter, r *http.Request) {
 	if !decodeResource(w, r, &input) {
 		return
 	}
-	if input.ExitServerID <= 0 || input.ExitServerID == id {
-		a.resourceError(w, invalid("exit_server_id", "请选择与入口不同的已管理服务器。"))
+	if input.External != nil && input.ExitServerID != 0 || input.External == nil && (input.ExitServerID <= 0 || input.ExitServerID == id) {
+		a.resourceError(w, invalid("exit_server_id", "请选择一个出口：其他已管理服务器或外部代理。"))
 		return
 	}
 	policy := exitlink.Policy{Mode: input.Mode, Failure: input.Failure}
@@ -224,6 +246,14 @@ func (a *api) saveServerExit(w http.ResponseWriter, r *http.Request) {
 	rules, err := json.Marshal(policy.Rules)
 	if err != nil {
 		a.resourceError(w, err)
+		return
+	}
+	if input.External != nil {
+		if a.writeExitChange(w, r, id, 0, false, func(ctx context.Context, tx *sql.Tx) error {
+			return saveExternalExit(ctx, tx, id, *input.External, policy, string(rules))
+		}) {
+			w.WriteHeader(http.StatusNoContent)
+		}
 		return
 	}
 	reader, err := a.readDB()
@@ -254,7 +284,7 @@ func (a *api) saveServerExit(w http.ResponseWriter, r *http.Request) {
 			return fmt.Errorf("read selected exit server: %w", err)
 		}
 		var previous int64
-		err = tx.QueryRowContext(ctx, "SELECT exit_id FROM exit_links WHERE entry_id=?", id).Scan(&previous)
+		err = tx.QueryRowContext(ctx, "SELECT coalesce(exit_id,0) FROM exit_links WHERE entry_id=?", id).Scan(&previous)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("read previous exit server: %w", err)
 		}

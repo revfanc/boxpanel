@@ -19,6 +19,7 @@ func (a *api) registerServerPanel(register func(string, string, http.HandlerFunc
 	register("GET", "/api/v1/overview", a.panelOverview, true)
 	register("GET", "/api/v1/servers/{id}", a.serverGet, true)
 	register("GET", "/api/v1/servers/{id}/exit", a.serverExit, true)
+	register("POST", "/api/v1/servers/{id}/exit/test", a.testExternalExit, true)
 	register("PUT", "/api/v1/servers/{id}/exit", a.saveServerExit, true)
 	register("DELETE", "/api/v1/servers/{id}/exit", a.deleteServerExit, true)
 	register("GET", "/api/v1/servers/{id}/status", a.serverStatus, true)

@@ -158,11 +158,20 @@ export interface ExitSettings {
   failure: ExitFailure
   rules: { presets: ExitPreset[]; domains: string[]; domain_suffixes: string[] }
 }
+export type ProxyProtocol = 'socks5' | 'http' | 'https'
+export interface ExternalProxy {
+  type: ProxyProtocol
+  host: string
+  port: number
+  username: string
+  has_password: boolean
+}
 export interface ServerExit {
+  external_supported: boolean
   server_id: number
   address: string
   supported: boolean
-  link: (ExitSettings & { status: ExitLinkStatus; checked_at: number | null; port: number }) | null
+  link: (ExitSettings & { external_proxy?: ExternalProxy; status: ExitLinkStatus; checked_at: number | null; port: number }) | null
   candidates: { id: number; name: string; address: string; unavailable_reason?: ExitUnavailable }[]
   forwarded: CycleBytes
 }
