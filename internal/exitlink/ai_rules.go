@@ -33,21 +33,9 @@ type DestinationRules struct {
 }
 
 func ParseAIRules(domains, voice []byte) (DestinationRules, error) {
-	var rules DestinationRules
-	for line := range strings.Lines(string(domains)) {
-		value := strings.TrimSpace(line)
-		if value == "" || strings.HasPrefix(value, "#") {
-			continue
-		}
-		name, suffix := strings.CutPrefix(strings.ToLower(value), "+.")
-		if !validDomain(name) {
-			return DestinationRules{}, fmt.Errorf("invalid domain in AI rule source")
-		}
-		if suffix {
-			rules.Suffixes = append(rules.Suffixes, name)
-		} else {
-			rules.Domains = append(rules.Domains, name)
-		}
+	rules, err := parseDomainList(domains)
+	if err != nil {
+		return DestinationRules{}, fmt.Errorf("decode AI domains: %w", err)
 	}
 	var feed struct {
 		Prefixes []struct {
@@ -79,5 +67,25 @@ func ParseAIRules(domains, voice []byte) (DestinationRules, error) {
 	rules.Domains = sortedUnique(rules.Domains)
 	rules.Suffixes = sortedUnique(rules.Suffixes)
 	rules.Prefixes = sortedUnique(rules.Prefixes)
+	return rules, nil
+}
+
+func parseDomainList(domains []byte) (DestinationRules, error) {
+	var rules DestinationRules
+	for line := range strings.Lines(string(domains)) {
+		value := strings.TrimSpace(line)
+		if value == "" || strings.HasPrefix(value, "#") {
+			continue
+		}
+		name, suffix := strings.CutPrefix(strings.ToLower(value), "+.")
+		if !validDomain(name) {
+			return DestinationRules{}, fmt.Errorf("invalid domain in rule source")
+		}
+		if suffix {
+			rules.Suffixes = append(rules.Suffixes, name)
+		} else {
+			rules.Domains = append(rules.Domains, name)
+		}
+	}
 	return rules, nil
 }

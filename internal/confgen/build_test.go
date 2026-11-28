@@ -93,6 +93,10 @@ func TestServerGolden(t *testing.T) {
 			configureExit(s, exitlink.Split, exitlink.Block, false)
 			s.Exit.Incoming = []exitlink.Inbound{{ID: 34, Source: "2001:db8::2", Port: 20001, Password: s.Exit.Outgoing.Password}}
 		}},
+		{"exit_streaming", func(s *Snapshot, _ *Options) {
+			configureExit(s, exitlink.Split, exitlink.Block, false)
+			s.Exit.Outgoing.Rules = exitlink.Rules{Presets: []string{"streaming"}}
+		}},
 		{"exit_all", func(s *Snapshot, _ *Options) { configureExit(s, exitlink.All, exitlink.Block, false) }},
 		{"exit_blocked", func(s *Snapshot, _ *Options) { configureExit(s, exitlink.Split, exitlink.Block, true) }},
 		{"exit_fallback", func(s *Snapshot, _ *Options) { configureExit(s, exitlink.All, exitlink.Fallback, true) }},
@@ -145,7 +149,11 @@ func TestServerGolden(t *testing.T) {
 
 func configureExit(s *Snapshot, mode, failure string, down bool) {
 	s.Inbounds, s.Users = s.Inbounds[1:2], s.Users[1:2]
-	s.AIRules = &exitlink.DestinationRules{Domains: []string{"model.example.org"}, Suffixes: []string{"chatgpt.com"}, Prefixes: []string{"203.0.113.5/32", "2001:db8::5/128"}}
+	s.PresetRules = map[string]exitlink.DestinationRules{
+		"ai":        {Domains: []string{"model.example.org"}, Suffixes: []string{"chatgpt.com"}, Prefixes: []string{"203.0.113.5/32", "2001:db8::5/128"}},
+		"streaming": {Suffixes: []string{"disneyplus.com", "netflix.com"}, Prefixes: []string{"198.51.100.7/32", "2001:db8:1::/48"}},
+	}
+
 	revision := exitlink.Revision{ID: 32, Version: 1}
 	s.Exit.Outgoing = &exitlink.Outbound{Revision: revision, Address: "198.51.100.2", Port: 20000,
 		Password: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x6a}, 32)),

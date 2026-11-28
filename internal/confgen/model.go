@@ -17,7 +17,7 @@ type Snapshot struct {
 	BlockBittorrent bool
 	Exit            exitlink.Configuration
 	ExitProbe       exitlink.Probe
-	AIRules         *exitlink.DestinationRules
+	PresetRules     map[string]exitlink.DestinationRules
 }
 
 type Inbound struct {

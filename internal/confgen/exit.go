@@ -49,27 +49,34 @@ func addExitProbe(cfg *config, snapshot Snapshot) (*exitlink.Outbound, routeRule
 		return nil, routeRule{}, nil
 	}
 	out := *snapshot.Exit.Outgoing
-	if err := out.Validate(); err != nil {
+	if err := out.Normalize(); err != nil {
 		return nil, routeRule{}, err
 	}
 	cfg.Outbounds = append(cfg.Outbounds, exitOutbound(out, out.Revision.ProbeTag(), 0))
 	var match routeRule
 	if out.Mode == exitlink.Split {
-		match.Domain, match.Suffix = out.Rules.Domains, out.Rules.Suffixes()
-		if out.UsesAIRules() {
-			ai := snapshot.AIRules
-			if ai == nil {
-				seed, err := exitlink.BundledAIRules()
-				if err != nil {
-					return nil, routeRule{}, fmt.Errorf("load bundled AI rules: %w", err)
+		match.Domain, match.Suffix = out.Rules.Domains, out.Rules.DomainSuffixes
+		var rules []exitlink.DestinationRules
+		for _, preset := range out.Rules.Presets {
+			r, ok := snapshot.PresetRules[preset]
+			if !ok {
+				var err error
+				if preset == exitlink.AIPreset {
+					r, err = exitlink.BundledAIRules()
+				} else {
+					r, err = exitlink.BundledStreamingRules()
 				}
-				ai = &seed
+				if err != nil {
+					return nil, routeRule{}, fmt.Errorf("load %s exit rules: %w", preset, err)
+				}
 			}
-			if len(ai.Domains)+len(ai.Suffixes) == 0 || len(ai.Prefixes) == 0 {
-				return nil, routeRule{}, fmt.Errorf("AI exit requires domain and IP rules")
+			if len(r.Domains)+len(r.Suffixes) == 0 || len(r.Prefixes) == 0 {
+				return nil, routeRule{}, fmt.Errorf("%s exit requires domain and IP rules", preset)
 			}
+			rules = append(rules, r)
+		}
+		if len(rules) > 0 {
 			const tag = "bp-exit-split"
-			rules := []exitlink.DestinationRules{*ai}
 			if len(match.Domain)+len(match.Suffix) > 0 {
 				rules = append(rules, exitlink.DestinationRules{Domains: match.Domain, Suffixes: match.Suffix})
 			}

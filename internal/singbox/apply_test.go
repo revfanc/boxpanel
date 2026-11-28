@@ -308,48 +308,53 @@ func TestApplySuccessAndStartupRegenerate(t *testing.T) {
 	}
 }
 
-func TestAIRulesRollbackAndOfflineStartup(t *testing.T) {
-	ctx := t.Context()
-	f := newApplyFixture(t)
-	if _, err := f.conn.Exec(`INSERT INTO exit_links(entry_id,external_proxy,port,password,mode,failure,rules)
-		VALUES(1,'{"type":"https","host":"proxy.example.org","port":443}',443,'','split','block','{"presets":["ai"]}')`); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.m.Startup(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if raw := string(readFile(t, f.path)); !strings.Contains(raw, "chatgpt.com") || !strings.Contains(raw, "ip_cidr") {
-		t.Fatal("offline first start omitted bundled AI rules")
-	}
-	apply := func(domain string) error {
-		return f.m.Apply(ctx, func(ctx context.Context, tx *sql.Tx) error {
-			return db.SetSetting(ctx, tx, db.ExitAIRules, exitlink.DestinationRules{Domains: []string{domain}, Prefixes: []string{"203.0.113.4/32"}})
+func TestPresetRulesRollbackAndOfflineStartup(t *testing.T) {
+	for _, preset := range db.ExitPresets {
+		t.Run(preset.Name, func(t *testing.T) {
+			ctx := t.Context()
+			f := newApplyFixture(t)
+			if _, err := f.conn.Exec(`INSERT INTO exit_links(entry_id,external_proxy,port,password,mode,failure,rules)
+		VALUES(1,'{"type":"https","host":"proxy.example.org","port":443}',443,'','split','block',json_object('presets',json_array(?)))`, preset.Name); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.m.Startup(ctx); err != nil {
+				t.Fatal(err)
+			}
+			anchor := map[string]string{"ai": "chatgpt.com", "streaming": "netflix.com"}[preset.Name]
+			if raw := string(readFile(t, f.path)); !strings.Contains(raw, anchor) || !strings.Contains(raw, "ip_cidr") {
+				t.Fatal("offline first start omitted bundled preset rules")
+			}
+			apply := func(domain string) error {
+				return f.m.Apply(ctx, func(ctx context.Context, tx *sql.Tx) error {
+					return db.SetSetting(ctx, tx, preset.Rules, exitlink.DestinationRules{Domains: []string{domain}, Prefixes: []string{"203.0.113.4/32"}})
+				})
+			}
+			if err := apply("accepted.example.org"); err != nil {
+				t.Fatal(err)
+			}
+			accepted := string(readFile(t, f.path))
+			if !strings.Contains(accepted, "accepted.example.org") || !strings.Contains(accepted, "203.0.113.4/32") {
+				t.Fatal("checked configuration lacks downloaded rules")
+			}
+			restarts := f.r.restarts
+			if err := apply("accepted.example.org"); err != nil || f.r.restarts != restarts {
+				t.Fatal("unchanged rules restarted the core", err)
+			}
+			f.r.checkFail = true
+			if err := apply("rejected.example.org"); err == nil {
+				t.Fatal("failed check was accepted")
+			}
+			f.r.checkFail = false
+			if string(readFile(t, f.path)) != accepted {
+				t.Fatal("failed check replaced the running configuration")
+			}
+			if err := f.m.Startup(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if string(readFile(t, f.path)) != accepted {
+				t.Fatal("offline startup did not regenerate the last checked rules")
+			}
 		})
-	}
-	if err := apply("accepted.example.org"); err != nil {
-		t.Fatal(err)
-	}
-	accepted := string(readFile(t, f.path))
-	if !strings.Contains(accepted, "accepted.example.org") || !strings.Contains(accepted, "203.0.113.4/32") {
-		t.Fatal("checked configuration lacks downloaded rules")
-	}
-	restarts := f.r.restarts
-	if err := apply("accepted.example.org"); err != nil || f.r.restarts != restarts {
-		t.Fatal("unchanged AI rules restarted the core", err)
-	}
-	f.r.checkFail = true
-	if err := apply("rejected.example.org"); err == nil {
-		t.Fatal("failed check was accepted")
-	}
-	f.r.checkFail = false
-	if string(readFile(t, f.path)) != accepted {
-		t.Fatal("failed check replaced the running configuration")
-	}
-	if err := f.m.Startup(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if string(readFile(t, f.path)) != accepted {
-		t.Fatal("offline startup did not regenerate the last checked rules")
 	}
 }
 

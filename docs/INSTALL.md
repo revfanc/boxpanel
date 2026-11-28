@@ -609,3 +609,5 @@ boxpanel set-master 'https://<新主控地址>:2053/<原面板路径>/'
 点击「测试连接」，入口通过代理访问 HTTPS 回显服务（api.ipify.org 或 icanhazip.com）。面板显示这次请求实际使用的公网 IP，轮换代理在后续连接中可能返回其他地址。确认后点击保存。外部代理无需安装 boxpanel 或开放 VPS 入站端口。
 
 使用 AI 分流时，将入口升级到 v0.7.0 或以上。入口每 24 小时通过 HTTPS 访问 raw.githubusercontent.com 和 openai.com 更新规则。已有配置中勾选 AI 的入口自动启用。首次断网使用内置快照，后续失败继续使用最后成功的数据。可在入口的 boxpanel 服务日志查看失败原因。
+
+流媒体每日分流要求入口版本 v0.7.1 或以上。已有入口勾选「流媒体」的，升级后直接生效。请允许入口通过 HTTPS 访问 raw.githubusercontent.com 和 stat.ripe.net。更新失败时入口继续使用上次的规则，首次离线启动使用内置规则；可在入口的 boxpanel 服务日志查看失败来源。

@@ -29,8 +29,8 @@ type ExitMonitor struct {
 	DetectIP        sysinfo.IPProbe
 	ManageAddresses bool
 	nextIPProbe     time.Time
-	nextAIRefresh   time.Time
-	fetchAIRules    func(context.Context) (exitlink.DestinationRules, error)
+	nextRuleRefresh map[string]time.Time
+	fetchRules      func(context.Context, string) (exitlink.DestinationRules, error)
 	BootID          string
 	Logger          *slog.Logger
 	Maintenance     func(context.Context) (func(), bool)
@@ -83,8 +83,8 @@ func (m *ExitMonitor) tick(ctx context.Context) {
 	if err := m.checkLink(ctx); err != nil && ctx.Err() == nil && m.Logger != nil {
 		m.Logger.Warn("未能应用出口探测结果。请检查入口服务器的同步和 sing-box 状态。")
 	}
-	if err := m.refreshAIRules(ctx); err != nil && ctx.Err() == nil && m.Logger != nil {
-		m.Logger.Warn("AI 出口规则更新失败，继续使用已有规则。请检查规则源连接和 sing-box 状态。", "error", err)
+	if err := m.refreshExitRules(ctx); err != nil && ctx.Err() == nil && m.Logger != nil {
+		m.Logger.Warn("部分出口规则更新失败，受影响的预设继续使用已有规则。请检查规则源连接和 sing-box 状态。", "error", err)
 	}
 }
 
