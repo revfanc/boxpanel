@@ -651,6 +651,14 @@ Linux root+nft+ip+unshare 在私有 network namespace 做真实双栈 TCP/UDP �
 `exit_split`、`exit_all`、`exit_blocked`、`exit_fallback` golden 覆盖规则顺序和标记，用锁定版 `sing-box check` 校验。
 `TestExitLoopback` 为同一域名在入口和出口配置不同的 DNS 答案，在回环网络验证 TCP 和 UDP 使用哪一端的解析结果，并检查私有目标拦截。
 
+### 流媒体出口规则
+
+入口勾选 `streaming` 后，从 MetaCubeX 的 Netflix 清单读取域名和后缀，从 ACL4SSR 的 DisneyPlus 清单读取精确域名及后缀。Disney+ 保留带 Disney 标识的域名和 BAM、DSS 的已知服务域名。AWS 区域网关、通用统计和广告域名会被过滤。Disney+ 域名规则由 ACL4SSR 发布，筛选后的这部分数据同样按 CC BY-SA 4.0 分发。[Netflix 域名源](https://github.com/MetaCubeX/meta-rules-dat/blob/meta/geo/geosite/netflix.list) · [Disney+ 域名源](https://github.com/ACL4SSR/ACL4SSR/blob/master/Clash/Ruleset/DisneyPlus.list) · [ACL4SSR 许可证](https://github.com/ACL4SSR/ACL4SSR/blob/master/LICENCE)
+
+IP 分流使用 RIPE RIS 观察到的 BGP 起源前缀。Netflix 使用 Open Connect 的 AS2906 和 AS40027，Disney 使用 Disney Streaming Edge 的 AS23344。每个来源校验 ASN、两类地址的记录数和公网 CIDR。只读取起源字段，排除转接前缀和共享云厂商的网段。Disney 同一流媒体边缘网络可以服务多个产品，IP 命中表示流量去往该网络。其他共享 CDN 上的请求可通过已知域名匹配。[Netflix Open Connect 网络配置](https://openconnect.zendesk.com/hc/en-us/articles/360035533071-Network-configuration) · [Disney Streaming Edge 网络资料](https://www.peeringdb.com/net/26506) · [RIPEstat RIS Prefixes](https://stat.ripe.net/docs/data-api/api-endpoints/ris-prefixes.html)
+
+两个域名源和三个 ASN 查询全部成功后，入口通过原有 Apply 流程校验并整体替换快照。首次启动可使用内置数据，此后每 24 小时尝试更新；任一来源或配置生效失败，入口继续使用最近成功的流媒体规则。入口离线重启时直接读取本地规则。AI 与流媒体分别记录更新时间，一项下载失败时另一项仍可更新。
+
 ### 外部代理出站
 
 选择外部代理时，入口按同一分流规则、用户计量标记和故障策略生成出站。SOCKS5 使用 `type: socks`、`version: "5"`。HTTP 使用 `type: http` 和 CONNECT。HTTPS 另设 `tls.enabled`、`tls.server_name` 并验证代理证书。按配置传入用户名和密码。外部代理只配置出站，无需分配内部监听端口。

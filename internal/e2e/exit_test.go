@@ -33,11 +33,11 @@ func TestExitLoopback(t *testing.T) {
 	// Both target listeners use IPv4. Give each resolver a different
 	// answer for the same name so only the expected resolver can reach it.
 	entryHosts := object{
-		"chatgpt.com": "::1", "claude.ai": "::1", "ai.via-exit.test": "::1", "all.test": "::1",
+		"video.netflix.com": "::1", "disneyplus.com": "::1", "chatgpt.com": "::1", "claude.ai": "::1", "ai.via-exit.test": "::1", "all.test": "::1",
 		"direct.test": "127.0.0.1", "xyvia-exit.test": "127.0.0.1", "fallback.via-exit.test": "127.0.0.1",
 	}
 	exitHosts := object{
-		"chatgpt.com": "127.0.0.1", "claude.ai": "127.0.0.1", "ai.via-exit.test": "127.0.0.1", "all.test": "127.0.0.1",
+		"video.netflix.com": "127.0.0.1", "disneyplus.com": "127.0.0.1", "chatgpt.com": "127.0.0.1", "claude.ai": "127.0.0.1", "ai.via-exit.test": "127.0.0.1", "all.test": "127.0.0.1",
 		"direct.test": "::1", "xyvia-exit.test": "::1", "fallback.via-exit.test": "::1",
 	}
 	for _, tc := range []struct {
@@ -46,7 +46,7 @@ func TestExitLoopback(t *testing.T) {
 		reachable, rejected []string
 	}{
 		{name: "split", mode: exitlink.Split, failure: exitlink.Block,
-			reachable: []string{"chatgpt.com", "claude.ai", "ai.via-exit.test", "direct.test", "xyvia-exit.test", "203.0.113.42"}},
+			reachable: []string{"chatgpt.com", "claude.ai", "ai.via-exit.test", "direct.test", "xyvia-exit.test", "203.0.113.42", "video.netflix.com", "disneyplus.com", "203.0.113.43"}},
 		{name: "all", mode: exitlink.All, failure: exitlink.Block, reachable: []string{"all.test"}, rejected: []string{"127.0.0.1"}},
 		{name: "fallback", mode: exitlink.All, failure: exitlink.Fallback, down: true, reachable: []string{"fallback.via-exit.test"}},
 		{name: "block", mode: exitlink.Split, failure: exitlink.Block, down: true, reachable: []string{"direct.test"},
@@ -64,7 +64,7 @@ func TestExitLoopback(t *testing.T) {
 			key := exitlink.Revision{ID: 1, Version: 1}
 			f.snapshot.Exit.Outgoing = &exitlink.Outbound{Revision: key, Address: "127.0.0.1", Port: internal.port(), Password: password,
 				Policy: exitlink.Policy{Mode: tc.mode, Failure: tc.failure, Rules: exitlink.Rules{
-					Presets: []string{"ai"}, DomainSuffixes: []string{"via-exit.test"},
+					Presets: []string{"ai", "streaming"}, DomainSuffixes: []string{"via-exit.test"},
 				}}}
 			if tc.down {
 				f.snapshot.ExitProbe = exitlink.Probe{Revision: key, Available: new(false), PolicyDown: true}
@@ -75,8 +75,13 @@ func TestExitLoopback(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ai.Prefixes = []string{"203.0.113.0/24"}
-			f.snapshot.AIRules = &ai
+			streaming, err := exitlink.BundledStreamingRules()
+			if err != nil {
+				t.Fatal(err)
+			}
+			ai.Prefixes = []string{"203.0.113.42/32"}
+			streaming.Prefixes = []string{"203.0.113.43/32"}
+			f.snapshot.PresetRules = map[string]exitlink.DestinationRules{"ai": ai, "streaming": streaming}
 			entryJSON, err := confgen.Build(f.snapshot, f.options)
 			if err != nil {
 				t.Fatal(err)

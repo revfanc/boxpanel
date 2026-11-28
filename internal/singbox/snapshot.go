@@ -24,6 +24,7 @@ import (
 	"github.com/revfanc/boxpanel/internal/certs"
 	"github.com/revfanc/boxpanel/internal/confgen"
 	"github.com/revfanc/boxpanel/internal/db"
+	"github.com/revfanc/boxpanel/internal/exitlink"
 	"github.com/revfanc/boxpanel/internal/firewall"
 )
 
@@ -88,10 +89,16 @@ func snapshot(ctx context.Context, tx *sql.Tx) (confgen.Snapshot, []string, erro
 	if err != nil {
 		return s, secrets, err
 	}
-	if s.Exit.Outgoing.UsesAIRules() {
-		rules, err := db.GetSetting(ctx, tx, db.ExitAIRules)
+	for _, preset := range db.ExitPresets {
+		if !s.Exit.Outgoing.UsesPreset(preset.Name) {
+			continue
+		}
+		rules, err := db.GetSetting(ctx, tx, preset.Rules)
 		if err == nil {
-			s.AIRules = &rules
+			if s.PresetRules == nil {
+				s.PresetRules = make(map[string]exitlink.DestinationRules)
+			}
+			s.PresetRules[preset.Name] = rules
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return s, secrets, err
 		}

@@ -105,23 +105,21 @@
             ]
           },
           {
+            "domain_suffix": [
+              "disneyplus.com",
+              "netflix.com"
+            ],
+            "ip_cidr": [
+              "198.51.100.7/32",
+              "2001:db8:1::/48"
+            ]
+          },
+          {
             "domain": [
               "api.example.com"
             ],
             "domain_suffix": [
-              "bamgrid.com",
-              "disney-plus.net",
-              "disneyplus.com",
-              "dssott.com",
-              "example.net",
-              "fast.com",
-              "netflix.com",
-              "netflix.net",
-              "nflxext.com",
-              "nflximg.com",
-              "nflximg.net",
-              "nflxso.net",
-              "nflxvideo.net"
+              "example.net"
             ]
           }
         ]

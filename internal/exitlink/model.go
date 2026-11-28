@@ -30,14 +30,10 @@ const (
 	ProbeExpires = 2 * time.Minute
 )
 
-var presets = map[string][]string{
-	"ai": nil, // Supplied by the daily AI rule set.
-	"streaming": {
-		"netflix.com", "netflix.net", "nflxext.com", "nflximg.com", "nflximg.net",
-		"nflxso.net", "nflxvideo.net", "fast.com",
-		"disneyplus.com", "disney-plus.net", "bamgrid.com", "dssott.com",
-	},
-}
+const (
+	AIPreset        = "ai"
+	StreamingPreset = "streaming"
+)
 
 type Policy struct {
 	Mode    string `json:"mode"`
@@ -51,8 +47,8 @@ type Rules struct {
 	DomainSuffixes []string `json:"domain_suffixes"`
 }
 
-func (o *Outbound) UsesAIRules() bool {
-	return o != nil && o.Mode == Split && slices.Contains(o.Rules.Presets, "ai")
+func (o *Outbound) UsesPreset(name string) bool {
+	return o != nil && (o.Mode == Split || o.Mode == "") && slices.Contains(o.Rules.Presets, name)
 }
 
 func (p *Policy) Normalize() error {
@@ -67,7 +63,7 @@ func (p *Policy) Normalize() error {
 	}
 	p.Rules.Presets = sortedUnique(p.Rules.Presets)
 	for _, name := range p.Rules.Presets {
-		if _, ok := presets[name]; !ok {
+		if name != AIPreset && name != StreamingPreset {
 			return errors.New("choose AI or streaming presets")
 		}
 	}
@@ -114,14 +110,6 @@ func sortedUnique(values []string) []string {
 	return slices.Compact(out)
 }
 
-func (r Rules) Suffixes() []string {
-	suffixes := slices.Clone(r.DomainSuffixes)
-	for _, preset := range r.Presets {
-		suffixes = append(suffixes, presets[preset]...)
-	}
-	return sortedUnique(suffixes)
-}
-
 type Revision struct {
 	ID      int64 `json:"id"`
 	Version int64 `json:"revision"`
@@ -163,7 +151,7 @@ func (i Inbound) Validate() error {
 	return validateEndpoint(i.Source, i.Port, i.Password)
 }
 
-func (o Outbound) Validate() error {
+func (o *Outbound) Normalize() error {
 	if o.ID <= 0 || o.Version <= 0 {
 		return errors.New("invalid exit link revision")
 	}

@@ -11,13 +11,26 @@ import (
 )
 
 var (
-	ExitAIRules       = SettingKey[exitlink.DestinationRules]{"exit_ai_rules"}
-	ExitAILastAttempt = SettingKey[int64]{"exit_ai_last_attempt"}
-	AgentExit         = SettingKey[exitlink.Configuration]{"agent_exit"}
-	ExitProbe         = SettingKey[exitlink.Probe]{"exit_probe"}
-	ExitUsage         = SettingKey[ExitCheckpoint]{"exit_usage"}
-	ExitEver          = SettingKey[bool]{"exit_ever"}
+	ExitAIRules              = SettingKey[exitlink.DestinationRules]{"exit_ai_rules"}
+	ExitAILastAttempt        = SettingKey[int64]{"exit_ai_last_attempt"}
+	ExitStreamingRules       = SettingKey[exitlink.DestinationRules]{"exit_streaming_rules"}
+	ExitStreamingLastAttempt = SettingKey[int64]{"exit_streaming_last_attempt"}
+	AgentExit                = SettingKey[exitlink.Configuration]{"agent_exit"}
+	ExitProbe                = SettingKey[exitlink.Probe]{"exit_probe"}
+	ExitUsage                = SettingKey[ExitCheckpoint]{"exit_usage"}
+	ExitEver                 = SettingKey[bool]{"exit_ever"}
 )
+
+type ExitPresetSettings struct {
+	Name        string
+	Rules       SettingKey[exitlink.DestinationRules]
+	LastAttempt SettingKey[int64]
+}
+
+var ExitPresets = [...]ExitPresetSettings{
+	{exitlink.AIPreset, ExitAIRules, ExitAILastAttempt},
+	{exitlink.StreamingPreset, ExitStreamingRules, ExitStreamingLastAttempt},
+}
 
 // ExitCheckpoint keeps the kernel baseline and the cumulative totals together.
 // Linux counters persist across process restarts but reset at boot.
