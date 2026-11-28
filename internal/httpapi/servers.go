@@ -17,6 +17,7 @@ import (
 type serverRecord struct {
 	ID                int64                `json:"id"`
 	Name              string               `json:"name"`
+	PublicIP          string               `json:"public_ip,omitempty"`
 	PublicHost        string               `json:"public_host"`
 	IsLocal           bool                 `json:"is_local"`
 	Status            string               `json:"status"`
@@ -45,7 +46,7 @@ type serverInboundCounts struct {
 	Pending int64 `json:"pending"`
 }
 
-const serverColumns = "id,name,public_host,is_local,status,last_seen_at,version,created_at,updated_at,desired_generation,applied_generation,sync_error,singbox_active,uptime,protocol,auto_upgrade,monitoring,restart_id,restart_status,restart_error"
+const serverColumns = "id,name,public_host,public_ip,is_local,status,last_seen_at,version,created_at,updated_at,desired_generation,applied_generation,sync_error,singbox_active,uptime,protocol,auto_upgrade,monitoring,restart_id,restart_status,restart_error"
 
 const serverSelect = `SELECT ` + serverColumns + `,
 	(SELECT count(*) FROM inbounds WHERE server_id=servers.id AND (agent_key_id='' OR agent_keys_ready=1)),
@@ -60,7 +61,7 @@ func scanServer(row rowScanner, counts *serverInboundCounts) (serverRecord, erro
 	var uptime *int64
 	var autoUpgrade bool
 	var restart agent.RestartState
-	dest := []any{&s.ID, &s.Name, &s.PublicHost, &s.IsLocal, &s.Status, &s.LastSeenAt,
+	dest := []any{&s.ID, &s.Name, &s.PublicHost, &s.PublicIP, &s.IsLocal, &s.Status, &s.LastSeenAt,
 		&s.Version, &s.CreatedAt, &s.UpdatedAt, &desired, &applied, &syncError, &active, &uptime, &s.Protocol, &autoUpgrade,
 		&s.monitoring, &restart.ID, &restart.Status, &restart.Error}
 	if counts != nil {
@@ -236,21 +237,12 @@ func (a *api) serverRename(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	var s serverRecord
-	mutate := func(ctx context.Context, tx *sql.Tx, applying bool) error {
-		if input.PublicHost != nil {
-			if err := followServerIP(ctx, tx, id, *input.PublicHost, applying); err != nil {
-				return err
-			}
-		}
-		var err error
-		s, err = scanServer(tx.QueryRowContext(ctx, `UPDATE servers SET name=coalesce(?,name),
+	s, err := scanServer(conn.QueryRowContext(ctx, `UPDATE servers SET name=coalesce(?,name),
 			public_host=coalesce(?,public_host),auto_upgrade=coalesce(?,auto_upgrade),updated_at=unixepoch()
 			WHERE id=? AND status<>'removed' RETURNING `+
-			serverColumns, input.Name, input.PublicHost, input.AutoUpgrade, id), nil)
-		return err
-	}
-	if !a.writeServerSettings(w, r, conn, false, mutate) {
+		serverColumns, input.Name, input.PublicHost, input.AutoUpgrade, id), nil)
+	if err != nil {
+		a.resourceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, s)

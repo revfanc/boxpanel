@@ -54,6 +54,7 @@ type Identity struct {
 }
 
 type Heartbeat struct {
+	PublicIP          string         `json:"public_ip,omitempty"`
 	Metrics           *Metrics       `json:"metrics,omitempty"`
 	Version           string         `json:"version"`
 	Protocol          int            `json:"protocol,omitempty"`
@@ -138,6 +139,7 @@ type InboundKeys struct {
 }
 
 type HeartbeatReply struct {
+	ReportPublicIP    bool   `json:"report_public_ip,omitempty"`
 	DesiredGeneration int64  `json:"desired_generation"`
 	Protocol          int    `json:"protocol"`
 	Version           string `json:"version"`

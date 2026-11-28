@@ -10,9 +10,24 @@ import type { ExitSettings, ServerExit } from '@/types/api'
 const ex = t.exitServers
 const destination = { id: 2, name: 'Exit machine', address: '8.8.4.4' }
 const legacy = { id: 3, name: 'Legacy machine', address: '8.8.8.8', unavailable_reason: 'upgrade_required' } as const
-const blank: ServerExit = { custom_address: false, server_id: 1, supported: true, address: '9.9.9.9', candidates: [destination, legacy], link: null, forwarded: { up: 0, down: 0 } }
+const blank: ServerExit = { server_id: 1, supported: true, address: '9.9.9.9', candidates: [destination, legacy], link: null, forwarded: { up: 0, down: 0 } }
 const initial: ExitSettings = { exit_server_id: 2, mode: 'split', failure: 'block', rules: { presets: ['ai'], domains: ['api.example.com'], domain_suffixes: ['example.org'] } }
 const noContent = () => new Response(null, { status: 204 })
+
+it('saves the default policy after selecting only a server', async () => {
+  let saved: ExitSettings | undefined
+  mockAPI({
+    '/servers/1/exit': () => Response.json(blank),
+    'PUT /servers/1/exit': (init) => { saved = JSON.parse(String(init.body)) as ExitSettings; return noContent() },
+  })
+  const { user } = mountPage(<ServerExitTab serverID={1} />, '/servers/1')
+  await user.click(await screen.findByRole('combobox', { name: ex.target }))
+  await user.click(await screen.findByRole('option', { name: destination.name }))
+  expect(screen.getByText(ex.policyOptions).closest('details')).not.toHaveAttribute('open')
+  await user.click(screen.getByRole('button', { name: t.common.save }))
+  expect(await screen.findByText(ex.saved)).toBeVisible()
+  expect(saved).toEqual({ exit_server_id: 2, mode: 'split', failure: 'block', rules: { presets: ['ai', 'streaming'], domains: [], domain_suffixes: [] } })
+})
 
 it('edits server rules, persists failure policy and keeps rules when switching to all traffic', async () => {
   let saved: ExitSettings | undefined
@@ -28,8 +43,8 @@ it('edits server rules, persists failure policy and keeps rules when switching t
   expect(await screen.findByRole('option', { name: ex.optionUnavailable(legacy.name, ex.reasons.upgrade_required) })).toHaveAttribute('aria-disabled', 'true')
   await user.click(screen.getByRole('option', { name: destination.name }))
 
+  await user.click(screen.getByText(ex.policyOptions))
   expect(screen.getByRole('radio', { name: new RegExp(ex.split) })).toBeChecked()
-  expect(screen.queryByLabelText(ex.address)).not.toBeInTheDocument()
   await user.click(screen.getByText(ex.customDomains))
   expect(screen.getByRole('combobox', { name: ex.failure })).toHaveTextContent(ex.failures.block)
   await user.click(screen.getByRole('checkbox', { name: ex.presets.streaming }))
@@ -80,49 +95,15 @@ it('displays checked, fallback, stale and recovered status and confirms disable'
   expect(screen.getByText(ex.direct)).toBeVisible()
 })
 
-it('allows an explicit link address and hides entry editing for an outdated node', async () => {
-  let address = ''
-  mockAPI({
-    '/servers/1/exit': () => Response.json({ ...blank, address }),
-    'PUT /servers/1/exit-address': (init) => { ({ address } = JSON.parse(String(init.body))); return noContent() },
-    '/servers/2/exit': () => Response.json({ ...blank, server_id: 2, supported: false }),
-  })
-  const { user, router } = mountPage(<ServerDetailPage />, '/servers/1?tab=exit', '/servers/:id')
-  const field = await screen.findByRole('textbox', { name: ex.address })
-  expect(screen.getByText(ex.addressRequired)).toBeVisible()
-  await user.type(field, 'example.org')
-  await user.click(screen.getByRole('button', { name: ex.saveAddress }))
-  expect(await screen.findByText(ex.addressInvalid)).toBeVisible()
-  await user.clear(field)
-  await user.type(field, '2001:4860:4860::8888')
-  await user.click(screen.getByRole('button', { name: ex.saveAddress }))
-  expect(await screen.findByText(ex.addressSaved)).toBeVisible()
-  expect(address).toBe('2001:4860:4860::8888')
-  await act(() => router.navigate('/servers/2?tab=exit'))
-  expect(await screen.findByText(ex.needsUpgrade)).toBeVisible()
-  expect(screen.queryByRole('combobox', { name: ex.target })).not.toBeInTheDocument()
-})
-
-it('repairs a missing destination address without replacing the entry address', async () => {
-  let address = ''
-  let saved: ExitSettings | undefined
-  const fetch = mockAPI({
-    '/servers/1/exit': () => Response.json({ ...blank, candidates: [address ? { ...destination, address } :
-      { ...destination, address: '', unavailable_reason: 'address_required' }] }),
-    'PUT /servers/2/exit-address': (init) => { ({ address } = JSON.parse(String(init.body))); return noContent() },
-    'PUT /servers/1/exit': (init) => { saved = JSON.parse(String(init.body)); return noContent() },
-  })
+it('waits for automatic addresses when an endpoint has no IP', async () => {
+  mockAPI({ '/servers/1/exit': () => Response.json({ ...blank, address: '', candidates: [
+    { ...destination, address: '', unavailable_reason: 'address_required' },
+  ] }) })
   const { user } = mountPage(<ServerExitTab serverID={1} />)
-  await user.click(await screen.findByRole('combobox', { name: ex.target }))
-  await user.click(await screen.findByRole('option', { name: ex.optionUnavailable(destination.name, ex.reasons.address_required) }))
+  expect(await screen.findByText(ex.addressRequired)).toBeVisible()
+  await user.click(screen.getByRole('combobox', { name: ex.target }))
+  expect(await screen.findByRole('option', { name: ex.optionUnavailable(destination.name, ex.reasons.address_required) })).toHaveAttribute('aria-disabled', 'true')
   expect(screen.getByRole('button', { name: t.common.save })).toBeDisabled()
-  const missing = screen.getByRole('textbox', { name: ex.targetAddress(destination.name) })
-  await user.type(missing, destination.address)
-  await user.click(within(missing.closest('form')!).getByRole('button', { name: ex.saveAddress }))
-  await user.click(screen.getByRole('button', { name: t.common.save }))
-  expect(await screen.findByText(ex.saved)).toBeVisible()
-  expect(saved?.exit_server_id).toBe(destination.id)
-  expect(fetch.mock.calls.some(([url]) => url.endsWith('/1/exit-address'))).toBe(false)
 })
 
 it('shows exit forwarding in the server traffic tab', async () => {
@@ -132,23 +113,4 @@ it('shows exit forwarding in the server traffic tab', async () => {
   mountPage(<ServerDetailPage />, '/servers/2?tab=traffic', '/servers/:id')
   expect(await screen.findByText(ex.forwarded)).toBeVisible()
   expect(screen.getByText('5 KiB')).toBeVisible()
-})
-
-it('uses the server IP by default and lets a pinned origin return to following it', async () => {
-  const ip = '8.8.4.4'
-  let custom = true
-  mockAPI({
-    '/servers/1/exit': () => Response.json({ ...blank, server_ip: ip, custom_address: custom, address: custom ? blank.address : ip }),
-    'PUT /servers/1/exit-address': (init) => {
-      expect(JSON.parse(String(init.body))).toEqual({ use_server_ip: true })
-      custom = false
-      return noContent()
-    },
-  })
-  const { user } = mountPage(<ServerExitTab serverID={1} />)
-  await user.click(await screen.findByText(ex.network))
-  expect(screen.getByText(ex.customAddress(blank.address))).toBeVisible()
-  await user.click(screen.getByRole('button', { name: ex.useServerIP(ip) }))
-  expect(await screen.findByText(ex.followAddress(ip))).toBeVisible()
-  expect(screen.queryByRole('textbox', { name: ex.address })).not.toBeInTheDocument()
 })

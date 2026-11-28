@@ -21,7 +21,6 @@ func (a *api) registerServerPanel(register func(string, string, http.HandlerFunc
 	register("GET", "/api/v1/servers/{id}/exit", a.serverExit, true)
 	register("PUT", "/api/v1/servers/{id}/exit", a.saveServerExit, true)
 	register("DELETE", "/api/v1/servers/{id}/exit", a.deleteServerExit, true)
-	register("PUT", "/api/v1/servers/{id}/exit-address", a.saveExitAddress, true)
 	register("GET", "/api/v1/servers/{id}/status", a.serverStatus, true)
 	register("GET", "/api/v1/servers/{id}/traffic", a.serverTraffic, true)
 	register("GET", "/api/v1/servers/{id}/alerts", a.serverAlertSettings, true)

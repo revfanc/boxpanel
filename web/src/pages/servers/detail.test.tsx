@@ -9,8 +9,10 @@ import type { RestartState } from '@/types/api'
 it.each([server, edge])('uses the same tabs and server scope for $name', async (target) => {
   const path = '/servers/' + target.id
   const local = target.is_local
+  const detectedIP = local ? '9.9.9.9' : '2606:4700::1'
   const scoped = { ...inbound, id: 9, server_id: target.id, remark: 'Scoped inbound' }
   const fetch = mockAPI({
+    [path]: () => Response.json({ ...target, public_ip: detectedIP }),
     '/inbounds': () => Response.json([scoped, { ...inbound, server_id: local ? edge.id : server.id }]),
     [path + '/traffic']: () => Response.json({
       server_id: target.id, user_traffic: { up: 1024, down: 2048 },
@@ -22,6 +24,7 @@ it.each([server, edge])('uses the same tabs and server scope for $name', async (
   })
   const { user, router } = mountPage(<ServerDetailPage />, path, '/servers/:id')
   const list = await screen.findByRole('tablist', { name: t.servers.detail })
+  expect(await screen.findByText(detectedIP)).toBeVisible()
   expect(list).toHaveClass('flex-wrap')
   expect(within(list).getAllByRole('tab').map((tab) => tab.textContent)).toEqual(Object.values(t.servers.tabs))
   expect(await screen.findByText('12.5%')).toBeVisible()

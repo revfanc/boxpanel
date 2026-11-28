@@ -55,8 +55,16 @@ func TestChangedNodeIPReceivesLogLeaseAndNewExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	peer.Store("8.8.4.4:5678")
-	f.call(t, "PUT", "servers/1/exit-address", `{"address":"9.9.9.9"}`, 204)
-	f.call(t, "PUT", "servers/2/exit-address", `{"address":"8.8.4.4"}`, 204)
+	monitor := agent.ExitMonitor{Reader: f.conn, Writer: f.conn, Manager: f.apply}
+	if _, err := f.conn.Exec("UPDATE servers SET public_ip='9.9.9.9' WHERE is_local=1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := node.Writer.Exec("UPDATE servers SET public_ip='8.8.4.4' WHERE is_local=1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := monitor.ReconcilePublicIPs(ctx); err != nil {
+		t.Fatal(err)
+	}
 	const lease = "servers/2/logs/01010101010101010101010101010101"
 	f.call(t, "PUT", lease, "", 204)
 	readLogs := func() agent.LogView {
@@ -66,11 +74,14 @@ func TestChangedNodeIPReceivesLogLeaseAndNewExit(t *testing.T) {
 	if readLogs().Ready {
 		t.Fatal("offline node supplied logs without a heartbeat")
 	}
-	const policy = `{"exit_server_id":2,"mode":"all","failure":"block"}`
+	const policy = `{"exit_server_id":2}`
 	f.call(t, "PUT", "servers/1/exit", policy, 422)
 
 	// The same node key, database and master URL reconnect from the new peer.
 	syncNode()
+	if err := monitor.ReconcilePublicIPs(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if view := readLogs(); !view.Ready || !slices.Contains(view.Lines, "line 198") {
 		t.Fatal("no fresh log snapshot from the reconnected node")
 	}
@@ -87,6 +98,9 @@ func TestChangedNodeIPReceivesLogLeaseAndNewExit(t *testing.T) {
 	out, err := db.ReadLocalExit(ctx, f.conn)
 	if err != nil || out.Outgoing == nil || out.Outgoing.Address != "8.8.4.4" || out.Outgoing.Port != exitlink.PortFirst+1 {
 		t.Fatal("entry did not use the new address and fresh port inventory", err)
+	}
+	if out.Outgoing.Mode != exitlink.Split || out.Outgoing.Failure != exitlink.Block || !slices.Equal(out.Outgoing.Rules.Presets, []string{"ai", "streaming"}) {
+		t.Fatal("selecting only a server did not apply the default policy")
 	}
 	in, err := db.ReadLocalExit(ctx, node.Writer)
 	if err != nil || len(in.Incoming) != 1 || in.Incoming[0].Password != out.Outgoing.Password || in.Incoming[0].Port != out.Outgoing.Port || in.Incoming[0].Source != "9.9.9.9" {

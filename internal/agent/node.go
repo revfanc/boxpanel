@@ -43,6 +43,7 @@ type Node struct {
 	interfaceEndpointReady bool
 	interfacePreference    *string
 	logs                   nodeLogs
+	reportPublicIP         bool
 	exitCapable            bool
 }
 
@@ -57,6 +58,11 @@ func (n *Node) Sync(ctx context.Context, beat Heartbeat, coreActive func() bool)
 	if n.exitCapable {
 		beat.Exit = n.exitReport(ctx)
 	}
+	if n.reportPublicIP {
+		if err := n.Reader.QueryRowContext(ctx, "SELECT public_ip FROM servers WHERE is_local=1").Scan(&beat.PublicIP); err != nil {
+			return fmt.Errorf("read node public IP: %w", err)
+		}
+	}
 	reply, err := n.connect(ctx, beat)
 	if errors.Is(err, ErrExitRemoved) {
 		if err := n.clearRemovedExit(ctx); err != nil {
@@ -67,6 +73,7 @@ func (n *Node) Sync(ctx context.Context, beat Heartbeat, coreActive func() bool)
 	if err != nil {
 		return err
 	}
+	n.reportPublicIP = reply.ReportPublicIP
 	n.exitCapable = reply.Protocol >= ExitProtocol
 	n.syncLogs(ctx, reply)
 	if reply.ReadOnly {

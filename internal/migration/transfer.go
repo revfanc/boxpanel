@@ -129,6 +129,9 @@ func PrepareTarget(ctx context.Context, stage, source, target, secret, pin strin
 	if err := db.SetExitAddress(ctx, tx, local, u.Hostname()); err != nil {
 		return db.MasterMigration{}, err
 	}
+	if _, err := tx.ExecContext(ctx, "UPDATE servers SET public_ip='' WHERE id=?", local); err != nil {
+		return db.MasterMigration{}, fmt.Errorf("clear old master public IP: %w", err)
+	}
 	port, err := strconv.Atoi(u.Port())
 	if err != nil {
 		return db.MasterMigration{}, ErrAddress

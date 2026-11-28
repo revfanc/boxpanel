@@ -186,7 +186,7 @@ func serveAgent(ctx context.Context, conn *sql.DB, opts serveOptions, logger *sl
 		netDone, trafficDone, exitDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
 		go func() { defer close(netDone); network.RunTraffic(workerCtx) }()
 		go func() { defer close(trafficDone); scheduler.RunAccounting(workerCtx) }()
-		exitMonitor := agent.ExitMonitor{Writer: conn, Reader: reader, Manager: manager, BootID: bootID, Logger: logger}
+		exitMonitor := agent.ExitMonitor{DetectIP: sysinfo.DefaultIPProbe, Writer: conn, Reader: reader, Manager: manager, BootID: bootID, Logger: logger}
 		go func() { defer close(exitDone); exitMonitor.Run(workerCtx) }()
 		defer func() { cancel(); <-netDone; <-trafficDone; <-exitDone }()
 	}

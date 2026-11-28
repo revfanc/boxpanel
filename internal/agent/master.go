@@ -374,7 +374,7 @@ func (m *Master) ReadHeartbeat(ctx context.Context, identity authenticated) (Hea
 }
 
 func (m *Master) RecordHeartbeat(ctx context.Context, identity authenticated, in Heartbeat) (HeartbeatReply, error) {
-	reply := HeartbeatReply{Protocol: ProtocolVersion}
+	reply := HeartbeatReply{Protocol: ProtocolVersion, ReportPublicIP: true}
 	tx, err := m.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return reply, fmt.Errorf("begin agent heartbeat: %w", err)
@@ -391,6 +391,16 @@ func (m *Master) RecordHeartbeat(ctx context.Context, identity authenticated, in
 	}
 	if err != nil {
 		return reply, fmt.Errorf("read agent heartbeat preferences: %w", err)
+	}
+	if in.PublicIP != "" {
+		ip, err := netip.ParseAddr(in.PublicIP)
+		if err != nil || !ValidPublicIP(ip) {
+			return reply, ErrPublicIP
+		}
+		address := ip.Unmap().String()
+		if _, err := tx.ExecContext(ctx, "UPDATE servers SET public_ip=? WHERE id=? AND public_ip<>?", address, identity.id, address); err != nil {
+			return reply, fmt.Errorf("record node public IP: %w", err)
+		}
 	}
 	reply.DesiredGeneration, err = m.refreshDesired(ctx, tx, identity, now.Unix())
 	if err != nil {

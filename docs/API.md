@@ -251,7 +251,7 @@ T2.3 实现 restart、logs、config；versions、upgrade 留在后续任务。
 远端协议低于主控最低要求时返回 `upgrade_required: true`，且 `sync_status` 为 `failed`，联系状态独立显示。
 接口要求登录，改名沿用 CSRF 校验。
 名称去首尾空白后须为 1–64 个字符，且原值中不得包含控制字符。无效名称返回 400，未知 ID 返回 404。
-名称和公网地址变更会更新订阅元数据。处于自动模式的链路同时跟随有效的公网 IP；设置域名保留上次的链路地址。涉及本机对端配置或防火墙时，校验和生效失败会回滚本次编辑。远端 `public_host` 接受域名或裸 IPv4/IPv6。本机公网地址通过设置 API 修改。
+服务器资料中的 `public_host` 用于订阅，远端接受域名或裸 IPv4/IPv6，本机通过设置 API 修改。只读字段 `public_ip` 为本机探测或签名心跳报告的公网地址，首次成功探测前省略。
 远端服务器还返回 `desired_generation`、`applied_generation`（0 表示尚未生效）、`sync_status`（`syncing`、`synced`、`failed`）
 及最近心跳记录的 `singbox_active`。有失败时返回固定的 `sync_error` 代码，面板根据代码展示原因和处理建议。
 `GET /servers` 的远端行还包含 `traffic_up`、`traffic_down`，单位为字节。两项汇总该服务器所有未删除用户已确认的用量，
@@ -276,7 +276,7 @@ T9.3：远端行返回 `auto_upgrade`（布尔，默认 false），本机不返�
 | 方法 | 路径 | 请求与成功响应 |
 |---|---|---|
 | POST | `/join` | `{token, public_key, hostname, public_ip, version, protocol?}`，201 `{server_id}` |
-| POST | `/heartbeat` | `{version, protocol?, interfaces?, singbox_active, uptime, applied_generation?, sync_error?, metrics?, restart_result?, exit?}`。提供 `protocol` 或 `applied_generation` 时 200 `{desired_generation, protocol, version, interface, log_request?, restart_pending?}`。旧格式均省略时返回 204。顶层 uptime 为节点进程运行秒数 |
+| POST | `/heartbeat` | `{version, protocol?, interfaces?, singbox_active, uptime, applied_generation?, sync_error?, metrics?, restart_result?, exit?, public_ip?}`。提供 `protocol` 或 `applied_generation` 时 200 `{desired_generation, protocol, version, interface, log_request?, restart_pending?, report_public_ip?}`。旧格式均省略时返回 204。顶层 uptime 为节点进程运行秒数 |
 | GET | `/desired` | 空请求体，200 `{generation, inbounds, users, route, restart_id?, exit?}` |
 | POST | `/inbound-keys` | `{inbound_id, key_id, reality_public_key?, short_id?, hy2_cert_sha256?, hy2_cert_pem?}`，204 |
 | POST | `/traffic` | `{counters:[{user_id,epoch,up,down}]}`，204 |
@@ -293,6 +293,8 @@ T9.3：远端行返回 `auto_upgrade`（布尔，默认 false），本机不返�
 注册按 TCP 对端 IP 限流，每分钟 10 次，返回 429 时带 `Retry-After`。`public_ip` 为空时记录连接对端 IP，
 不会采用转发头。非公网地址（包括未传地址且对端为私网的情况）返回 `422 agent_public_ip_required`，
 节点可补充 `--public-ip` 后使用同一有效令牌重试。失效、已使用、过期或撤销的令牌统一返回 `401 invalid_join_token`。
+
+主控在可写心跳回复中通过 `report_public_ip: true` 声明支持接收公网 IP。节点收到后在后续心跳中附 `public_ip`。省略时保留最近的探测值，无效地址返回 `422 agent_public_ip_required`。旧版节点可继续使用登记时的链路地址。
 
 注册后所有节点请求的签名头为 `X-Boxpanel-Server`（十进制 ID）、`X-Boxpanel-Timestamp`（Unix 秒）、
 `X-Boxpanel-Nonce`（16 字节随机数的 base64url）和 `X-Boxpanel-Signature`（Ed25519 签名的 base64url）。
@@ -382,22 +384,21 @@ T9.6 期望状态 `exit` 只发给已经报告协议 3+ 的参与节点。同一
 
 | 方法 | 路径 | 请求与成功响应 |
 |---|---|---|
-| GET | `/servers/{id}/exit` | 200 `{server_id,address,server_ip?,custom_address,supported,link,candidates,forwarded}` |
+| GET | `/servers/{id}/exit` | 200 `{server_id,address,supported,link,candidates,forwarded}` |
 | PUT | `/servers/{id}/exit` | `{exit_server_id,mode?,failure?,rules?}`，204 |
 | DELETE | `/servers/{id}/exit` | 空请求体，停用此入口的出口，204 |
-| PUT | `/servers/{id}/exit-address` | `{address}`，固定此服务器的链路公网 IP；`{use_server_ip:true}` 恢复跟随服务器公网 IP。成功返回 204 |
 
 - `id` 是入口服务器 ID。`link=null` 代表入口直连。非空记录返回保存的设置和内部端口 `port`，
   最近确认的探测时间 `checked_at`（可为 null）及 `status`。状态为 `syncing`、`checking`、`available`、
   `unavailable`（已阻断）、`fallback`（已回退）、`policy_pending`、`stale` 或 `upgrade_required`。
 - `mode` 为 `split`（默认）或 `all`。`failure` 为 `block`（默认）或 `direct`。`rules` 有
   `presets`（`ai`、`streaming`）、`domains` 和 `domain_suffixes`（各最多 128 条）。输入规范化为小写，
-  去掉末尾的点和重复项。PUT 整体替换设置。`all` 保留规则以便切回 `split`；分流规则为空时全部直连。
+  去掉末尾的点和重复项。仅提交 `exit_server_id` 时启用分流、阻断以及 AI 和流媒体预设。PUT 整体替换设置。`all` 保留规则以便切回 `split`；分流规则为空时全部直连。
 - `candidates` 排除本服务器和已移除服务器。每项包含 `{id,name,address,unavailable_reason?}`，原因可能为
   `upgrade_required`、`pending`、`address_required`、`address_family` 或 `ports_pending`。
   新链路的远程出口需在最近两分钟内上报端口。保存时重新检查两端身份、能力、公网地址和端口。
   不满足条件返回 422，参数无效返回 400，端口用尽返回 409。全部接口需管理员会话，写操作检查 CSRF。
-- `address` 独立于订阅使用的 `public_host`，默认沿用已有公网 IP。IPv4 与 IPv6 需两端一致。
+- 只读的 `address` 为当前生效的链路地址。主控根据已保存的 `public_ip` 自动更新，等待生效时继续返回旧地址。IPv4 与 IPv6 需两端一致。
   修改地址、换出口和停用均重新调和受影响两端。`X-Boxpanel-Apply` 沿用 `applied`、`queued` 或 `dev-db-only`。
 - `forwarded` 和 `GET /servers/{id}/traffic` 的可选 `exit_traffic` 为 `{up,down}`，单位字节，
   汇总该出口向目标发送和收到的累计流量。已有充当出口记录的服务器才返回 `exit_traffic`。

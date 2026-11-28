@@ -35,7 +35,9 @@ func TestTrafficResetValidationApplyAndRecovery(t *testing.T) {
 	c := runningTrafficCollector(t, f, func(context.Context) ([]firewall.Counter, error) {
 		return []firewall.Counter{{UserID: 1, Upload: 60, Download: 70}}, nil
 	})
-	s := traffic.NewScheduler(c, f.apply, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	// Keep this quota/explicit-reset scenario before the monthly reset on day 28.
+	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+	s := traffic.NewScheduler(c, f.apply, func() time.Time { return now }, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := c.Poll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +93,7 @@ func TestTrafficResetValidationApplyAndRecovery(t *testing.T) {
 		t.Fatal(active, err)
 	}
 	// Expiry stops a still-applied user and extending expiry restores it via PUT.
-	if _, err := f.conn.Exec("UPDATE users SET expire_at=? WHERE id=1", time.Now().Unix()-1); err != nil {
+	if _, err := f.conn.Exec("UPDATE users SET expire_at=? WHERE id=1", now.Unix()-1); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Check(context.Background()); err != nil {

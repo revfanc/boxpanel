@@ -133,6 +133,7 @@ function ServerManagement({ server, status, now }: { server: Server; status?: Se
   const lastSeen = server.last_seen_at
   return <Panel title={t.servers.management}>
     <dl className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm [&>dt]:text-muted-foreground">
+      <dt>{t.servers.detectedIP}</dt><dd className="break-all">{server.public_ip || t.servers.waitingIP}</dd>
       <dt>{t.servers.version}</dt><dd>{server.version || t.common.unknown}</dd>
       {server.inbound_counts && <><dt>{t.servers.inboundCounts}</dt><dd>{server.inbound_counts.ready} / {server.inbound_counts.pending}</dd></>}
       {!server.is_local && <>

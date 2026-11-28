@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"path/filepath"
 	"slices"
 	"sync/atomic"
@@ -41,6 +42,79 @@ func monitorDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { conn.Close() })
 	return conn
+}
+
+func TestMonitorRetainsPublicIPAcrossFailuresAndRefreshes(t *testing.T) {
+	ctx := t.Context()
+	conn := monitorDB(t)
+	now := time.Unix(1000, 0)
+	address := netip.MustParseAddr("8.8.8.8")
+	var probeErr error
+	var calls int
+	m := ExitMonitor{Reader: conn, Writer: conn, now: func() time.Time { return now }, DetectIP: func(context.Context) (netip.Addr, error) {
+		calls++
+		return address, probeErr
+	}}
+	check := func(want string, attempts int) {
+		t.Helper()
+		m.tick(ctx)
+		var ip, effective string
+		if err := conn.QueryRow("SELECT public_ip,exit_address FROM servers WHERE is_local=1").Scan(&ip, &effective); err != nil || ip != want || effective != "" || attempts != calls {
+			t.Fatalf("node observation %q, effective address %q, calls %d: %v", ip, effective, calls, err)
+		}
+	}
+	check("8.8.8.8", 1)
+	address = netip.MustParseAddr("8.8.4.4")
+	now = now.Add(4 * time.Minute)
+	check("8.8.8.8", 1)
+	now = now.Add(time.Minute)
+	probeErr = context.DeadlineExceeded
+	check("8.8.8.8", 2)
+	now = now.Add(5 * time.Minute)
+	probeErr, address = nil, netip.MustParseAddr("10.0.0.1")
+	check("8.8.8.8", 3)
+	now = now.Add(5 * time.Minute)
+	address = netip.MustParseAddr("::ffff:8.8.4.4")
+	check("8.8.4.4", 4)
+	m.ManageAddresses = true
+	m.tick(ctx)
+	var effective string
+	if err := conn.QueryRow("SELECT exit_address FROM servers WHERE is_local=1").Scan(&effective); err != nil || effective != "8.8.4.4" {
+		t.Fatal("master did not reconcile its saved address", effective, err)
+	}
+}
+
+func TestLinkFamilySwitchWaitsForAllConnectedPeers(t *testing.T) {
+	ctx := t.Context()
+	conn := monitorDB(t)
+	key, err := exitlink.NewPassword()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = conn.Exec(`UPDATE servers SET exit_address='9.9.9.9',public_ip='2606:4700::1' WHERE id=1;
+		INSERT INTO servers(id,name,public_host,exit_address,public_ip) VALUES(2,'exit','','8.8.8.8','2606:4700::2'),(3,'peer','','8.8.4.4',''),(4,'independent','','1.1.1.1','1.0.0.1');
+		INSERT INTO exit_links(entry_id,exit_id,port,password,mode,failure,rules)
+		VALUES (1,2,20000,?,'all','block','{}'), (3,2,20001,?,'all','block','{}')`, key, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applier := &exitMonitorApplier{writer: conn}
+	m := ExitMonitor{Writer: conn, Reader: conn, Manager: applier}
+	check := func(want string, applies int) {
+		t.Helper()
+		if err := m.ReconcilePublicIPs(ctx); err != nil {
+			t.Fatal(err)
+		}
+		var got string
+		if err := conn.QueryRow("SELECT group_concat(exit_address,',' ORDER BY id) FROM servers").Scan(&got); err != nil || got != want || applier.attempts != applies {
+			t.Fatalf("addresses %s, apply count %d: %v", got, applier.attempts, err)
+		}
+	}
+	check("9.9.9.9,8.8.8.8,8.8.4.4,1.0.0.1", 0)
+	if _, err := conn.Exec("UPDATE servers SET public_ip='2606:4700::3' WHERE id=3"); err != nil {
+		t.Fatal(err)
+	}
+	check("2606:4700::1,2606:4700::2,2606:4700::3,1.0.0.1", 1)
 }
 
 func TestExitMonitorDebouncesAndRetriesPolicy(t *testing.T) {
