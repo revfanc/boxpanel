@@ -10,9 +10,34 @@ import type { ExitSettings, ServerExit } from '@/types/api'
 const ex = t.exitServers
 const destination = { id: 2, name: 'Exit machine', address: '8.8.4.4' }
 const legacy = { id: 3, name: 'Legacy machine', address: '8.8.8.8', unavailable_reason: 'upgrade_required' } as const
-const blank: ServerExit = { server_id: 1, supported: true, address: '9.9.9.9', candidates: [destination, legacy], link: null, forwarded: { up: 0, down: 0 } }
+const blank: ServerExit = { external_supported: true, server_id: 1, supported: true, address: '9.9.9.9', candidates: [destination, legacy], link: null, forwarded: { up: 0, down: 0 } }
 const initial: ExitSettings = { exit_server_id: 2, mode: 'split', failure: 'block', rules: { presets: ['ai'], domains: ['api.example.com'], domain_suffixes: ['example.org'] } }
 const noContent = () => new Response(null, { status: 204 })
+
+it('tests a draft proxy, shows its egress IP and saves it as the exit', async () => {
+  let saved: unknown
+  const fetch = mockAPI({
+    '/servers/1/exit': () => Response.json({ ...blank, address: '', candidates: [] }),
+    'POST /servers/1/exit/test': () => Response.json({ ip: '8.8.4.4' }),
+    'PUT /servers/1/exit': (init) => { saved = JSON.parse(String(init.body)); return noContent() },
+  })
+  const { user } = mountPage(<ServerExitTab serverID={1} />)
+  await user.click(await screen.findByRole('combobox', { name: ex.target }))
+  await user.click(await screen.findByRole('option', { name: ex.external }))
+  await user.click(screen.getByRole('combobox', { name: ex.proxyProtocol }))
+  await user.click(await screen.findByRole('option', { name: 'HTTPS' }))
+  await user.type(screen.getByLabelText(ex.proxyHost), 'proxy.example.org')
+  await user.type(screen.getByLabelText(ex.proxyPort), '443')
+  await user.click(screen.getByRole('button', { name: ex.proxyTest }))
+  expect(await screen.findByText(ex.proxyIP('8.8.4.4'))).toBeVisible()
+  expect(fetch.mock.calls.some(([, init]) => init?.method === 'PUT')).toBe(false)
+  await user.type(screen.getByLabelText(ex.proxyUser), 'alice')
+  expect(screen.queryByText(ex.proxyIP('8.8.4.4'))).not.toBeInTheDocument()
+  await user.type(screen.getByLabelText(ex.proxyPassword), 'test-pass')
+  await user.click(screen.getByRole('button', { name: t.common.save }))
+  expect(await screen.findByText(ex.saved)).toBeVisible()
+  expect(saved).toMatchObject({ external_proxy: { type: 'https', host: 'proxy.example.org', port: 443, username: 'alice', password: 'test-pass' } })
+})
 
 it('saves the default policy after selecting only a server', async () => {
   let saved: ExitSettings | undefined

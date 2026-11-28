@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"strings"
 	"time"
 
 	"github.com/revfanc/boxpanel/internal/db"
+	"github.com/revfanc/boxpanel/internal/exitlink"
 	"github.com/revfanc/boxpanel/internal/singbox"
 	"github.com/revfanc/boxpanel/internal/sysinfo"
 	"github.com/revfanc/boxpanel/internal/traffic"
@@ -34,8 +36,9 @@ type Node struct {
 	// automatic upgrade; it must return quickly and never stop the sync.
 	Upgrade func(context.Context, HeartbeatReply)
 	// ReadLogs provides redacted journal lines after an acknowledged cursor.
-	ReadLogs  func(context.Context, string, int) ([]string, string, error)
-	ExitPorts func(context.Context) (map[sysinfo.Socket]bool, error)
+	ReadLogs   func(context.Context, string, int) ([]string, string, error)
+	ProbeProxy func(context.Context, exitlink.Proxy) (netip.Addr, error)
+	ExitPorts  func(context.Context) (map[sysinfo.Socket]bool, error)
 
 	syncError              string
 	published              map[int64]InboundKeys
@@ -78,6 +81,9 @@ func (n *Node) Sync(ctx context.Context, beat Heartbeat, coreActive func() bool)
 	n.syncLogs(ctx, reply)
 	if reply.ReadOnly {
 		return nil
+	}
+	if cmd := reply.ProxyTest; cmd != nil {
+		n.runProxyTest(ctx, *cmd)
 	}
 	if n.Upgrade != nil {
 		// Before the protocol checks: an upgrade is how an outdated node recovers.

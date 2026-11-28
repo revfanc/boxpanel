@@ -645,3 +645,11 @@ AI 预设含 OpenAI、Anthropic 和 Gemini 等服务，流媒体预设含 Netfli
 没有远程规则集下载。只有入口可取得的目标域名（请求地址或嗅探结果）参与匹配。
 `exit_split`、`exit_all`、`exit_blocked`、`exit_fallback` golden 覆盖规则顺序和标记，用锁定版 `sing-box check` 校验。
 `TestExitLoopback` 为同一域名在入口和出口配置不同的 DNS 答案，在回环网络验证 TCP 和 UDP 使用哪一端的解析结果，并检查私有目标拦截。
+
+### 外部代理出站
+
+选择外部代理时，入口按同一分流规则、用户计量标记和故障策略生成出站。SOCKS5 使用 `type: socks`、`version: "5"`。HTTP 使用 `type: http` 和 CONNECT。HTTPS 另设 `tls.enabled`、`tls.server_name` 并验证代理证书。按配置传入用户名和密码。外部代理只配置出站，无需分配内部监听端口。
+
+HTTP 和 HTTPS 出口只转发 TCP。SOCKS5 的 UDP 取决于上游是否支持 UDP ASSOCIATE。「测试连接」通过代理发起 HTTPS 请求，只验证 TCP、认证及这次请求实际使用的出口 IP。配置生效后的定时探测继续使用内核专用出站。域名由上游代理解析，代理端的目标地址访问控制由提供商管理。
+
+[sing-box 1.14.4 SOCKS 出站](https://github.com/SagerNet/sing-box/blob/v1.14.4/docs/configuration/outbound/socks.md) · [HTTP 出站](https://github.com/SagerNet/sing-box/blob/v1.14.4/docs/configuration/outbound/http.md)

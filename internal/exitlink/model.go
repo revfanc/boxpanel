@@ -141,6 +141,7 @@ type Inbound struct {
 
 type Outbound struct {
 	Revision
+	External *Proxy `json:"external_proxy,omitempty"`
 	Address  string `json:"address"`
 	Port     int    `json:"port"`
 	Password string `json:"password"`
@@ -167,7 +168,11 @@ func (o Outbound) Validate() error {
 	if o.ID <= 0 || o.Version <= 0 {
 		return errors.New("invalid exit link revision")
 	}
-	if err := validateEndpoint(o.Address, o.Port, o.Password); err != nil {
+	if o.External != nil {
+		if err := o.External.Validate(); err != nil {
+			return err
+		}
+	} else if err := validateEndpoint(o.Address, o.Port, o.Password); err != nil {
 		return err
 	}
 	return o.Policy.Normalize()

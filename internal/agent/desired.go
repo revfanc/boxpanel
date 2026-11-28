@@ -78,6 +78,15 @@ func (m *Master) Desired(ctx context.Context, identity authenticated) (Desired, 
 	if err := tx.QueryRowContext(ctx, "SELECT protocol FROM servers WHERE id=?", identity.id).Scan(&protocol); err != nil {
 		return out, fmt.Errorf("read desired exit capability: %w", err)
 	}
+	if protocol < ExternalProxyProtocol {
+		var external bool
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM exit_links WHERE entry_id=? AND external_proxy IS NOT NULL)", identity.id).Scan(&external); err != nil {
+			return out, fmt.Errorf("read proxy capability requirement: %w", err)
+		}
+		if external {
+			return out, ErrAgentUpgradeRequired
+		}
+	}
 	if protocol >= ExitProtocol {
 		exits, err := db.ServerExitConfig(ctx, tx, identity.id)
 		if err != nil {

@@ -93,6 +93,9 @@ func snapshot(ctx context.Context, tx *sql.Tx) (confgen.Snapshot, []string, erro
 	}
 	if s.Exit.Outgoing != nil {
 		secrets = append(secrets, s.Exit.Outgoing.Password)
+		if proxy := s.Exit.Outgoing.External; proxy != nil {
+			secrets = append(secrets, proxy.Password)
+		}
 		s.ExitProbe, err = db.GetSetting(ctx, tx, db.ExitProbe)
 		if errors.Is(err, sql.ErrNoRows) {
 			err = nil
