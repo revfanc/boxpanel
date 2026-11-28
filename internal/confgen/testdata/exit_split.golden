@@ -87,6 +87,46 @@
     }
   ],
   "route": {
+    "rule_set": [
+      {
+        "type": "inline",
+        "tag": "bp-exit-split",
+        "rules": [
+          {
+            "domain": [
+              "model.example.org"
+            ],
+            "domain_suffix": [
+              "chatgpt.com"
+            ],
+            "ip_cidr": [
+              "203.0.113.5/32",
+              "2001:db8::5/128"
+            ]
+          },
+          {
+            "domain": [
+              "api.example.com"
+            ],
+            "domain_suffix": [
+              "bamgrid.com",
+              "disney-plus.net",
+              "disneyplus.com",
+              "dssott.com",
+              "example.net",
+              "fast.com",
+              "netflix.com",
+              "netflix.net",
+              "nflxext.com",
+              "nflximg.com",
+              "nflximg.net",
+              "nflxso.net",
+              "nflxvideo.net"
+            ]
+          }
+        ]
+      }
+    ],
     "rules": [
       {
         "action": "reject",
@@ -121,6 +161,9 @@
         ]
       },
       {
+        "rule_set": [
+          "bp-exit-split"
+        ],
         "auth_user": [
           "alice"
         ],
@@ -128,36 +171,6 @@
         "action": "route",
         "inbound": [
           "vless-reality-443"
-        ],
-        "domain": [
-          "api.example.com"
-        ],
-        "domain_suffix": [
-          "ai.google.dev",
-          "aistudio.google.com",
-          "anthropic.com",
-          "bamgrid.com",
-          "chatgpt.com",
-          "claude.ai",
-          "claude.com",
-          "disney-plus.net",
-          "disneyplus.com",
-          "dssott.com",
-          "example.net",
-          "fast.com",
-          "gemini.google.com",
-          "generativelanguage.googleapis.com",
-          "netflix.com",
-          "netflix.net",
-          "nflxext.com",
-          "nflximg.com",
-          "nflximg.net",
-          "nflxso.net",
-          "nflxvideo.net",
-          "notebooklm.google.com",
-          "oaistatic.com",
-          "oaiusercontent.com",
-          "openai.com"
         ]
       },
       {

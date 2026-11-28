@@ -11,10 +11,12 @@ import (
 )
 
 var (
-	AgentExit = SettingKey[exitlink.Configuration]{"agent_exit"}
-	ExitProbe = SettingKey[exitlink.Probe]{"exit_probe"}
-	ExitUsage = SettingKey[ExitCheckpoint]{"exit_usage"}
-	ExitEver  = SettingKey[bool]{"exit_ever"}
+	ExitAIRules       = SettingKey[exitlink.DestinationRules]{"exit_ai_rules"}
+	ExitAILastAttempt = SettingKey[int64]{"exit_ai_last_attempt"}
+	AgentExit         = SettingKey[exitlink.Configuration]{"agent_exit"}
+	ExitProbe         = SettingKey[exitlink.Probe]{"exit_probe"}
+	ExitUsage         = SettingKey[ExitCheckpoint]{"exit_usage"}
+	ExitEver          = SettingKey[bool]{"exit_ever"}
 )
 
 // ExitCheckpoint keeps the kernel baseline and the cumulative totals together.

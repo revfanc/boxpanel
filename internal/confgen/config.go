@@ -1,5 +1,7 @@
 package confgen
 
+import "github.com/revfanc/boxpanel/internal/exitlink"
+
 // These intentionally small output types track only the supported 1.14 fields.
 // They prevent stored panel options from leaking into sing-box's schema.
 type config struct {
@@ -96,13 +98,21 @@ type outboundConfig struct {
 	ConnectTimeout string     `json:"connect_timeout,omitempty"`
 }
 
+type inlineRuleSet struct {
+	Type  string                      `json:"type"`
+	Tag   string                      `json:"tag"`
+	Rules []exitlink.DestinationRules `json:"rules"`
+}
+
 type routeConfig struct {
-	Rules                 []routeRule `json:"rules"`
-	Final                 string      `json:"final"`
-	DefaultDomainResolver string      `json:"default_domain_resolver"`
+	RuleSet               []inlineRuleSet `json:"rule_set,omitempty"`
+	Rules                 []routeRule     `json:"rules"`
+	Final                 string          `json:"final"`
+	DefaultDomainResolver string          `json:"default_domain_resolver"`
 }
 
 type routeRule struct {
+	RuleSet     []string    `json:"rule_set,omitempty"`
 	AuthUser    []string    `json:"auth_user,omitempty"`
 	Outbound    string      `json:"outbound,omitempty"`
 	Protocol    string      `json:"protocol,omitempty"`

@@ -641,8 +641,13 @@ Linux root+nft+ip+unshare 在私有 network namespace 做真实双栈 TCP/UDP �
 探测恢复后切回出口。控制接口不可用时保留上次生效策略，面板会将过期状态标出。
 [锁定版 Clash API 实现](https://github.com/SagerNet/sing-box/blob/v1.14.4/experimental/clashapi/proxies.go)
 
-AI 预设含 OpenAI、Anthropic 和 Gemini 等服务，流媒体预设含 Netflix 和 Disney+。内置域名通过 `domain_suffix` 展开，
-没有远程规则集下载。只有入口可取得的目标域名（请求地址或嗅探结果）参与匹配。
+勾选 AI 分流时，入口读取 MetaCubeX `category-ai-!cn` 的文本规则集，精确域名和 `+.` 后缀分别生成 `domain`、`domain_suffix`。目标 IP 段取自 OpenAI 公布的 ChatGPT Voice 清单，转换为 `ip_cidr`。IPv4 和 IPv6 均受支持，覆盖范围取决于服务商公布的目的地址。域名在入口解析前匹配，直接访问 IP 时按目标地址匹配。流媒体预设和自定义规则与 AI 规则取并集，每个用户的流量仍由其入站与账号限定。
+
+每个启用 AI 分流的入口独立运行更新。首次启用即可使用安装包内的两份快照。入口每 24 小时通过 HTTPS 检查两个来源，检查时间持久化到 SQLite。两份数据均下载、解析并通过原有 Apply 流程后提交。任一来源失败或内核拒绝新配置时，已有数据和路由继续生效。下次启动可离线从本机数据库恢复。规则未变化时沿用 Apply 的免重启路径。
+
+初始域名快照取自 [MetaCubeX/meta-rules-dat 的规则数据](https://github.com/MetaCubeX/meta-rules-dat/blob/2dde1a519985f7822ed291c498f31e52a4621851/geo/geosite/category-ai-%21cn.list)。语音 IP 快照保留上游 JSON 的 `creationTime`。
+
+[MetaCubeX AI 域名源](https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/category-ai-%21cn.list) · [OpenAI 语音目的地址](https://openai.com/chatgpt-voice.json) · [OpenAI 官方网络说明](https://help.openai.com/en/articles/9247338-network-recommendations-for-chatgpt-errors-on-web-and-apps)
 `exit_split`、`exit_all`、`exit_blocked`、`exit_fallback` golden 覆盖规则顺序和标记，用锁定版 `sing-box check` 校验。
 `TestExitLoopback` 为同一域名在入口和出口配置不同的 DNS 答案，在回环网络验证 TCP 和 UDP 使用哪一端的解析结果，并检查私有目标拦截。
 

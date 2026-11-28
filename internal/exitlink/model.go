@@ -31,12 +31,7 @@ const (
 )
 
 var presets = map[string][]string{
-	"ai": {
-		"openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com",
-		"anthropic.com", "claude.ai", "claude.com",
-		"gemini.google.com", "aistudio.google.com", "generativelanguage.googleapis.com",
-		"ai.google.dev", "notebooklm.google.com",
-	},
+	"ai": nil, // Supplied by the daily AI rule set.
 	"streaming": {
 		"netflix.com", "netflix.net", "nflxext.com", "nflximg.com", "nflximg.net",
 		"nflxso.net", "nflxvideo.net", "fast.com",
@@ -54,6 +49,10 @@ type Rules struct {
 	Presets        []string `json:"presets"`
 	Domains        []string `json:"domains"`
 	DomainSuffixes []string `json:"domain_suffixes"`
+}
+
+func (o *Outbound) UsesAIRules() bool {
+	return o != nil && o.Mode == Split && slices.Contains(o.Rules.Presets, "ai")
 }
 
 func (p *Policy) Normalize() error {
