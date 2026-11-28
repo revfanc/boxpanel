@@ -17,6 +17,7 @@ import (
 	"github.com/revfanc/boxpanel/internal/exitlink"
 	"github.com/revfanc/boxpanel/internal/firewall"
 	"github.com/revfanc/boxpanel/internal/singbox"
+	"github.com/revfanc/boxpanel/internal/sysinfo"
 	"github.com/revfanc/boxpanel/internal/traffic"
 )
 
@@ -25,10 +26,13 @@ type ExitMonitor struct {
 	Manager        interface {
 		Apply(context.Context, singbox.Mutation) error
 	}
-	BootID       string
-	Logger       *slog.Logger
-	Maintenance  func(context.Context) (func(), bool)
-	OnTransition func(context.Context, *sql.Tx, int64, string, time.Time, time.Time, bool) error
+	DetectIP        sysinfo.IPProbe
+	ManageAddresses bool
+	nextIPProbe     time.Time
+	BootID          string
+	Logger          *slog.Logger
+	Maintenance     func(context.Context) (func(), bool)
+	OnTransition    func(context.Context, *sql.Tx, int64, string, time.Time, time.Time, bool) error
 
 	// Test seams for the loopback controller and kernel.
 	probe    func(context.Context, int, string, exitlink.Revision) (bool, error)
@@ -52,7 +56,7 @@ func (m ExitMonitor) Run(ctx context.Context) {
 	}
 }
 
-func (m ExitMonitor) tick(ctx context.Context) {
+func (m *ExitMonitor) tick(ctx context.Context) {
 	if m.Maintenance != nil {
 		release, ok := m.Maintenance(ctx)
 		if !ok {
@@ -60,12 +64,30 @@ func (m ExitMonitor) tick(ctx context.Context) {
 		}
 		defer release()
 	}
+	if now := m.currentTime(); m.DetectIP != nil && !now.Before(m.nextIPProbe) {
+		m.nextIPProbe = now.Add(5 * time.Minute)
+		if err := m.samplePublicIP(ctx); err != nil && ctx.Err() == nil && m.Logger != nil {
+			m.Logger.Warn("公网 IP 探测未完成，请检查服务器出站 HTTPS 和 DNS。系统将在五分钟后重试。")
+		}
+	}
+	if m.ManageAddresses {
+		if err := m.ReconcilePublicIPs(ctx); err != nil && ctx.Err() == nil && m.Logger != nil {
+			m.Logger.Warn("公网 IP 变更尚未生效，请检查 sing-box 和防火墙。系统将在下一轮重试。")
+		}
+	}
 	if err := m.sampleUsage(ctx); err != nil && ctx.Err() == nil && m.Logger != nil {
 		m.Logger.Warn("出口流量采集未完成。请检查 nftables、内核计数器和数据目录权限。")
 	}
 	if err := m.checkLink(ctx); err != nil && ctx.Err() == nil && m.Logger != nil {
 		m.Logger.Warn("未能应用出口探测结果。请检查入口服务器的同步和 sing-box 状态。")
 	}
+}
+
+func (m ExitMonitor) currentTime() time.Time {
+	if m.now != nil {
+		return m.now()
+	}
+	return time.Now()
 }
 
 func (m ExitMonitor) checkLink(ctx context.Context) error {
@@ -94,10 +116,7 @@ func (m ExitMonitor) checkLink(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	now := time.Now()
-	if m.now != nil {
-		now = m.now()
-	}
+	now := m.currentTime()
 	result := before.WithResult(revision, now, success)
 	update := func(result exitlink.Probe) singbox.Mutation {
 		return func(ctx context.Context, tx *sql.Tx) error {

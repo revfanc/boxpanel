@@ -284,14 +284,15 @@ func TestExitAddressMigrationPreservesDistinctOrigins(t *testing.T) {
 	}
 	mustExec(t, conn, `INSERT INTO servers (id,name,public_host,exit_address) VALUES
 		(2,'standard','8.8.8.8','8.8.8.8'),(3,'domain','cdn.example','8.8.4.4'),
-		(4,'custom','1.1.1.1','1.0.0.1'),(5,'empty','example.org','')`)
+		(4,'custom','1.1.1.1','1.0.0.1'),(5,'empty','example.org',''),
+		(6,'legacy-v4','1.0.0.2',''),(7,'legacy-v6','2606:4700::1','')`)
 	if err := Migrate(ctx, conn); err != nil {
 		t.Fatal(err)
 	}
-	for id, want := range map[int]bool{2: false, 3: true, 4: true, 5: false} {
-		var got bool
-		if err := conn.QueryRow("SELECT exit_address_custom FROM servers WHERE id=?", id).Scan(&got); err != nil || got != want {
-			t.Fatalf("server %d custom=%v err=%v", id, got, err)
+	for id, want := range map[int]string{2: "8.8.8.8", 3: "8.8.4.4", 4: "1.0.0.1", 5: "", 6: "1.0.0.2", 7: "2606:4700::1"} {
+		var address, detected string
+		if err := conn.QueryRow("SELECT exit_address,public_ip FROM servers WHERE id=?", id).Scan(&address, &detected); err != nil || address != want || detected != "" {
+			t.Fatalf("server %d address=%s detected=%s err=%v", id, address, detected, err)
 		}
 	}
 }

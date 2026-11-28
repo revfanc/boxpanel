@@ -243,6 +243,8 @@ func (a *api) agentOperationError(w http.ResponseWriter, err error) {
 	switch err {
 	case agent.ErrUnauthorized:
 		a.rejectAgent(w, false)
+	case agent.ErrPublicIP:
+		writeError(w, 422, "agent_public_ip_required", "节点上报的公网 IP 无效", "请检查节点的出站 HTTPS 和 DNS，等待下一次公网 IP 探测。")
 	case agent.ErrStaleKeys:
 		writeError(w, 409, "stale_inbound_keys", "入站密钥版本已变更", "请等待节点重新拉取配置后自动重试。")
 	case agent.ErrInvalidKeys:

@@ -613,7 +613,7 @@ Linux root+nft+ip+unshare 在私有 network namespace 做真实双栈 TCP/UDP �
 ## 8. T9.6 服务端出口
 
 内部链路使用 sing-box 1.14 的单密钥 Shadowsocks-2022 `2022-blake3-aes-256-gcm`。每条链路生成独立 32 字节密钥，
-按标准 Base64（含填充）存放。公网出口使用数字 IP，入站和出站均省略 `network` 以支持 TCP 和 UDP。
+按标准 Base64（含填充）存放。主控根据两端探测并保存的公网 IP 生成对端地址和入口源地址规则。地址变更沿用原链路 ID、端口、凭证及分流策略，涉及本机的配置和防火墙通过同一 Apply 流程生效。公网出口使用数字 IP，入站和出站均省略 `network` 以支持 TCP 和 UDP。
 内部入站为 `type: "shadowsocks"`，使用 `listen`、`listen_port`、`method` 和 `password`。
 出口的内部入站不使用 `users`，也不参与任何订阅。
 [Shadowsocks 入站文档](https://sing-box.sagernet.org/configuration/inbound/shadowsocks/) ·

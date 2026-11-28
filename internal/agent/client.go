@@ -210,6 +210,15 @@ func (c *Client) syncHeartbeat(ctx context.Context, id int64, key ed25519.Privat
 	if err != nil {
 		return reply, err
 	}
+	// A restored or alternate master may predate the previous capability reply.
+	if resp.StatusCode == http.StatusBadRequest && in.PublicIP != "" {
+		resp.Body.Close()
+		in.PublicIP = ""
+		resp, err = send()
+		if err != nil {
+			return reply, err
+		}
+	}
 	if resp.StatusCode == http.StatusBadRequest && in.Exit != nil {
 		resp.Body.Close()
 		in.Exit = nil

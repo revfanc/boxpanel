@@ -349,7 +349,7 @@ func serve(ctx context.Context, opts serveOptions, logger *slog.Logger, stdout i
 		}
 		go func() { defer close(trafficDone); scheduler.Run(workerCtx) }()
 		bootID, _ := os.ReadFile("/proc/sys/kernel/random/boot_id")
-		exitMonitor := agent.ExitMonitor{Writer: conn, Reader: reader, Manager: manager, BootID: strings.TrimSpace(string(bootID)),
+		exitMonitor := agent.ExitMonitor{DetectIP: sysinfo.DefaultIPProbe, ManageAddresses: true, Writer: conn, Reader: reader, Manager: manager, BootID: strings.TrimSpace(string(bootID)),
 			Logger: logger, OnTransition: alertService.ExitAvailability, Maintenance: alertOptions.Maintenance}
 		go func() { defer close(exitDone); exitMonitor.Run(workerCtx) }()
 	} else {

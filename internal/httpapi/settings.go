@@ -210,7 +210,7 @@ func (a *api) settingsPut(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	defer cancel()
-	mutation := func(ctx context.Context, tx *sql.Tx, applying bool) error {
+	mutation := func(ctx context.Context, tx *sql.Tx) error {
 		current, err := readSettings(ctx, tx)
 		if err != nil {
 			return err
@@ -232,15 +232,6 @@ func (a *api) settingsPut(w http.ResponseWriter, r *http.Request) {
 		if count > 0 || control == next.WebPort {
 			return conflict("port_in_use", "web_port", "请避开已有入站和 Clash 控制端口。")
 		}
-		if next.PublicHost != old.PublicHost {
-			local, err := db.LocalServerID(ctx, tx)
-			if err != nil {
-				return err
-			}
-			if err := followServerIP(ctx, tx, local, next.PublicHost, applying); err != nil {
-				return err
-			}
-		}
 		return saveSettings(ctx, tx, next)
 	}
 	writer, err := a.writeDB()
@@ -248,7 +239,12 @@ func (a *api) settingsPut(w http.ResponseWriter, r *http.Request) {
 		a.resourceError(w, err)
 		return
 	}
-	if !a.writeServerSettings(w, r, writer, next.BlockBittorrent != old.BlockBittorrent, mutation) {
+	if next.BlockBittorrent != old.BlockBittorrent {
+		if !a.applyResource(w, r, mutation) {
+			return
+		}
+	} else if err := transactInbound(r.Context(), writer, mutation); err != nil {
+		a.resourceError(w, err)
 		return
 	}
 	if changeListener {

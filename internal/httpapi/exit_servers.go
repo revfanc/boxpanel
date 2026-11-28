@@ -20,21 +20,20 @@ import (
 
 type exitServer struct {
 	inboundServer
-	name, address, ports, host string
-	custom                     bool
-	protocol                   int
-	portSampleAt               int64
-	syncPending                bool
-	usage                      exitlink.Totals
+	name, address, ports string
+	protocol             int
+	portSampleAt         int64
+	syncPending          bool
+	usage                exitlink.Totals
 }
 
-const exitServersSelect = `SELECT id,is_local,status,name,coalesce(nullif(exit_address,''),public_host),public_host,exit_address_custom,protocol,
+const exitServersSelect = `SELECT id,is_local,status,name,exit_address,protocol,
 	coalesce(exit_ports,''),exit_ports_at,desired_generation<>applied_generation,exit_traffic_up,exit_traffic_down
 	FROM servers WHERE status<>'removed'`
 
 func scanExitServer(row rowScanner) (exitServer, error) {
 	var s exitServer
-	err := row.Scan(&s.id, &s.local, &s.status, &s.name, &s.address, &s.host, &s.custom, &s.protocol,
+	err := row.Scan(&s.id, &s.local, &s.status, &s.name, &s.address, &s.protocol,
 		&s.ports, &s.portSampleAt, &s.syncPending, &s.usage.Up, &s.usage.Down)
 	ip := exitIP(s.address)
 	s.address = ""
@@ -87,14 +86,12 @@ type exitServerChoice struct {
 }
 
 type exitServerView struct {
-	ServerIP      string             `json:"server_ip,omitempty"`
-	CustomAddress bool               `json:"custom_address"`
-	ServerID      int64              `json:"server_id"`
-	Address       string             `json:"address"`
-	Supported     bool               `json:"supported"`
-	Link          *exitLinkView      `json:"link"`
-	Candidates    []exitServerChoice `json:"candidates"`
-	Forwarded     exitlink.Totals    `json:"forwarded"`
+	ServerID   int64              `json:"server_id"`
+	Address    string             `json:"address"`
+	Supported  bool               `json:"supported"`
+	Link       *exitLinkView      `json:"link"`
+	Candidates []exitServerChoice `json:"candidates"`
+	Forwarded  exitlink.Totals    `json:"forwarded"`
 }
 
 func (a *api) serverExit(w http.ResponseWriter, r *http.Request) {
@@ -127,10 +124,6 @@ func (a *api) readExitServer(ctx context.Context, id int64) (exitServerView, err
 	if err != nil {
 		return out, fmt.Errorf("read entry server: %w", err)
 	}
-	if ip := exitIP(entry.host); ip.IsValid() {
-		out.ServerIP = ip.String()
-	}
-	out.CustomAddress = entry.custom
 	out.Address, out.Supported, out.Forwarded = entry.address, entry.supported(), entry.usage
 	var link exitLinkView
 	var rules string
@@ -198,8 +191,10 @@ func exitStatus(entry, target exitServer, available *bool, policyDown bool, chec
 }
 
 type exitInput struct {
-	ExitServerID int64 `json:"exit_server_id"`
-	exitlink.Policy
+	ExitServerID int64           `json:"exit_server_id"`
+	Mode         string          `json:"mode"`
+	Failure      string          `json:"failure"`
+	Rules        *exitlink.Rules `json:"rules"`
 }
 
 func (a *api) saveServerExit(w http.ResponseWriter, r *http.Request) {
@@ -216,11 +211,17 @@ func (a *api) saveServerExit(w http.ResponseWriter, r *http.Request) {
 		a.resourceError(w, invalid("exit_server_id", "请选择与入口不同的已管理服务器。"))
 		return
 	}
-	if err := input.Normalize(); err != nil {
+	policy := exitlink.Policy{Mode: input.Mode, Failure: input.Failure}
+	if input.Rules != nil {
+		policy.Rules = *input.Rules
+	} else if input.Mode == "" && input.Failure == "" {
+		policy.Rules.Presets = []string{"ai", "streaming"}
+	}
+	if err := policy.Normalize(); err != nil {
 		a.resourceError(w, invalid("rules", "请检查分流方式、故障策略和预设。每类自定义规则最多 128 条，请输入不含通配符、端口或网址的域名。"))
 		return
 	}
-	rules, err := json.Marshal(input.Rules)
+	rules, err := json.Marshal(policy.Rules)
 	if err != nil {
 		a.resourceError(w, err)
 		return
@@ -265,20 +266,20 @@ func (a *api) saveServerExit(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if entry.address == "" {
-			return exitUnavailable("exit_address_required", "请先在入口服务器的「出口」标签填写链路公网 IP。")
+			return exitUnavailable("exit_address_required", "请检查入口服务器的出站 HTTPS 和 DNS，等待公网 IP 自动探测后重试。")
 		}
 		switch target.candidateReason(entry, same, time.Now().Unix()) {
 		case "pending":
 			return unavailableServer()
 		case "address_required":
-			return exitUnavailable("exit_address_required", "请先在所选出口服务器的「出口」标签填写链路公网 IP。")
+			return exitUnavailable("exit_address_required", "请检查出口节点的版本、出站 HTTPS 和 DNS，等待其上报公网 IP 后重试。")
 		case "address_family":
 			return exitUnavailable("exit_address_family", "请让入口和出口的链路公网 IP 同为 IPv4 或同为 IPv6。")
 		case "ports_pending":
 			return exitUnavailable("exit_ports_pending", "请让出口节点上线并等待下一次端口上报，再保存出口设置。")
 		}
 		if same {
-			if _, err := tx.ExecContext(ctx, "UPDATE exit_links SET mode=?,failure=?,rules=? WHERE entry_id=?", input.Mode, input.Failure, string(rules), id); err != nil {
+			if _, err := tx.ExecContext(ctx, "UPDATE exit_links SET mode=?,failure=?,rules=? WHERE entry_id=?", policy.Mode, policy.Failure, string(rules), id); err != nil {
 				return fmt.Errorf("update exit policy: %w", err)
 			}
 			return nil
@@ -310,17 +311,11 @@ func (a *api) saveServerExit(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		if err := db.SetExitAddress(ctx, tx, entry.id, entry.address); err != nil {
-			return err
-		}
-		if err := db.SetExitAddress(ctx, tx, target.id, target.address); err != nil {
-			return err
-		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM exit_links WHERE entry_id=?", id); err != nil {
 			return fmt.Errorf("replace former exit link: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO exit_links (entry_id,exit_id,port,password,mode,failure,rules)
-			VALUES (?,?,?,?,?,?,?)`, id, target.id, port, key, input.Mode, input.Failure, string(rules)); err != nil {
+			VALUES (?,?,?,?,?,?,?)`, id, target.id, port, key, policy.Mode, policy.Failure, string(rules)); err != nil {
 			return fmt.Errorf("save private exit link: %w", err)
 		}
 		return nil
@@ -350,52 +345,6 @@ func (a *api) deleteServerExit(w http.ResponseWriter, r *http.Request) {
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM exit_links WHERE entry_id=?", id); err != nil {
 			return fmt.Errorf("disable exit link: %w", err)
-		}
-		return nil
-	}) {
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (a *api) saveExitAddress(w http.ResponseWriter, r *http.Request) {
-	id, err := resourceID(r)
-	if err != nil {
-		a.resourceError(w, err)
-		return
-	}
-	var input struct {
-		Address     *string `json:"address"`
-		UseServerIP bool    `json:"use_server_ip"`
-	}
-	if !decodeResource(w, r, &input) {
-		return
-	}
-	var ip netip.Addr
-	if input.Address != nil {
-		ip = exitIP(*input.Address)
-	}
-	if input.UseServerIP && input.Address != nil || !input.UseServerIP && !ip.IsValid() {
-		a.resourceError(w, invalid("address", "请选择使用服务器 IP，或填写实际可用的公网 IPv4 或 IPv6 地址。"))
-		return
-	}
-	if !a.writeExitChange(w, r, id, 0, true, func(ctx context.Context, tx *sql.Tx) error {
-		server, err := scanExitServer(tx.QueryRowContext(ctx, exitServersSelect+" AND id=?", id))
-		if err != nil {
-			return fmt.Errorf("read server for exit address change: %w", err)
-		}
-		if !server.supported() {
-			return exitUnavailable("exit_upgrade_required", "请先升级节点并等待心跳，再修改链路公网 IP。")
-		}
-		if input.UseServerIP {
-			ip = exitIP(server.host)
-			if !ip.IsValid() {
-				return invalid("address", "服务器地址是域名或非公网 IP。请在服务器资料中填写公网 IP，或指定链路地址。")
-			}
-		}
-		_, err = tx.ExecContext(ctx, "UPDATE servers SET exit_address=?,exit_address_custom=? WHERE id=?", ip.String(), !input.UseServerIP, id)
-		if err != nil {
-			return fmt.Errorf("save link address preference: %w", err)
 		}
 		return nil
 	}) {
@@ -435,45 +384,4 @@ func (a *api) writeExitChange(w http.ResponseWriter, r *http.Request, id, target
 	}
 	w.Header().Set("X-Boxpanel-Apply", "queued")
 	return true
-}
-
-// Update the address and the referring links in the writer transaction.
-// The local kernel embeds both peer addresses and its outgoing probe revision.
-func followServerIP(ctx context.Context, tx *sql.Tx, id int64, host string, applying bool) error {
-	ip := exitIP(host)
-	if !ip.IsValid() {
-		return nil
-	}
-	res, err := tx.ExecContext(ctx, "UPDATE servers SET exit_address=? WHERE id=? AND exit_address_custom=0 AND exit_address<>?", ip.String(), id, ip.String())
-	if err != nil {
-		return fmt.Errorf("update automatic link address: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil || n == 0 || applying {
-		return err
-	}
-	var local bool
-	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM exit_links l JOIN servers s
-		ON s.is_local=1 AND s.id IN (l.entry_id,l.exit_id) WHERE ? IN (l.entry_id,l.exit_id))`, id).Scan(&local)
-	if err != nil {
-		return fmt.Errorf("check links affected by server IP: %w", err)
-	}
-	if local {
-		return errApplyLocalExit
-	}
-	return nil
-}
-
-func (a *api) writeServerSettings(w http.ResponseWriter, r *http.Request, conn *sql.DB, apply bool, mutate func(context.Context, *sql.Tx, bool) error) bool {
-	if !apply {
-		err := transactInbound(r.Context(), conn, func(ctx context.Context, tx *sql.Tx) error { return mutate(ctx, tx, false) })
-		if err == nil {
-			return true
-		}
-		if !errors.Is(err, errApplyLocalExit) {
-			a.resourceError(w, err)
-			return false
-		}
-	}
-	return a.applyResource(w, r, func(ctx context.Context, tx *sql.Tx) error { return mutate(ctx, tx, true) })
 }

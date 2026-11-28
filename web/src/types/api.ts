@@ -89,6 +89,7 @@ export interface Hysteria2Options {
   port_hopping: PortHopping
 }
 export interface Server {
+  public_ip?: string
   id: number
   name: string
   public_host: string
@@ -158,8 +159,6 @@ export interface ExitSettings {
   rules: { presets: ExitPreset[]; domains: string[]; domain_suffixes: string[] }
 }
 export interface ServerExit {
-  server_ip?: string
-  custom_address: boolean
   server_id: number
   address: string
   supported: boolean
