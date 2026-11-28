@@ -56,12 +56,32 @@ func addExitProbe(cfg *config, snapshot Snapshot) (*exitlink.Outbound, routeRule
 	var match routeRule
 	if out.Mode == exitlink.Split {
 		match.Domain, match.Suffix = out.Rules.Domains, out.Rules.Suffixes()
+		if out.UsesAIRules() {
+			ai := snapshot.AIRules
+			if ai == nil {
+				seed, err := exitlink.BundledAIRules()
+				if err != nil {
+					return nil, routeRule{}, fmt.Errorf("load bundled AI rules: %w", err)
+				}
+				ai = &seed
+			}
+			if len(ai.Domains)+len(ai.Suffixes) == 0 || len(ai.Prefixes) == 0 {
+				return nil, routeRule{}, fmt.Errorf("AI exit requires domain and IP rules")
+			}
+			const tag = "bp-exit-split"
+			rules := []exitlink.DestinationRules{*ai}
+			if len(match.Domain)+len(match.Suffix) > 0 {
+				rules = append(rules, exitlink.DestinationRules{Domains: match.Domain, Suffixes: match.Suffix})
+			}
+			cfg.Route.RuleSet = append(cfg.Route.RuleSet, inlineRuleSet{Type: "inline", Tag: tag, Rules: rules})
+			match = routeRule{RuleSet: []string{tag}}
+		}
 	}
 	return &out, match, nil
 }
 
 func addUserExitRoute(cfg *config, exit *exitlink.Outbound, match routeRule, probe exitlink.Probe, mark uint32, user User, tags []string) {
-	if exit == nil || len(tags) == 0 || exit.Mode == exitlink.Split && len(match.Domain) == 0 && len(match.Suffix) == 0 {
+	if exit == nil || len(tags) == 0 || exit.Mode == exitlink.Split && len(match.Domain)+len(match.Suffix)+len(match.RuleSet) == 0 {
 		return
 	}
 	down := probe.DownFor(exit.Revision)

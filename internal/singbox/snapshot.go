@@ -88,6 +88,14 @@ func snapshot(ctx context.Context, tx *sql.Tx) (confgen.Snapshot, []string, erro
 	if err != nil {
 		return s, secrets, err
 	}
+	if s.Exit.Outgoing.UsesAIRules() {
+		rules, err := db.GetSetting(ctx, tx, db.ExitAIRules)
+		if err == nil {
+			s.AIRules = &rules
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return s, secrets, err
+		}
+	}
 	for _, in := range s.Exit.Incoming {
 		secrets = append(secrets, in.Password)
 	}

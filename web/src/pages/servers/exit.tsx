@@ -212,6 +212,7 @@ function ExitPolicyForm({ data }: { data: ServerExit }) {
                   disabled={operation.pending || removal.pending || !data.supported} />
                 {ex.presets[preset]}
               </Label>)}
+              {field.value.includes('ai') && <p className="w-full text-xs text-muted-foreground">{ex.aiRuleSource}</p>}
             </div>} />
             <details open={customOpen} onToggle={(event) => setCustomOpen(event.currentTarget.open)} className="space-y-3">
               <summary className="cursor-pointer text-sm font-medium">{ex.customDomains}</summary>

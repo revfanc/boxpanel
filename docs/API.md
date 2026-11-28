@@ -398,6 +398,7 @@ T9.6 期望状态 `exit` 只发给已经报告协议 3+ 的参与节点。同一
 - `id` 是入口服务器 ID。`link=null` 代表入口直连。非空记录返回保存的设置和内部端口 `port`，
   最近确认的探测时间 `checked_at`（可为 null）及 `status`。状态为 `syncing`、`checking`、`available`、
   `unavailable`（已阻断）、`fallback`（已回退）、`policy_pending`、`stale` 或 `upgrade_required`。
+- 从 v0.7.0 起，入口在 `split` 模式选择 `rules.presets` 中的 `ai` 即启用每日更新的域名和目的 IP 分流。主控和远端使用相同的设置格式。远端入口升级前继续执行本机版本的规则。
 - `mode` 为 `split`（默认）或 `all`。`failure` 为 `block`（默认）或 `direct`。`rules` 有
   `presets`（`ai`、`streaming`）、`domains` 和 `domain_suffixes`（各最多 128 条）。输入规范化为小写，
   去掉末尾的点和重复项。仅提交 `exit_server_id` 时启用分流、阻断以及 AI 和流媒体预设。PUT 整体替换设置。`all` 保留规则以便切回 `split`；分流规则为空时全部直连。

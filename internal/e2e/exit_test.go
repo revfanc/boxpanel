@@ -46,7 +46,7 @@ func TestExitLoopback(t *testing.T) {
 		reachable, rejected []string
 	}{
 		{name: "split", mode: exitlink.Split, failure: exitlink.Block,
-			reachable: []string{"chatgpt.com", "claude.ai", "ai.via-exit.test", "direct.test", "xyvia-exit.test"}},
+			reachable: []string{"chatgpt.com", "claude.ai", "ai.via-exit.test", "direct.test", "xyvia-exit.test", "203.0.113.42"}},
 		{name: "all", mode: exitlink.All, failure: exitlink.Block, reachable: []string{"all.test"}, rejected: []string{"127.0.0.1"}},
 		{name: "fallback", mode: exitlink.All, failure: exitlink.Fallback, down: true, reachable: []string{"fallback.via-exit.test"}},
 		{name: "block", mode: exitlink.Split, failure: exitlink.Block, down: true, reachable: []string{"direct.test"},
@@ -69,6 +69,14 @@ func TestExitLoopback(t *testing.T) {
 			if tc.down {
 				f.snapshot.ExitProbe = exitlink.Probe{Revision: key, Available: new(false), PolicyDown: true}
 			}
+			// A documentation-only IP stands in for the provider's published range.
+			// Only the exit maps it to the isolated listener.
+			ai, err := exitlink.BundledAIRules()
+			if err != nil {
+				t.Fatal(err)
+			}
+			ai.Prefixes = []string{"203.0.113.0/24"}
+			f.snapshot.AIRules = &ai
 			entryJSON, err := confgen.Build(f.snapshot, f.options)
 			if err != nil {
 				t.Fatal(err)
@@ -81,6 +89,19 @@ func TestExitLoopback(t *testing.T) {
 			}
 			entry := exitLoopbackServer(t, entryJSON, entryHosts, port)
 			exit := exitLoopbackServer(t, exitJSON, exitHosts, port)
+			exitRoute := exit["route"].(object)
+			exitRoute["rules"] = append([]any{object{"ip_cidr": "203.0.113.0/24", "port": port, "action": "route", "outbound": "direct", "override_address": "127.0.0.1"},
+				object{"ip_cidr": "203.0.113.0/24", "action": "reject"}}, exitRoute["rules"].([]any)...)
+			// A missed IP match on the entry must fail locally, never dial the WAN.
+			entryRoute := entry["route"].(object)
+			var guarded []any
+			for _, raw := range entryRoute["rules"].([]any) {
+				if raw.(object)["action"] == "resolve" {
+					guarded = append(guarded, object{"ip_cidr": "203.0.113.0/24", "action": "reject"})
+				}
+				guarded = append(guarded, raw)
+			}
+			entryRoute["rules"] = guarded
 			client := loopbackClient(t, f.client, "hysteria2", mixed.port())
 			client["dns"] = hostsDNS(object{})
 			relay, relayUDP := reserveDualPort(t)

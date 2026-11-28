@@ -145,6 +145,7 @@ func TestServerGolden(t *testing.T) {
 
 func configureExit(s *Snapshot, mode, failure string, down bool) {
 	s.Inbounds, s.Users = s.Inbounds[1:2], s.Users[1:2]
+	s.AIRules = &exitlink.DestinationRules{Domains: []string{"model.example.org"}, Suffixes: []string{"chatgpt.com"}, Prefixes: []string{"203.0.113.5/32", "2001:db8::5/128"}}
 	revision := exitlink.Revision{ID: 32, Version: 1}
 	s.Exit.Outgoing = &exitlink.Outbound{Revision: revision, Address: "198.51.100.2", Port: 20000,
 		Password: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x6a}, 32)),
